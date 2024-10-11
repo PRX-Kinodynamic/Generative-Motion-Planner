@@ -1,41 +1,4 @@
-certifi @ file:///home/conda/feedstock_root/build_artifacts/certifi_1725278078093/work/certifi
-colorama @ file:///home/conda/feedstock_root/build_artifacts/colorama_1666700638685/work
-contourpy @ file:///home/conda/feedstock_root/build_artifacts/contourpy_1695554215751/work
-cycler @ file:///home/conda/feedstock_root/build_artifacts/cycler_1696677705766/work
 docstring_parser==0.16
-einops @ file:///home/conda/feedstock_root/build_artifacts/einops_1714285159399/work
-filelock @ file:///home/conda/feedstock_root/build_artifacts/filelock_1726613473834/work
-fonttools @ file:///home/conda/feedstock_root/build_artifacts/fonttools_1720359039462/work
-gmpy2 @ file:///home/conda/feedstock_root/build_artifacts/gmpy2_1715527302982/work
-importlib_resources @ file:///home/conda/feedstock_root/build_artifacts/importlib_resources_1725921340658/work
-Jinja2 @ file:///home/conda/feedstock_root/build_artifacts/jinja2_1715127149914/work
-kiwisolver @ file:///home/conda/feedstock_root/build_artifacts/kiwisolver_1695379923772/work
-MarkupSafe @ file:///home/conda/feedstock_root/build_artifacts/markupsafe_1706899923320/work
-matplotlib @ file:///home/conda/feedstock_root/build_artifacts/matplotlib-suite_1695076686224/work
-mpmath @ file:///home/conda/feedstock_root/build_artifacts/mpmath_1678228039184/work
-munkres==1.1.4
 mypy-extensions==1.0.0
-networkx @ file:///home/conda/feedstock_root/build_artifacts/networkx_1680692919326/work
-numpy @ file:///home/conda/feedstock_root/build_artifacts/numpy_1687808301083/work
-packaging @ file:///home/conda/feedstock_root/build_artifacts/packaging_1718189413536/work
-pillow @ file:///home/conda/feedstock_root/build_artifacts/pillow_1712154448551/work
-ply @ file:///home/conda/feedstock_root/build_artifacts/ply_1712242996588/work
-pyparsing @ file:///home/conda/feedstock_root/build_artifacts/pyparsing_1724616129934/work
-PyQt5==5.15.9
-PyQt5-sip==12.12.2
-python-dateutil @ file:///home/conda/feedstock_root/build_artifacts/python-dateutil_1709299778482/work
-PyYAML @ file:///home/conda/feedstock_root/build_artifacts/pyyaml_1723018227672/work
-sip @ file:///home/conda/feedstock_root/build_artifacts/sip_1697300436403/work
-six @ file:///home/conda/feedstock_root/build_artifacts/six_1620240208055/work
-sympy @ file:///home/conda/feedstock_root/build_artifacts/sympy_1727529700862/work
-toml @ file:///home/conda/feedstock_root/build_artifacts/toml_1604308577558/work
-tomli @ file:///home/conda/feedstock_root/build_artifacts/tomli_1644342247877/work
-torch==2.4.1
-tornado @ file:///home/conda/feedstock_root/build_artifacts/tornado_1717722826518/work
-tqdm @ file:///home/conda/feedstock_root/build_artifacts/tqdm_1722737464726/work
-triton==3.0.0
 typed-argument-parser==1.10.1
 typing-inspect==0.9.0
-typing_extensions @ file:///home/conda/feedstock_root/build_artifacts/typing_extensions_1717802530399/work
-unicodedata2 @ file:///home/conda/feedstock_root/build_artifacts/unicodedata2_1695847997538/work
-zipp @ file:///home/conda/feedstock_root/build_artifacts/zipp_1726248574750/work

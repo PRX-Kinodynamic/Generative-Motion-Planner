@@ -1,8 +1,9 @@
 name: mg_diffuse
 channels:
   - conda-forge
+  - pytorch
 dependencies:
-  - python==3.8.19
+  - python==3.8
   - numpy
   - matplotlib
   - tqdm
@@ -10,4 +11,3 @@ dependencies:
   - pytorch-cuda=11.8
   - einops
   - git
-prefix: /common/home/st1122/miniforge3/envs/mg_diffuse
