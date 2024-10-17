@@ -36,7 +36,7 @@ def cosine_beta_schedule(timesteps, s=0.008, dtype=torch.float32):
     return torch.tensor(betas_clipped, dtype=dtype)
 
 
-def apply_conditioning(x, conditions, action_dim):
+def apply_conditioning(x, conditions):
     for t, val in conditions.items():
-        x[:, t, action_dim:] = val.clone()
+        x[:, t] = val.clone()
     return x

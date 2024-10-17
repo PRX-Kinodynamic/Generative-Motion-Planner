@@ -1,3 +1,4 @@
 data_trajectories/
 *.egg-info/
 __pycache__/
+logs/

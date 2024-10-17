@@ -4,7 +4,7 @@ from torch import nn
 import torch
 import numpy as np
 
-from mg_diffuse.utils import utils
+import mg_diffuse.utils as utils
 
 from .helpers import (
     apply_conditioning,
@@ -48,26 +48,25 @@ def make_timesteps(batch_size, i, device):
     return t
 
 
-class DiffusionModel(nn.Module):
+class GaussianDiffusion(nn.Module):
     def __init__(
         self,
         model,
         observation_dim,
-        action_dim,
         horizon,
         n_timesteps=100,
         clip_denoised=False,
         predict_epsilon=True,
         loss_type="l1",
         loss_weights=None,
+        loss_discount=1.0,
     ):
         super().__init__()
 
         self.model = model
 
         self.observation_dim = observation_dim
-        self.action_dim = action_dim
-        self.transition_dim = observation_dim + action_dim
+        self.transition_dim = observation_dim
         self.clip_denoised = clip_denoised
         self.predict_epsilon = predict_epsilon
         self.n_timesteps = int(n_timesteps)
@@ -122,7 +121,33 @@ class DiffusionModel(nn.Module):
             (1.0 - alphas_cumprod_prev) * np.sqrt(alphas) / (1.0 - alphas_cumprod),
         )
 
-        self.loss_fn = Losses[loss_type](loss_weights, self.action_dim)
+        loss_weights = self.get_loss_weights(loss_discount, loss_weights)
+
+        self.loss_fn = Losses[loss_type](loss_weights)
+
+    def get_loss_weights(self, discount, weights_dict):
+        '''
+            sets loss coefficients for trajectory
+
+            discount   : float
+                multiplies t^th timestep of trajectory loss by discount**t
+            weights_dict    : dict
+                { i: c } multiplies dimension i of observation loss by c
+        '''
+
+        dim_weights = torch.ones(self.transition_dim, dtype=torch.float32)
+
+        ## set loss coefficients for dimensions of observation
+        if weights_dict is None: weights_dict = {}
+        for ind, w in weights_dict.items():
+            dim_weights[ind] *= w
+
+        ## decay loss with trajectory timestep: discount**t
+        discounts = discount ** torch.arange(self.horizon, dtype=torch.float)
+        discounts = discounts / discounts.mean()
+        loss_weights = torch.einsum('h,t->ht', discounts, dim_weights)
+
+        return loss_weights
 
     def predict_start_from_noise(self, x_t, t, model_output):
         """
@@ -201,7 +226,7 @@ class DiffusionModel(nn.Module):
 
         batch_size = shape[0]
         x = torch.randn(shape, device=device)
-        x = apply_conditioning(x, cond, self.action_dim)
+        x = apply_conditioning(x, cond)
 
         chain = [x] if return_chain else None
 
@@ -209,7 +234,7 @@ class DiffusionModel(nn.Module):
         for i in reversed(range(0, self.n_timesteps)):
             t = make_timesteps(batch_size, i, device)
             x, values = sample_fn(self, x, cond, t, **sample_kwargs)
-            x = apply_conditioning(x, cond, self.action_dim)
+            x = apply_conditioning(x, cond)
 
             progress.update(
                 {"t": i, "vmin": values.min().item(), "vmax": values.max().item()}
@@ -262,10 +287,10 @@ class DiffusionModel(nn.Module):
         noise = torch.randn_like(x_start)
 
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
-        x_noisy = apply_conditioning(x_noisy, cond, self.action_dim)
+        x_noisy = apply_conditioning(x_noisy, cond)
 
         x_recon = self.model(x_noisy, cond, t)
-        x_recon = apply_conditioning(x_recon, cond, self.action_dim)
+        x_recon = apply_conditioning(x_recon, cond)
 
         assert noise.shape == x_recon.shape
 

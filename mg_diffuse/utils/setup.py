@@ -44,13 +44,19 @@ def lazy_fstring(template, args):
 
 
 class Parser(Tap):
-
     def save(self):
         fullpath = os.path.join(self.savepath, "args.json")
         print(f"[ utils/setup ] Saved args to {fullpath}")
         super().save(fullpath, skip_unpicklable=True)
 
     def parse_args(self, experiment=None):
+        """
+        Parse arguments and set up experiment
+
+        First, parse arguments from command line
+        Read config file and override parameters of experiment if necessary
+        Add extras from command line to override parameters from config file
+        """
         args = super().parse_args(known_only=True)
         ## if not loading from a config script, skip the result of the setup
         if not hasattr(args, "config"):
@@ -69,6 +75,9 @@ class Parser(Tap):
     def read_config(self, args, experiment):
         """
         Load parameters from config file
+
+        If the experiment is in the config file, override the base parameters
+
         """
         dataset = args.dataset.replace("-", "_")
         print(f"[ utils/setup ] Reading config: {args.config}:{dataset}")

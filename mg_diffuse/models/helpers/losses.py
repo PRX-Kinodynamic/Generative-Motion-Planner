@@ -3,7 +3,7 @@ from torch import nn
 import torch.nn.functional as F
 import numpy as np
 
-from mg_diffuse.utils import utils
+import mg_diffuse.utils as utils
 
 
 # -----------------------------------------------------------------------------#
@@ -13,10 +13,9 @@ from mg_diffuse.utils import utils
 
 class WeightedLoss(nn.Module):
 
-    def __init__(self, weights, action_dim):
+    def __init__(self, weights):
         super().__init__()
         self.register_buffer("weights", weights)
-        self.action_dim = action_dim
 
     def forward(self, pred, targ):
         """
@@ -26,7 +25,7 @@ class WeightedLoss(nn.Module):
         loss = self._loss(pred, targ)
         weighted_loss = (loss * self.weights).mean()
         a0_loss = (
-            loss[:, 0, : self.action_dim] / self.weights[0, : self.action_dim]
+            loss[:, 0] / self.weights[0]
         ).mean()
         return weighted_loss, {"a0_loss": a0_loss}
 

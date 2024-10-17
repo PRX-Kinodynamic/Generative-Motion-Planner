@@ -10,4 +10,5 @@ dependencies:
   - pytorch
   - pytorch-cuda=11.8
   - einops
-  - git
+  - gitpython
+  - scipy
