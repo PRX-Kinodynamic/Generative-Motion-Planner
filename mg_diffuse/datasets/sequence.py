@@ -9,7 +9,22 @@ from .normalization import  *
 
 Batch = namedtuple('Batch', 'trajectories conditions')
 
-def load_trajectories(dataset):
+
+def read_trajectory(sequence_path):
+    with open(sequence_path, 'r') as f:
+        lines = f.readlines()
+
+    trajectory = []
+
+    for line in lines:
+        state = line.split(',')
+        state = [float(s) for s in state]
+
+        trajectory.append(state)
+
+    return trajectory
+
+def load_trajectories(dataset, parallel=True):
     """
         load dataset from directory
     """
@@ -17,7 +32,7 @@ def load_trajectories(dataset):
     trajectories_path = os.path.join('data_trajectories', dataset, 'trajectories')
 
     try:
-        files = os.listdir(trajectories_path)
+        fnames = os.listdir(trajectories_path)
     except FileNotFoundError:
         raise ValueError(f'Could not find dataset at {trajectories_path}')
 
@@ -25,26 +40,21 @@ def load_trajectories(dataset):
 
     print(f'[ datasets/sequence ] Loading trajectories from {trajectories_path}')
 
-    for file in tqdm(files):
-        if not file.endswith('.txt'):
-            continue
+    fpaths = [os.path.join(trajectories_path, fname) for fname in fnames]
 
-        sequence_path = os.path.join(trajectories_path, file)
+    if not parallel:
+        for fpath in tqdm(fpaths):
+            if not fpath.endswith('.txt'):
+                continue
+            trajectories.append(read_trajectory(fpath))
+    else:
+        import multiprocessing as mp
 
-        with open(sequence_path, 'r') as f:
-            lines = f.readlines()
+        # read trajectories in parallel with tqdm progress bar
+        with mp.Pool() as pool:
+            trajectories = list(tqdm(pool.imap(read_trajectory, fpaths), total=len(fpaths)))
 
-        trajectory = []
-
-        for line in lines:
-            state = line.split(',')
-            state = [float(s) for s in state]
-
-            trajectory.append(state)
-
-        trajectories.append(trajectory)
-
-    return np.array(trajectories)
+    return np.array(trajectories, dtype=np.float32)
 
 
 class TrajectoryDataset(torch.utils.data.Dataset):
