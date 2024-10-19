@@ -72,14 +72,17 @@ class GaussianDiffusion(nn.Module):
         self.n_timesteps = int(n_timesteps)
         self.horizon = horizon
 
+        loss_weights = self.get_loss_weights(loss_discount, loss_weights)
+
+        self.loss_fn = Losses[loss_type](loss_weights)
+
+        # ----- calculations for diffusion noising and denoising parameters ------
+
         betas = cosine_beta_schedule(n_timesteps)
+
         alphas = 1.0 - betas
         alphas_cumprod = torch.cumprod(alphas, axis=0)
         alphas_cumprod_prev = torch.cat([torch.ones(1), alphas_cumprod[:-1]])
-
-        self.n_timesteps = int(n_timesteps)
-        self.clip_denoised = clip_denoised
-        self.predict_epsilon = predict_epsilon
 
         self.register_buffer("betas", betas)
         self.register_buffer("alphas_cumprod", alphas_cumprod)
@@ -120,10 +123,6 @@ class GaussianDiffusion(nn.Module):
             "posterior_mean_coef2",
             (1.0 - alphas_cumprod_prev) * np.sqrt(alphas) / (1.0 - alphas_cumprod),
         )
-
-        loss_weights = self.get_loss_weights(loss_discount, loss_weights)
-
-        self.loss_fn = Losses[loss_type](loss_weights)
 
     def get_loss_weights(self, discount, weights_dict):
         '''
