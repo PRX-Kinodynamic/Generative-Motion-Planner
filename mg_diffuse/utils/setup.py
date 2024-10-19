@@ -28,6 +28,8 @@ def watch(args_to_watch):
             val = getattr(args, key)
             if type(val) == dict:
                 val = "_".join(f"{k}-{v}" for k, v in val.items())
+            if type(val) == bool:
+                val = "T" if val else "F"
             exp_name.append(f"{label}{val}")
         exp_name = "_".join(exp_name)
         exp_name = exp_name.replace("/_", "/")
