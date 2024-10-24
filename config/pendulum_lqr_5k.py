@@ -33,6 +33,7 @@ base = {
         "dim_mults": (1, 2, 4, 8),
         "attention": False,
         "clip_denoised": False,
+        "observation_dim": 2,
         ## dataset
         "loader": "datasets.TrajectoryDataset",
         "normalizer": "GaussianNormalizer",

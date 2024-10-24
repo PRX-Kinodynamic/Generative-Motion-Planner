@@ -10,7 +10,10 @@ class Parser(utils.Parser):
     dataset: str = "pendulum_lqr_5k"
     config: str = "config.pendulum_lqr_5k"
 
-args = Parser().parse_args("diffusion")
+parser = Parser()
+args = parser.parse_args("diffusion")
+
+
 
 
 # -----------------------------------------------------------------------------#
@@ -32,7 +35,16 @@ dataset = dataset_config()
 
 observation_dim = dataset.observation_dim
 
+
+# # -----------------------------------------------------------------------------#
+# # ---------------------------- update and save args ---------------------------#
+# # -----------------------------------------------------------------------------#
+
 args.observation_dim = observation_dim
+args.normalization_params = dataset.normalizer.params
+parser.save()
+
+raise ValueError("Stop here")
 
 # # -----------------------------------------------------------------------------#
 # # ------------------------------ model & trainer ------------------------------#
@@ -113,3 +125,13 @@ n_epochs = int(args.n_train_steps // args.n_steps_per_epoch)
 for i in range(n_epochs):
     print(f"Epoch {i} / {n_epochs} | {args.savepath}")
     trainer.train(n_train_steps=args.n_steps_per_epoch)
+
+
+# # -----------------------------------------------------------------------------#
+# # ------------------------------- save results -------------------------------#
+# # -----------------------------------------------------------------------------#
+
+utils.visualize_trajectories(
+    args.savepath,
+
+)

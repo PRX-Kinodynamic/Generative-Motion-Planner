@@ -5,6 +5,7 @@ import torch
 import einops
 import pdb
 
+from scripts.train import model
 from .arrays import batch_to_device, to_np, to_device, apply_dict
 from .timer import Timer
 from .cloud import sync_logs
@@ -33,6 +34,8 @@ class EMA:
         return old * self.beta + (1 - self.beta) * new
 
 class Trainer(object):
+    latest_model_state_name = None
+
     def __init__(
         self,
         diffusion_model,
@@ -135,9 +138,11 @@ class Trainer(object):
             'model': self.model.state_dict(),
             'ema': self.ema_model.state_dict()
         }
-        savepath = os.path.join(self.logdir, f'state_{epoch}.pt')
+        model_state_name = f'state_{epoch}.pt'
+        savepath = os.path.join(self.logdir, model_state_name)
         torch.save(data, savepath)
         print(f'[ utils/training ] Saved model to {savepath}', flush=True)
+        self.latest_model_state_name = model_state_name
         if self.bucket is not None:
             sync_logs(self.logdir, bucket=self.bucket, background=self.save_parallel)
 
