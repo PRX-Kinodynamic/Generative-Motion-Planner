@@ -183,8 +183,8 @@ class Parser(Tap):
                 args.savepath = os.path.join(args.savepath, args.suffix)
             if mkdir(args.savepath):
                 print(f"[ utils/setup ] Made savepath: {args.savepath}")
-            self.save()
-
+            # self.save()
+    #
     def get_commit(self, args):
         args.commit = get_git_rev()
 

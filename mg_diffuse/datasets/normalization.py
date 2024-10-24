@@ -38,10 +38,23 @@ class Normalizer:
         parent class, subclass by defining the `normalize` and `unnormalize` methods
     '''
 
-    def __init__(self, X):
-        self.X = X.astype(np.float32)
-        self.mins = X.min(axis=0)
-        self.maxs = X.max(axis=0)
+    def __init__(self, X=None, params=None):
+        if X is None and params is None:
+            raise ValueError('Either dataset or params must be provided')
+
+        if params is not None:
+            self.params = params
+            self.mins = np.array(params['mins'], np.float32)
+            self.maxs = np.array(params['maxs'], np.float32)
+            self.X = None
+        else:
+            self.mins = X.min(axis=0)
+            self.maxs = X.max(axis=0)
+            self.X = X.astype(np.float32)
+            self.params = {
+                'mins': list(self.mins),
+                'maxs': list(self.maxs)
+            }
 
     def __repr__(self):
         return (
@@ -78,9 +91,17 @@ class GaussianNormalizer(Normalizer):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.means = self.X.mean(axis=(0, 1))
-        self.stds = self.X.std(axis=(0, 1))
-        self.z = 1
+
+        # Check if params in kwargs
+        if 'params' in kwargs:
+            self.means = np.array(kwargs['params']['means'], np.float32)
+            self.stds = np.array(kwargs['params']['stds'], np.float32)
+        else:
+            self.means = self.X.mean(axis=(0, 1))
+            self.stds = self.X.std(axis=(0, 1))
+
+        self.params['means'] = list(self.means)
+        self.params['stds'] = list(self.stds)
 
     def __repr__(self):
         return (
@@ -128,14 +149,21 @@ class SafeLimitsNormalizer(LimitsNormalizer):
 
     def __init__(self, *args, eps=1, **kwargs):
         super().__init__(*args, **kwargs)
-        for i in range(len(self.mins)):
-            if self.mins[i] == self.maxs[i]:
-                print(f'''
-                    [ utils/normalization ] Constant data in dimension {i} | '''
-                    f'''max = min = {self.maxs[i]}'''
-                )
-                self.mins -= eps
-                self.maxs += eps
+        if 'params' in kwargs:
+            self.mins = np.array(kwargs['params']['mins'], np.float32)
+            self.maxs = np.array(kwargs['params']['maxs'], np.float32)
+        else:
+            for i in range(len(self.mins)):
+                if self.mins[i] == self.maxs[i]:
+                    print(f'''
+                        [ utils/normalization ] Constant data in dimension {i} | '''
+                        f'''max = min = {self.maxs[i]}'''
+                    )
+                    self.mins -= eps
+                    self.maxs += eps
+
+        self.params['mins'] = list(self.mins)
+        self.params['maxs'] = list(self.maxs)
 
 #-----------------------------------------------------------------------------#
 #------------------------------- CDF normalizer ------------------------------#
