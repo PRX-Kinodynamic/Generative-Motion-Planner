@@ -1,4 +1,6 @@
 from collections import namedtuple
+from os import cpu_count
+
 import numpy as np
 import torch
 import os
@@ -51,7 +53,7 @@ def load_trajectories(dataset, parallel=True):
         import multiprocessing as mp
 
         # read trajectories in parallel with tqdm progress bar
-        with mp.Pool() as pool:
+        with mp.Pool(cpu_count()) as pool:
             trajectories = list(tqdm(pool.imap(read_trajectory, fpaths), total=len(fpaths)))
 
     return np.array(trajectories, dtype=np.float32)
