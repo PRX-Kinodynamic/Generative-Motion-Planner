@@ -5,7 +5,6 @@ import torch
 import einops
 import pdb
 
-from scripts.train import model
 from .arrays import batch_to_device, to_np, to_device, apply_dict
 from .timer import Timer
 from .cloud import sync_logs
