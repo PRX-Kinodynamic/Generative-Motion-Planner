@@ -62,10 +62,14 @@ def load_trajectories(dataset, parallel=True):
 class TrajectoryDataset(torch.utils.data.Dataset):
     normed_trajectories = None
 
-    def __init__(self, dataset=None, horizon=64,
-        normalizer='GaussianNormalizer', preprocess_fns=[], max_path_length=1000,
-        max_n_episodes=10000, termination_penalty=0, use_padding=True, seed=None):
-
+    def __init__(self,
+        dataset=None,
+        horizon=64,
+        normalizer='LimitsNormalizer',
+        preprocess_fns=(),
+        max_path_length=1000,
+        use_padding=True,
+    ):
         self.horizon = horizon
         self.max_path_length = max_path_length
         self.use_padding = use_padding
@@ -74,6 +78,9 @@ class TrajectoryDataset(torch.utils.data.Dataset):
             raise ValueError('dataset not specified')
 
         trajectories = load_trajectories(dataset)
+
+        for preprocess_fn in preprocess_fns:
+            trajectories = preprocess_fn(trajectories)
 
         path_lengths = [len(trajectory) for trajectory in trajectories]
 
