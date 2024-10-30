@@ -1,6 +1,8 @@
 import os
 import importlib
 import random
+import time
+
 import numpy as np
 import torch
 from tap import Tap
@@ -35,6 +37,8 @@ def watch(args_to_watch):
         exp_name = exp_name.replace("/_", "/")
         exp_name = exp_name.replace("(", "").replace(")", "")
         exp_name = exp_name.replace(", ", "-")
+        exp_name += f"_{time.strftime('%y_%m_%d-%H_%M_%S')}" # Add unique timestamp to avoid overwriting in format of yy_mm_dd-HH_MM_SS
+
         return exp_name
 
     return _fn

@@ -4,8 +4,8 @@ import pdb
 
 
 def sync_logs(logdir, bucket, background=False):
-	## remove prefix 'logs' on google cloud
-	destination = 'logs' + logdir.split('logs')[-1]
+	## remove prefix 'experiments' on google cloud
+	destination = 'experiments' + logdir.split('logs')[-1]
 	upload_blob(logdir, destination, bucket, background)
 
 def upload_blob(source, destination, bucket, background):

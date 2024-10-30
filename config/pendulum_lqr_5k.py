@@ -1,6 +1,4 @@
-import socket
-
-from mg_diffuse.utils import watch
+from mg_diffuse.utils import watch, handle_angle_wraparound
 
 # ------------------------ base ------------------------#
 
@@ -17,7 +15,7 @@ args_to_watch = [
     ("discount", "d"),
 ]
 
-logbase = "logs"
+logbase = "experiments"
 
 base = {
     "diffusion": {
@@ -36,8 +34,8 @@ base = {
         "observation_dim": 2,
         ## dataset
         "loader": "datasets.TrajectoryDataset",
-        "normalizer": "GaussianNormalizer",
-        "preprocess_fns": [],
+        "normalizer": "LimitsNormalizer",
+        "preprocess_fns": [handle_angle_wraparound],
         "use_padding": True,
         "max_path_length": 502,
         ## serialization
@@ -60,6 +58,9 @@ base = {
         "bucket": None,
         "device": "cuda",
         "seed": None,
+        ## visualization
+        "sampling_limits": (-1, 1),
+        "granularity": 0.01,
     }
 }
 
