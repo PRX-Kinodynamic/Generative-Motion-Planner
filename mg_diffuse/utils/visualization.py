@@ -7,20 +7,24 @@ from os import path, cpu_count
 
 from .json_args import JSONArgs
 from .config import import_class
+from mg_diffuse.datasets.normalization import LimitsNormalizer
+from mg_diffuse.datasets.sequence import load_trajectories
 
-def load_model_args(logs_path):
-    model_args_path = path.join(logs_path, 'args.json')
+
+def load_model_args(experiments_path):
+    model_args_path = path.join(experiments_path, "args.json")
     return JSONArgs(model_args_path)
 
 
-def load_model(model_args, logs_path, model_state_name, verbose=False):
-    model_path = path.join(logs_path, model_state_name)
+def load_model(experiments_path, model_state_name, verbose=False):
+    model_args = load_model_args(experiments_path)
+    model_path = path.join(experiments_path, model_state_name)
 
     if verbose:
-        print(f'[ scripts/visualize_trajectories ] Loading model from {model_path}')
+        print(f"[ scripts/visualize_trajectories ] Loading model from {model_path}")
 
     model_state_dict = torch.load(model_path, weights_only=False)
-    diff_model_state = model_state_dict['model']
+    diff_model_state = model_state_dict["model"]
 
     model_class = import_class(model_args.model)
     diffusion_class = import_class(model_args.diffusion)
@@ -49,14 +53,24 @@ def load_model(model_args, logs_path, model_state_name, verbose=False):
     # Load model state dict
     diffusion.load_state_dict(diff_model_state)
 
-    return diffusion
+    return diffusion, model_args
+
 
 def plot_trajectory(trajectory):
     for i in range(len(trajectory)):
-        plt.scatter(trajectory[i, 0], trajectory[i, 1], s=0.1, color="black", alpha=0.9, marker='.')
+        plt.scatter(
+            trajectory[i, 0],
+            trajectory[i, 1],
+            s=0.1,
+            color="black",
+            alpha=0.9,
+            marker=".",
+        )
 
 
-def generate_trajectories(model, model_args, start_states, only_execute_next_step, verbose=False):
+def generate_trajectories(
+    model, model_args, start_states, only_execute_next_step, verbose=False
+):
     """
     Generate a trajectory from the model given the start states.
 
@@ -69,12 +83,14 @@ def generate_trajectories(model, model_args, start_states, only_execute_next_ste
         verbose: If True, print progress.
     """
     if verbose:
-        print('[ scripts/visualize_trajectories ] Generating trajectories')
+        print("[ scripts/visualize_trajectories ] Generating trajectories")
 
     max_path_length = model_args.max_path_length
     batch_size = len(start_states)
 
-    current_states = torch.tensor(start_states, dtype=torch.float32).to(model_args.device)
+    current_states = torch.tensor(start_states, dtype=torch.float32).to(
+        model_args.device
+    )
     current_idx = 1
     next_path_lengths = model_args.horizon - 1 if not only_execute_next_step else 1
 
@@ -86,16 +102,20 @@ def generate_trajectories(model, model_args, start_states, only_execute_next_ste
             conditions = {0: current_states}
 
             # Forward pass to get the next states
-            next_trajs = model.forward(conditions, horizon=model_args.horizon, verbose=False).trajectories
+            next_trajs = model.forward(
+                conditions, horizon=model_args.horizon, verbose=False
+            ).trajectories
 
             # Check what is the size of trajectory required to reach max_path_length
             slice_path_length = min(next_path_lengths, max_path_length - current_idx)
 
             # Removing the start state and taking only the required path lengths
-            next_trajs = next_trajs[:, 1:1 + slice_path_length]
+            next_trajs = next_trajs[:, 1 : 1 + slice_path_length]
 
             # Adding the next states to the trajectory
-            trajectories[:, current_idx:current_idx + slice_path_length] = next_trajs.cpu().numpy()
+            trajectories[:, current_idx : current_idx + slice_path_length] = (
+                next_trajs.cpu().numpy()
+            )
 
             current_states = next_trajs[:, -1]
             current_idx += next_path_lengths
@@ -109,10 +129,30 @@ def process_trajectories(trajectories, model_args):
     """
     Process the trajectories to make them more interpretable.
     """
-    # means = np.array([ 0.00182653, -0.00210042], dtype=np.float32)
-    # stds = np.array([1.6391696 , 0.71813065], dtype=np.float32)
-    #
-    # trajectories = trajectories * stds + means
+    params = {
+        "maxs": [
+            6.283153,
+            6.19742,
+        ],
+        "mins": [
+            -6.2831573,
+            -6.28318,
+        ],
+    }
+
+    normalizer = LimitsNormalizer(params=params)
+
+    processed_trajectories = []
+
+    for trajectory in trajectories:
+        trajectory = normalizer.unnormalize(trajectory)
+        # If value of trajectory[0] is greater than pi, then subtract 2pi from the trajectory
+        trajectory[trajectory[:, 0] > np.pi, 0] -= 2 * np.pi
+        trajectory[trajectory[:, 0] < -np.pi, 0] += 2 * np.pi
+
+        processed_trajectories.append(trajectory)
+
+    trajectories = np.array(processed_trajectories)
 
     return trajectories
 
@@ -123,13 +163,29 @@ def save_trajectories_image(trajectories, image_path, verbose=False):
     """
 
     if verbose:
-        print('[ utils/visualization ] Visualizing trajectories...')
-
-
+        print("[ utils/visualization ] Visualizing trajectories...")
 
     # if not parallel:
     for idx in tqdm(range(trajectories.shape[0])):
-        plot_trajectory(trajectories[idx])
+        # plot_trajectory(trajectories[idx])
+        trajectory = trajectories[idx]
+        plt.scatter(
+            trajectory[:, 0],
+            trajectory[:, 1],
+            s=0.1,
+            color="black",
+            alpha=0.9,
+            marker=".",
+        )
+        # for i in range(len(trajectory)):
+        #     plt.scatter(
+        #         trajectory[i, 0],
+        #         trajectory[i, 1],
+        #         s=0.1,
+        #         color="black",
+        #         alpha=0.9,
+        #         marker=".",
+        #     )
 
     # else:
     #     from multiprocessing import Pool
@@ -141,50 +197,27 @@ def save_trajectories_image(trajectories, image_path, verbose=False):
     plt.savefig(image_path)
 
     if verbose:
-        print(f'[ utils/visualization ] Trajectories saved at {image_path}')
+        print(f"[ utils/visualization ] Trajectories saved at {image_path}")
 
 
-def visualize_trajectories(
-        logs_path,
-        model_state_name,
-        only_execute_next_step=False,
-        verbose=True,
-        sampling_limits=(-1, 1),
-        granularity=0.1,
-):
-    """
-    Visualize the trajectories generated by the model.
+def get_fnames_to_load(dataset_path, num_trajs):
+    indices_file = path.join(dataset_path, "viz_shuffled_indices.txt")
 
-    Args:
-        logs_path: The path to the logs directory.
-        model_state_name: The name of the model state to load.
-        only_execute_next_step: If True, only execute the next step of the trajectory (like MPC)
-        verbose: If True, print progress.
-        sampling_limits: The limits to sample the start states from
-            dim x observation_dim
-        granularity: The granularity to sample the start states from
-    """
+    if path.exists(indices_file):
+        with open(indices_file, "r") as f:
+            fnames = f.readlines()
+            fnames = [f.strip() for f in fnames]
+            fnames = fnames[:num_trajs]
 
-    model_args = load_model_args(logs_path)
-    model = load_model(model_args, logs_path, model_state_name, verbose)
-
-
-    if not hasattr(sampling_limits[0], '__iter__'):
-        dim = model_args.observation_dim
-        sampling_limits = [sampling_limits] * dim
     else:
-        assert len(sampling_limits) == model_args.observation_dim, 'Sampling limits should be of the same dimension as the observation dimension'
+        raise ValueError(f"File {indices_file} not found")
 
-    # Generate a grid of start states with granularity in the range of sampling_limits inclusive
-    start_states_by_dim = np.meshgrid(*[np.arange(limits[0], limits[1] + granularity, granularity) for limits in sampling_limits])
+    return fnames
 
-    # Flatten the grid to get all possible start state
-    start_states = np.vstack([start_states_by_dim[i].flatten() for i in range(model_args.observation_dim)]).T
 
-    trajectories = generate_trajectories(model, model_args, start_states, only_execute_next_step, verbose)
+def load_test_trajectories(dataset, num_trajs):
+    dataset_path = path.join("data_trajectories", dataset)
 
-    trajectories = process_trajectories(trajectories, model_args)
+    fnames = get_fnames_to_load(dataset_path, num_trajs)
 
-    image_path = path.join(logs_path, f'trajectories{"_MPC" if only_execute_next_step else ""}.png')
-
-    save_trajectories_image(trajectories, image_path, verbose)
+    return load_trajectories(dataset, parallel=True, fnames=fnames)
