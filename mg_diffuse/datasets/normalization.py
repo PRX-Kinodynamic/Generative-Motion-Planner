@@ -48,8 +48,8 @@ class Normalizer:
             self.maxs = np.array(params['maxs'], np.float32)
             self.X = None
         else:
-            self.mins = X.min(axis=0)
-            self.maxs = X.max(axis=0)
+            self.mins = X.min(axis=(0, 1))
+            self.maxs = X.max(axis=(0, 1))
             self.X = X.astype(np.float32)
             self.params = {
                 'mins': list(self.mins),

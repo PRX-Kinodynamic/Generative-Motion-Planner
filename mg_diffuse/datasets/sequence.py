@@ -7,46 +7,48 @@ import os
 
 from tqdm import tqdm
 
-from .normalization import  *
+from .normalization import *
 
-Batch = namedtuple('Batch', 'trajectories conditions')
+Batch = namedtuple("Batch", "trajectories conditions")
 
 
 def read_trajectory(sequence_path):
-    with open(sequence_path, 'r') as f:
+    with open(sequence_path, "r") as f:
         lines = f.readlines()
 
     trajectory = []
 
     for line in lines:
-        state = line.split(',')
+        state = line.split(",")
         state = [float(s) for s in state]
 
         trajectory.append(state)
 
     return trajectory
 
-def load_trajectories(dataset, parallel=True):
+
+def load_trajectories(dataset, parallel=True, fnames=None):
     """
-        load dataset from directory
+    load dataset from directory
     """
 
-    trajectories_path = os.path.join('data_trajectories', dataset, 'trajectories')
+    trajectories_path = os.path.join("data_trajectories", dataset, "trajectories")
 
-    try:
-        fnames = os.listdir(trajectories_path)
-    except FileNotFoundError:
-        raise ValueError(f'Could not find dataset at {trajectories_path}')
+    if fnames is None:
+        try:
+            fnames = os.listdir(trajectories_path)
+        except FileNotFoundError:
+            raise ValueError(f"Could not find dataset at {trajectories_path}")
 
     trajectories = []
 
-    print(f'[ datasets/sequence ] Loading trajectories from {trajectories_path}')
+    print(f"[ datasets/sequence ] Loading trajectories from {trajectories_path}")
 
     fpaths = [os.path.join(trajectories_path, fname) for fname in fnames]
 
     if not parallel:
         for fpath in tqdm(fpaths):
-            if not fpath.endswith('.txt'):
+            if not fpath.endswith(".txt"):
                 continue
             trajectories.append(read_trajectory(fpath))
     else:
@@ -54,7 +56,9 @@ def load_trajectories(dataset, parallel=True):
 
         # read trajectories in parallel with tqdm progress bar
         with mp.Pool(cpu_count()) as pool:
-            trajectories = list(tqdm(pool.imap(read_trajectory, fpaths), total=len(fpaths)))
+            trajectories = list(
+                tqdm(pool.imap(read_trajectory, fpaths), total=len(fpaths))
+            )
 
     return np.array(trajectories, dtype=np.float32)
 
@@ -62,10 +66,11 @@ def load_trajectories(dataset, parallel=True):
 class TrajectoryDataset(torch.utils.data.Dataset):
     normed_trajectories = None
 
-    def __init__(self,
+    def __init__(
+        self,
         dataset=None,
         horizon=64,
-        normalizer='LimitsNormalizer',
+        normalizer="LimitsNormalizer",
         preprocess_fns=(),
         max_path_length=1000,
         use_padding=True,
@@ -75,7 +80,7 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         self.use_padding = use_padding
 
         if dataset is None:
-            raise ValueError('dataset not specified')
+            raise ValueError("dataset not specified")
 
         trajectories = load_trajectories(dataset)
 
@@ -99,16 +104,18 @@ class TrajectoryDataset(torch.utils.data.Dataset):
 
     def normalize(self):
         """
-            normalize fields that will be predicted by the diffusion model
+        normalize fields that will be predicted by the diffusion model
         """
-        array = self.trajectories.reshape(self.n_episodes*self.max_path_length, -1)
+        array = self.trajectories.reshape(self.n_episodes * self.max_path_length, -1)
         normed = self.normalizer(array)
-        self.normed_trajectories = normed.reshape(self.n_episodes, self.max_path_length, -1)
+        self.normed_trajectories = normed.reshape(
+            self.n_episodes, self.max_path_length, -1
+        )
 
     def make_indices(self, path_lengths, horizon):
         """
-            makes indices for sampling from dataset;
-            each index maps to a datapoint
+        makes indices for sampling from dataset;
+        each index maps to a datapoint
         """
         indices = []
         for i, path_length in enumerate(path_lengths):
@@ -122,9 +129,9 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         return indices
 
     def get_conditions(self, observations):
-        '''
-            condition on current observation for planning
-        '''
+        """
+        condition on current observation for planning
+        """
         return {0: observations[0]}
 
     def __len__(self):
