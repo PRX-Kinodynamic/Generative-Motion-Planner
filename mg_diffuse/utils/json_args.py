@@ -1,22 +1,46 @@
 import collections
 import copy
 import json
+import numpy as np
+
+def process_data_structures(data_obj, verbose=False):
+    if type(data_obj) is dict and '_value' in data_obj:
+        if '_string' not in data_obj:
+            keyType = eval(data_obj['_type'])
+            return keyType(data_obj['_value'])
+        elif data_obj['_type'] == 'python_object (type = float32)':
+            return np.float32(data_obj['_string'])
+        else:
+            return None
+    elif type(data_obj) is dict:
+        new_dict = {}
+        for key, value in data_obj.items():
+            new_dict[key] = process_data_structures(value, verbose)
+        return new_dict
+    elif type(data_obj) is list:
+        new_list = []
+        for value in data_obj:
+            new_list.append(process_data_structures(value, verbose))
+        return new_list
+    return data_obj
+
 
 class JSONArgs(collections.Mapping):
     def __init__(self, json_file, verbose=False):
         with open(json_file, 'r') as f:
-            self._data = json.load(f)
+            self._raw_data = json.load(f)
+            self._data = copy.deepcopy(self._raw_data)
 
         self._process_data_structures(verbose)
 
     def _process_data_structures(self, verbose):
         for key, value in self._data.items():
-            if type(value) is dict and '_value' in value:
-                if '_string' in value:
-                    if verbose: print(' [ utils/json_args ] Ignoring complex data structure:', key)
-                    continue
-                keyType = eval(value['_type'])
-                self._data[key] = keyType(value['_value'])
+            processed_value = process_data_structures(value, verbose)
+            if processed_value is not None:
+                self._data[key] = processed_value
+            else:
+                if verbose: print(' [ utils/json_args ] Unable to process complex data structure:', key)
+                self._data[key] = value
 
     def __getitem__(self, key):
         return self._data[key]
@@ -43,13 +67,13 @@ class JSONArgs(collections.Mapping):
             raise AttributeError(f"'JSONArgs' object has no attribute '{key}'")
 
     def __setattr__(self, key, value):
-        if key == '_data':
+        if key == '_data' or key == '_raw_data':
             super().__setattr__(key, value)
         else:
             self._data[key] = value
 
     def __delattr__(self, key):
-        if key == '_data':
+        if key == '_data' or key == '_raw_data':
             super().__delattr__(key)
         else:
             del self._data[key]

@@ -25,6 +25,11 @@ if __name__ == "__main__":
         help="Path prefix for experiments",
     )
     parser.add_argument(
+        "--show_traj_ends",
+        action="store_true",
+        help="Show the start and end points of the trajectories",
+    )
+    parser.add_argument(
         "--dataset", type=str, default="pendulum_lqr_5k", help="Dataset name"
     )
 
