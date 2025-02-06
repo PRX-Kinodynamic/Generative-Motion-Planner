@@ -11,6 +11,8 @@ args_to_watch = [
     ("n_diffusion_steps", "T"),
     ("use_padding", "PAD"),
     ("predict_epsilon", "EPS"),
+    ("attention", "ATN"),
+    ("loss_discount", "LD"),
     ## value kwargs
     ("discount", "d"),
 ]

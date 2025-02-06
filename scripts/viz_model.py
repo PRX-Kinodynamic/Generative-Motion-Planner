@@ -8,18 +8,16 @@ from mg_diffuse import utils
 def main(args):
     exp_path = path.join("experiments", args.dataset, args.path_prefix, args.exp_name)
 
-    test_trajectories = utils.load_test_trajectories(args.dataset, args.num_trajs)
-    start_points = test_trajectories[:, 0]
-
-    print(start_points.shape)
+    test_trajs = utils.load_test_trajectories(args.dataset, args.num_trajs)
+    start_points = test_trajs[:, 0]
 
     model, model_args = utils.load_model(exp_path, args.model_state_name)
 
-    model_trajs = utils.generate_trajectories(
+    normalized_trajs = utils.generate_trajectories(
         model, model_args, start_points, args.only_execute_next_step, verbose=True
     )
 
-    model_trajs = utils.process_trajectories(model_trajs, model_args)
+    generated_trajs = utils.process_trajectories(normalized_trajs, model_args, verbose=True)
 
     image_name = "trajectories"
 
@@ -30,7 +28,13 @@ def main(args):
 
     image_path = path.join(exp_path, image_name)
 
-    utils.save_trajectories_image(model_trajs, image_path, verbose=True)
+    utils.save_trajectories_image(
+        generated_trajs,
+        image_path,
+        verbose=True,
+        comparison_trajectories=test_trajs if args.compare else None,
+        show_traj_ends=args.show_traj_ends,
+    )
 
 
 if __name__ == "__main__":
@@ -50,6 +54,16 @@ if __name__ == "__main__":
         type=int,
         default=1000,
         help="Number of trajectories to visualize",
+    )
+    parser.add_argument(
+        "--compare",
+        action="store_true",
+        help="Add comparison trajectories to the visualization",
+    )
+    parser.add_argument(
+        "--show_traj_ends",
+        action="store_true",
+        help="Show the start and end points of the trajectories",
     )
     parser.add_argument("--exp_name", type=str, required=True, help="Experiment name")
     parser.add_argument(
