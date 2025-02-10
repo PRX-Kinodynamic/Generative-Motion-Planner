@@ -1,7 +1,7 @@
 from os import path
 import argparse
-import numpy as np
 
+import mg_diffuse.utils.model
 from mg_diffuse import utils
 
 
@@ -11,13 +11,11 @@ def main(args):
     test_trajs = utils.load_test_trajectories(args.dataset, args.num_trajs)
     start_points = test_trajs[:, 0]
 
-    model, model_args = utils.load_model(exp_path, args.model_state_name)
+    model, model_args = mg_diffuse.utils.model.load_model(exp_path, args.model_state_name)
 
-    normalized_trajs = utils.generate_trajectories(
+    generated_trajs = utils.generate_trajectories(
         model, model_args, start_points, args.only_execute_next_step, verbose=True
     )
-
-    generated_trajs = utils.process_trajectories(normalized_trajs, model_args, verbose=True)
 
     image_name = "trajectories"
 

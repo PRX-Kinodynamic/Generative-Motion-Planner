@@ -20,6 +20,19 @@ args_to_watch = [
 logbase = "experiments"
 
 base = {
+    "roa_estimation": {
+        "attractors": {
+            (-2.1, 0): 0,
+            (2.1, 0): 0,
+            (0, 0): 1,
+        },
+        "invalid_label": -1,
+        "attractor_threshold": 0.05,
+        "n_runs": 100,
+        "batch_size": 1000000,
+        "attractor_probability_upper_threshold": 0.5,
+    },
+
     "diffusion": {
         ## model
         "model": "models.TemporalUnet",
@@ -29,7 +42,7 @@ base = {
         "action_weight": 10,
         "loss_weights": None,
         "loss_discount": 1,
-        "predict_epsilon": True,
+        "predict_epsilon": False,
         "dim_mults": (1, 2, 4, 8),
         "attention": False,
         "clip_denoised": False,
@@ -37,7 +50,7 @@ base = {
         ## dataset
         "loader": "datasets.TrajectoryDataset",
         "normalizer": "LimitsNormalizer",
-        "preprocess_fns": [handle_angle_wraparound],
+        "preprocess_fns": [],
         "use_padding": True,
         "max_path_length": 502,
         ## serialization
@@ -65,7 +78,6 @@ base = {
         "granularity": 0.01,
     }
 }
-
 
 # ------------------------ overrides ------------------------#
 
