@@ -9,4 +9,4 @@ from .serialization import *
 from .setup import *
 from .timer import *
 from .training import *
-from .visualization import *
+from .trajectory import *

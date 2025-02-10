@@ -4,7 +4,7 @@ import torch
 import pdb
 
 DTYPE = torch.float
-DEVICE = "cuda:0"
+DEVICE = "cuda"
 
 # -----------------------------------------------------------------------------#
 # ------------------------------ numpy <--> torch -----------------------------#
@@ -78,7 +78,7 @@ def set_device(device):
         torch.set_default_tensor_type(torch.cuda.FloatTensor)
 
 
-def batch_to_device(batch, device="cuda:0"):
+def batch_to_device(batch, device="cuda"):
     vals = [to_device(getattr(batch, field), device) for field in batch._fields]
     return type(batch)(*vals)
 
