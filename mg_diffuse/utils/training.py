@@ -99,9 +99,10 @@ class Trainer(object):
     #------------------------------------ api ------------------------------------#
     #-----------------------------------------------------------------------------#
 
-    def train(self, n_train_steps):
+    def train(self, n_train_steps, best_loss=float('inf')):
 
         timer = Timer()
+        total_loss = 0.0
         for step in range(n_train_steps):
             for i in range(self.gradient_accumulate_every):
                 batch = next(self.dataloader)
@@ -111,6 +112,8 @@ class Trainer(object):
                 loss = loss / self.gradient_accumulate_every
                 loss.backward()
 
+                total_loss += loss.item()
+
             self.optimizer.step()
             self.optimizer.zero_grad()
 
@@ -118,16 +121,22 @@ class Trainer(object):
                 self.step_ema()
 
             if self.step % self.save_freq == 0:
-                label = self.step // self.label_freq * self.label_freq
-                self.save(label)
+                epoch = self.step // self.label_freq * self.label_freq
+                self.save(f'state_{epoch}')
 
             if self.step % self.log_freq == 0:
                 infos_str = ' | '.join([f'{key}: {val:8.4f}' for key, val in infos.items()])
-                print(f'{self.step}: {loss:8.4f} | {infos_str} | t: {timer():8.4f}', flush=True)
+                print(f'{self.step}: {loss:8.6f} | {infos_str} | t: {timer():8.4f}', flush=True)
 
             self.step += 1
 
-    def save(self, epoch):
+        if total_loss < best_loss:
+            best_loss = total_loss
+            self.save('best')
+
+        return best_loss
+
+    def save(self, label):
         '''
             saves model and ema to disk;
             syncs to storage bucket if a bucket is specified
@@ -137,7 +146,7 @@ class Trainer(object):
             'model': self.model.state_dict(),
             'ema': self.ema_model.state_dict()
         }
-        model_state_name = f'state_{epoch}.pt'
+        model_state_name = f'{label}.pt'
         savepath = os.path.join(self.logdir, model_state_name)
         torch.save(data, savepath)
         print(f'[ utils/training ] Saved model to {savepath}', flush=True)
@@ -156,4 +165,17 @@ class Trainer(object):
         self.model.load_state_dict(data['model'])
         self.ema_model.load_state_dict(data['ema'])
 
+    def validate(self, n_batches=10):
+        '''
+            runs validation on the model
+        '''
+        # self.model.eval()
+        # with torch.no_grad():
+        #     for i in range(n_batches):
+        #         batch = next(self.dataloader_vis)
+        #         batch = batch_to_device(batch)
+        #
+        #         loss, infos = self.model.loss(*batch)
+        #         print(f'validation {i}: {loss:8.6f}', flush=True)
 
+        return None

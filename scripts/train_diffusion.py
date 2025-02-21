@@ -1,4 +1,6 @@
 import mg_diffuse.utils as utils
+from viz_model import visualize_generated_trajectories
+from estimate_roa import generate_and_analyze_runs
 
 
 # -----------------------------------------------------------------------------#
@@ -9,6 +11,7 @@ if __name__ == '__main__':
     class Parser(utils.Parser):
         dataset: str = "pendulum_lqr_5k"
         config: str = "config.pendulum_lqr_5k"
+        variation: str = ""
 
     parser = Parser()
     args = parser.parse_args("diffusion")
@@ -27,6 +30,8 @@ if __name__ == '__main__':
         horizon=args.horizon,
         normalizer=args.normalizer,
         preprocess_fns=args.preprocess_fns,
+        preprocess_kwargs=args.preprocess_kwargs,
+        dataset_size=args.train_set_limit,
         use_padding=args.use_padding,
         max_path_length=args.max_path_length,
     )
@@ -43,6 +48,7 @@ if __name__ == '__main__':
     # # -----------------------------------------------------------------------------#
 
     args.observation_dim = observation_dim
+    args.dataset_size = len(dataset)
     args.normalization_params = dataset.normalizer.params
     parser.save()
 
@@ -87,7 +93,7 @@ if __name__ == '__main__':
         ema_decay=args.ema_decay,
         sample_freq=args.sample_freq,
         save_freq=args.save_freq,
-        label_freq=int(args.n_train_steps // args.n_saves),
+        label_freq=args.save_freq,
         save_parallel=args.save_parallel,
         results_folder=args.savepath,
         bucket=args.bucket,
@@ -124,23 +130,71 @@ if __name__ == '__main__':
 
     n_epochs = int(args.n_train_steps // args.n_steps_per_epoch)
 
-    for i in range(n_epochs):
-        print(f"Epoch {i} / {n_epochs} | {args.savepath}")
-        trainer.train(n_train_steps=args.n_steps_per_epoch)
+    best_val_loss = float('inf')
+    patience = 5  # Number of epochs to wait for improvement
+    min_delta = 1e-4  # Minimum improvement to qualify as progress
+    no_improve_counter = 0
 
+    best_loss = float('inf')
+
+    try:
+        for i in range(n_epochs):
+            print(f"Epoch {i} / {n_epochs} | {args.savepath}")
+            best_loss = trainer.train(n_train_steps=args.n_steps_per_epoch, best_loss=best_loss)
+
+            # Evaluate on validation set
+            current_val_loss = trainer.validate()
+
+            if current_val_loss is not None:
+                print(f"Validation Loss: {current_val_loss:.6f}")
+
+                # Check if validation loss has improved sufficiently
+                if best_val_loss - current_val_loss > min_delta:
+                    best_val_loss = current_val_loss
+                    no_improve_counter = 0
+                    trainer.save('best_state')  # Save the best model
+                else:
+                    no_improve_counter += 1
+                    print(f"No improvement for {no_improve_counter} epoch(s).")
+
+                if no_improve_counter >= patience:
+                    print("Early stopping triggered due to convergence.")
+                    break
+
+    except KeyboardInterrupt:
+        print("Training interrupted. Saving model...")
+        
+    trainer.save('final')
 
     # # -----------------------------------------------------------------------------#
     # # --------------------------- save visualizations -----------------------------#
     # # -----------------------------------------------------------------------------#
 
     print("Saving visualizations...")
-
-    for only_execute_next_step in [True, False]:
-        utils.visualize_trajectories(
-            logs_path=args.savepath,
-            model_state_name=trainer.latest_model_state_name,
-            only_execute_next_step=only_execute_next_step,
-            verbose=True,
-            sampling_limits=args.visualization_sampling_limits,
-            granularity=args.visualization_granularity,
-        )
+    
+    visualize_generated_trajectories(
+        dataset=args.dataset,
+        num_trajs=1000,
+        compare=False,
+        show_traj_ends=False,
+        exp_name=args.exp_name,
+        model_state_name='best.pt',
+        only_execute_next_step=False,
+    )
+    
+    # # -----------------------------------------------------------------------------#
+    # # --------------------------- generate runs for RoA estimation ----------------#
+    # # -----------------------------------------------------------------------------#
+    
+    print("Generating runs for RoA estimation...")
+    
+    generate_and_analyze_runs(
+        dataset=args.dataset,
+        exp_name=args.exp_name,
+        model_state_name='best.pt',
+        generate_img=True,
+    )
+    
+    
+    
+    

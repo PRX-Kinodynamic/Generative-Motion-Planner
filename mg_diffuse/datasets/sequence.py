@@ -1,67 +1,11 @@
 from collections import namedtuple
-from os import cpu_count
 
-import numpy as np
 import torch
-import os
-
-from tqdm import tqdm
 
 from .normalization import *
 
+
 Batch = namedtuple("Batch", "trajectories conditions")
-
-
-def read_trajectory(sequence_path):
-    with open(sequence_path, "r") as f:
-        lines = f.readlines()
-
-    trajectory = []
-
-    for line in lines:
-        state = line.split(",")
-        state = [float(s) for s in state]
-
-        trajectory.append(state)
-
-    return trajectory
-
-
-def load_trajectories(dataset, parallel=True, fnames=None):
-    """
-    load dataset from directory
-    """
-
-    trajectories_path = os.path.join("data_trajectories", dataset, "trajectories")
-
-    if fnames is None:
-        try:
-            fnames = os.listdir(trajectories_path)
-        except FileNotFoundError:
-            raise ValueError(f"Could not find dataset at {trajectories_path}")
-
-    trajectories = []
-
-    print(f"[ datasets/sequence ] Loading trajectories from {trajectories_path}")
-
-    fpaths = [os.path.join(trajectories_path, fname) for fname in fnames]
-
-    if not parallel:
-        for fpath in tqdm(fpaths):
-            if not fpath.endswith(".txt"):
-                continue
-            trajectories.append(read_trajectory(fpath))
-    else:
-        import multiprocessing as mp
-
-        # read trajectories in parallel with tqdm progress bar
-        with mp.Pool(cpu_count()) as pool:
-            trajectories = list(
-                tqdm(pool.imap(read_trajectory, fpaths), total=len(fpaths))
-            )
-
-    return np.array(trajectories, dtype=np.float32)
-
 
 class TrajectoryDataset(torch.utils.data.Dataset):
     normed_trajectories = None
@@ -72,6 +16,8 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         horizon=64,
         normalizer="LimitsNormalizer",
         preprocess_fns=(),
+        preprocess_kwargs={},
+        dataset_size=None,
         max_path_length=1000,
         use_padding=True,
     ):
@@ -82,10 +28,12 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         if dataset is None:
             raise ValueError("dataset not specified")
 
-        trajectories = load_trajectories(dataset)
+        from mg_diffuse.utils.trajectory import load_trajectories
+
+        trajectories = load_trajectories(dataset, dataset_size)
 
         for preprocess_fn in preprocess_fns:
-            trajectories = preprocess_fn(trajectories)
+            trajectories = preprocess_fn(trajectories, **preprocess_kwargs)
 
         path_lengths = [len(trajectory) for trajectory in trajectories]
 
@@ -122,7 +70,7 @@ class TrajectoryDataset(torch.utils.data.Dataset):
             max_start = min(path_length - 1, self.max_path_length - horizon)
             if not self.use_padding:
                 max_start = min(max_start, path_length - horizon)
-            for start in range(max_start):
+            for start in range(max_start+1):
                 end = start + horizon
                 indices.append((i, start, end))
         indices = np.array(indices)
@@ -141,6 +89,8 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         path_ind, start, end = self.indices[idx]
 
         trajectories = self.normed_trajectories[path_ind, start:end]
+
+
 
         conditions = self.get_conditions(trajectories)
         batch = Batch(trajectories, conditions)

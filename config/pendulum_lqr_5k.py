@@ -1,5 +1,7 @@
 from mg_diffuse.utils import watch, handle_angle_wraparound
 
+DATASET_SIZE = 5565
+
 # ------------------------ base ------------------------#
 
 ## automatically make experiment names for planning
@@ -28,8 +30,8 @@ base = {
         },
         "invalid_label": -1,
         "attractor_threshold": 0.05,
-        "n_runs": 100,
-        "batch_size": 1000000,
+        "n_runs": 20,
+        "batch_size": 270000,
         "attractor_probability_upper_threshold": 0.5,
     },
 
@@ -50,7 +52,8 @@ base = {
         ## dataset
         "loader": "datasets.TrajectoryDataset",
         "normalizer": "LimitsNormalizer",
-        "preprocess_fns": [],
+        "preprocess_fns": [handle_angle_wraparound],
+        "preprocess_kwargs": {},
         "use_padding": True,
         "max_path_length": 502,
         ## serialization
@@ -65,9 +68,8 @@ base = {
         "learning_rate": 2e-4,
         "gradient_accumulate_every": 2,
         "ema_decay": 0.995,
-        "save_freq": 20000,
+        "save_freq": 200000,
         "sample_freq": 20000,
-        "n_saves": 5,
         "save_parallel": False,
         "n_reference": 8,
         "bucket": None,
@@ -81,8 +83,28 @@ base = {
 
 # ------------------------ overrides ------------------------#
 
-# pendulum_lqr_5k = {
-#     "diffusion": {
-#         "max_path_length": 502,
-#     }
-# }
+fewer_steps = {
+    "diffusion": {
+        "n_diffusion_steps": 5,
+        "exp_name": watch(args_to_watch),
+    }
+}
+
+one_step = {
+    "diffusion": {
+        "n_diffusion_steps": 1,
+        "exp_name": watch(args_to_watch),
+    }
+}
+
+long_horizon = {
+    "diffusion": {
+        "horizon": 80,
+    }
+}
+
+longer_horizon = {
+    "diffusion": {
+        "horizon": 160,
+    }
+}
