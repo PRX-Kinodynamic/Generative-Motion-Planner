@@ -1,12 +1,12 @@
-import torch
-import numpy as np
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+from os import cpu_count, path, listdir
+from random import shuffle
 
-from os import path
+import torch
+import numpy as np
 
-from mg_diffuse.datasets.normalization import LimitsNormalizer
-from mg_diffuse.datasets.sequence import load_trajectories
+
 
 def generate_trajectory_batch(start_states, model, model_args, only_execute_next_step=False):
     batch_size = len(start_states)
@@ -44,7 +44,7 @@ def generate_trajectory_batch(start_states, model, model_args, only_execute_next
             current_states = next_trajs[:, -1]
             current_idx += next_path_lengths
 
-            pbar.update(slice_path_length)
+            pbar.update(slice_path_length+1)
 
     return trajectories
 
@@ -63,8 +63,7 @@ def generate_trajectories(
         verbose: If True, print progress.
         batch_size: The batch size to use for generating the trajectories.
     """
-    if verbose:
-        print("[ scripts/visualize_trajectories ] Generating trajectories")
+    from mg_diffuse.datasets.normalization import LimitsNormalizer
 
     normalizer = LimitsNormalizer(params=model_args.normalization_params)
 
@@ -79,7 +78,8 @@ def generate_trajectories(
     for idx in range(0, len(start_states), batch_size):
         if verbose:
             current_batch = math.ceil(idx / batch_size)
-            print(f"[ scripts/visualize_trajectories ] Generating trajectories for batch {current_batch + 1}/{total_num_batches}")
+
+            print(f"[ scripts/visualize_trajectories ] Generating trajectories for batch {current_batch + 1}/{total_num_batches}" if total_num_batches > 1 else f"[ scripts/visualize_trajectories ] Generating trajectories")
 
         batch_start_states = start_states[idx: idx + batch_size]
 
@@ -101,6 +101,8 @@ def unnormalize_trajectories(trajectories, model_args, verbose=False):
     """
     Process the trajectories to make them more interpretable.
     """
+    from mg_diffuse.datasets.normalization import LimitsNormalizer
+
     if verbose:
         print("[ utils/trajectory ] Processing trajectories")
 
@@ -199,28 +201,79 @@ def save_trajectories_image(trajectories, image_path, verbose=False, comparison_
     if verbose:
         print(f"[ utils/trajectory ] Trajectories saved at {image_path}")
 
+def get_fnames_to_load(dataset_path, trajectories_path, num_trajs):
+    indices_fpath = path.join(dataset_path, "shuffled_indices.txt")
 
-def get_fnames_to_load(dataset_path, num_trajs):
-    indices_file = path.join(dataset_path, "viz_shuffled_indices.txt")
-
-    if path.exists(indices_file):
-        with open(indices_file, "r") as f:
+    if path.exists(indices_fpath):
+        with open(indices_fpath, "r") as f:
             fnames = f.readlines()
             fnames = [f.strip() for f in fnames]
             fnames = fnames[:num_trajs]
 
     else:
-        raise ValueError(f"File {indices_file} not found")
+        print(f"[ utils/trajectory ] Could not find shuffled indices at {indices_fpath}. Generating new shuffled indices")
+        all_fnames = listdir(trajectories_path)
+        fnames = all_fnames.copy()
+        shuffle(fnames)
+
+        with open(indices_fpath, "w") as f:
+            for fname in fnames:
+                f.write(fname + "\n")
+
+    fnames = fnames[:num_trajs]
 
     return fnames
 
+def read_trajectory(sequence_path):
+    with open(sequence_path, "r") as f:
+        lines = f.readlines()
 
-def load_test_trajectories(dataset, num_trajs):
+    trajectory = []
+
+    for line in lines:
+        state = line.split(",")
+        state = [float(s) for s in state]
+
+        trajectory.append(state)
+
+    return trajectory
+
+def load_trajectories(dataset, dataset_size=None, parallel=True, fnames=None):
+    """
+    load dataset from directory
+    """
     dataset_path = path.join("data_trajectories", dataset)
+    trajectories_path = path.join(dataset_path, "trajectories")
 
-    fnames = get_fnames_to_load(dataset_path, num_trajs)
+    if fnames is None:
+        if dataset_size is None:
+            try:
+                fnames = listdir(trajectories_path)
+            except FileNotFoundError:
+                raise ValueError(f"Could not find dataset at {trajectories_path}")
+        else:
+            fnames = get_fnames_to_load(dataset_path, trajectories_path, dataset_size)
 
-    return load_trajectories(dataset, parallel=True, fnames=fnames)
+    trajectories = []
+
+    print(f"[ datasets/sequence ] Loading trajectories from {trajectories_path}")
+
+    fpaths = [path.join(trajectories_path, fname) for fname in fnames]
+
+    if not parallel:
+        for fpath in tqdm(fpaths):
+            if not fpath.endswith(".txt"):
+                continue
+            trajectories.append(read_trajectory(fpath))
+    else:
+        import multiprocessing as mp
+
+        with mp.Pool(cpu_count()) as pool:
+            trajectories = list(
+                tqdm(pool.imap(read_trajectory, fpaths), total=len(fpaths))
+            )
+
+    return np.array(trajectories, dtype=np.float32)
 
 
 def get_trajectory_attractor_labels(final_states, attractors, attractor_threshold, invalid_label=-1):

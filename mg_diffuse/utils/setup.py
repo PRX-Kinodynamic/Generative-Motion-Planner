@@ -24,6 +24,8 @@ def set_seed(seed):
 def watch(args_to_watch):
     def _fn(args):
         exp_name = []
+        timestamp = f"{time.strftime('%y_%m_%d-%H_%M_%S')}"
+        
         for key, label in args_to_watch:
             if not hasattr(args, key):
                 continue
@@ -32,12 +34,17 @@ def watch(args_to_watch):
                 val = "_".join(f"{k}-{v}" for k, v in val.items())
             if type(val) == bool:
                 val = "T" if val else "F"
+            if val is None:
+                val = "F"
             exp_name.append(f"{label}{val}")
-        exp_name = "_".join(exp_name)
+
+            if key == "prefix":
+                exp_name.append(timestamp)
+
+        exp_name = "_".join(exp_name) + ("" if args.variation == "" else f"_{args.variation}")
         exp_name = exp_name.replace("/_", "/")
         exp_name = exp_name.replace("(", "").replace(")", "")
         exp_name = exp_name.replace(", ", "-")
-        exp_name += f"_{time.strftime('%y_%m_%d-%H_%M_%S')}" # Add unique timestamp to avoid overwriting in format of yy_mm_dd-HH_MM_SS
 
         return exp_name
 
@@ -67,7 +74,7 @@ class Parser(Tap):
         ## if not loading from a config script, skip the result of the setup
         if not hasattr(args, "config"):
             return args
-        args = self.read_config(args, experiment)
+        args = self.read_config(args, experiment, variation=args.variation)
         self.add_extras(args)
         self.eval_fstrings(args)
         self.set_seed(args)
@@ -78,7 +85,7 @@ class Parser(Tap):
         self.save_diff(args)
         return args
 
-    def read_config(self, args, experiment):
+    def read_config(self, args, experiment, variation=""):
         """
         Load parameters from config file
 
@@ -89,16 +96,15 @@ class Parser(Tap):
         print(f"[ utils/setup ] Reading config: {args.config}:{dataset}")
         module = importlib.import_module(args.config)
         params = getattr(module, "base")[experiment]
-
-        if hasattr(module, dataset) and experiment in getattr(module, dataset):
+        if hasattr(module, variation) and experiment in getattr(module, variation):
             print(
-                f"[ utils/setup ] Using overrides | config: {args.config} | dataset: {dataset}"
+                f"[ utils/setup ] Using overrides | config: {args.config} | variation: {variation}"
             )
-            overrides = getattr(module, dataset)[experiment]
+            overrides = getattr(module, variation)[experiment]
             params.update(overrides)
         else:
             print(
-                f"[ utils/setup ] Not using overrides | config: {args.config} | dataset: {dataset}"
+                f"[ utils/setup ] Not using overrides | config: {args.config} | variation: base"
             )
 
         self._dict = {}

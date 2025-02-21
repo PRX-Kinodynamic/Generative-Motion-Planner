@@ -5,12 +5,37 @@ import mg_diffuse.utils as utils
 
 
 def main(args):
-    test_trajectories = utils.load_test_trajectories(args.dataset, args.num_trajs)
-    test_image_path = path.join(
-        "data_trajectories", args.dataset, f"test_trajectories_{args.num_trajs}.png"
+    trajectories = utils.load_trajectories(args.dataset, args.num_trajs, parallel=not args.no_parallel)
+
+    if args.apply_config:
+        import importlib
+
+        config_module = importlib.import_module(f"config.{args.dataset}")
+        config = config_module.base["diffusion"]
+
+        if args.variation is not None:
+            variation_config = getattr(config_module, args.variation)["diffusion"]
+            config.update(variation_config)
+            fname = f"trajectories_{args.num_trajs}_{args.dataset}_{args.variation}"
+        else:
+            fname = f"trajectories_{args.num_trajs}_{args.dataset}"
+
+        preprocess_fns = config["preprocess_fns"]
+        preprocess_kwargs = config["preprocess_kwargs"]
+
+        for preprocess_fn in preprocess_fns:
+            trajectories = preprocess_fn(trajectories, **preprocess_kwargs, parallel=not args.no_parallel)
+
+
+    else:
+        fname = f'trajectories_{args.num_trajs}'
+
+
+    img_path = path.join(
+        "data_trajectories", args.dataset, fname + ".png"
     )
 
-    utils.save_trajectories_image(test_trajectories, test_image_path, verbose=True)
+    utils.save_trajectories_image(trajectories, img_path, verbose=True)
 
 
 if __name__ == "__main__":
@@ -30,7 +55,26 @@ if __name__ == "__main__":
         help="Show the start and end points of the trajectories",
     )
     parser.add_argument(
-        "--dataset", type=str, default="pendulum_lqr_5k", help="Dataset name"
+        "--dataset", type=str, required=True, help="Dataset name"
+    )
+
+    parser.add_argument(
+        "--apply_config",
+        action="store_true",
+        help="Apply configuration settings from config file",
+    )
+
+    parser.add_argument(
+        "--no_parallel",
+        action="store_true",
+        help="Do not use parallel processing",
+    )
+
+    parser.add_argument(
+        "--variation",
+        type=str,
+        default=None,
+        help="Variation of the dataset to use",
     )
 
     main(parser.parse_args())
