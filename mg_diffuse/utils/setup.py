@@ -62,19 +62,19 @@ class Parser(Tap):
         print(f"[ utils/setup ] Saved args to {fullpath}")
         super().save(fullpath, skip_unpicklable=True)
 
-    def parse_args(self, experiment=None):
+    def parse_args(self, method_type=None):
         """
-        Parse arguments and set up experiment
+        Parse arguments and set up method_type
 
         First, parse arguments from command line
-        Read config file and override parameters of experiment if necessary
+        Read config file and override parameters of method_type if necessary
         Add extras from command line to override parameters from config file
         """
         args = super().parse_args(known_only=True)
         ## if not loading from a config script, skip the result of the setup
         if not hasattr(args, "config"):
             return args
-        args = self.read_config(args, experiment, variation=args.variation)
+        args = self.read_config(args, method_type, variation=args.variation)
         self.add_extras(args)
         self.eval_fstrings(args)
         self.set_seed(args)
@@ -85,22 +85,22 @@ class Parser(Tap):
         self.save_diff(args)
         return args
 
-    def read_config(self, args, experiment, variation=""):
+    def read_config(self, args, method_type, variation=""):
         """
         Load parameters from config file
 
-        If the experiment is in the config file, override the base parameters
+        If the method_type is in the config file, override the base parameters
 
         """
         dataset = args.dataset.replace("-", "_")
         print(f"[ utils/setup ] Reading config: {args.config}:{dataset}")
         module = importlib.import_module(args.config)
-        params = getattr(module, "base")[experiment]
-        if hasattr(module, variation) and experiment in getattr(module, variation):
+        params = getattr(module, "base")[method_type]
+        if hasattr(module, variation) and method_type in getattr(module, variation):
             print(
                 f"[ utils/setup ] Using overrides | config: {args.config} | variation: {variation}"
             )
-            overrides = getattr(module, variation)[experiment]
+            overrides = getattr(module, variation)[method_type]
             params.update(overrides)
         else:
             print(

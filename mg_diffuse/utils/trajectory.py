@@ -21,6 +21,7 @@ def generate_trajectory_batch(start_states, model, model_args, only_execute_next
     trajectories = np.zeros((batch_size, max_path_length, model_args.observation_dim))
     trajectories[:, 0] = np.array(start_states)
 
+
     with tqdm(total=max_path_length) as pbar:
         while current_idx < max_path_length:
             conditions = {0: current_states}
@@ -63,6 +64,7 @@ def generate_trajectories(
         verbose: If True, print progress.
         batch_size: The batch size to use for generating the trajectories.
     """
+    # from mg_diffuse.datasets.normalization import DebugNormalizer as LimitsNormalizer
     from mg_diffuse.datasets.normalization import LimitsNormalizer
 
     normalizer = LimitsNormalizer(params=model_args.normalization_params)
@@ -101,6 +103,7 @@ def unnormalize_trajectories(trajectories, model_args, verbose=False):
     """
     Process the trajectories to make them more interpretable.
     """
+    # from mg_diffuse.datasets.normalization import DebugNormalizer as LimitsNormalizer
     from mg_diffuse.datasets.normalization import LimitsNormalizer
 
     if verbose:

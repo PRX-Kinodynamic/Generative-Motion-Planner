@@ -284,7 +284,8 @@ def generate_and_analyze_runs(dataset, exp_name, model_state_name, generate_img,
 
     timestamp = time.strftime("%Y-%m-%d_%H-%M-%S")
 
-    exp_path = path.join("experiments", dataset, path_prefix, exp_name)
+    exp_path = path.join("experiments", dataset, path_prefix, exp_name) # bug
+    exp_path = path.join("experiments", dataset, exp_name) #solution
     generated_trajectories_path = path.join(exp_path, "generated_trajectories", timestamp)
     final_state_path = path.join(generated_trajectories_path, "final_states")
 

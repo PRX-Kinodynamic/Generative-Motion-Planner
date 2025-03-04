@@ -6,7 +6,8 @@ from mg_diffuse import utils
 
 
 def visualize_generated_trajectories(dataset, num_trajs, compare, show_traj_ends, exp_name, model_state_name, only_execute_next_step, path_prefix="diffusion"):
-    exp_path = path.join("experiments", dataset, path_prefix, exp_name)
+    exp_path = path.join("experiments", dataset, path_prefix, exp_name) # original with bug
+    exp_path = path.join("experiments", dataset, exp_name) # solution
 
     test_trajs = utils.load_trajectories(dataset, num_trajs)
     start_points = test_trajs[:, 0]

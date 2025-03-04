@@ -148,12 +148,13 @@ class TemporalUnet(nn.Module):
             nn.Conv1d(dim, transition_dim, 1),
         )
 
-    def forward(self, x, cond, time):
+    def forward(self, x, time):
         """
         x : [ batch x horizon x transition ]
         """
 
         x = einops.rearrange(x, "b h t -> b t h")
+        
 
         t = self.time_mlp(time)
         h = []
@@ -263,7 +264,7 @@ class ValueFunction(nn.Module):
             nn.Linear(fc_dim // 2, out_dim),
         )
 
-    def forward(self, x, cond, time, *args):
+    def forward(self, x, time, *args):
         """
         x : [ batch x horizon x transition ]
         """
