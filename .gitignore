@@ -2,3 +2,6 @@ data_trajectories/
 *.egg-info/
 __pycache__/
 logs/
+experiments/
+.DS_Store
+.vscode
