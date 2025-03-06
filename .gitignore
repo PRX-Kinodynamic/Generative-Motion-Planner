@@ -3,3 +3,4 @@ data_trajectories/
 __pycache__/
 logs/
 .ipynb_checkpoints/
+experiments/

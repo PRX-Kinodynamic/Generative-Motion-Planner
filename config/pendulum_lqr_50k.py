@@ -30,7 +30,7 @@ base = {
         "attractor_threshold": 0.05,
         "n_runs": 20,
         "batch_size": 200000,
-        "attractor_probability_upper_threshold": 0.8,
+        "attractor_probability_upper_threshold": 0.95,
     },
 
     "diffusion": {
