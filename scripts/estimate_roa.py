@@ -133,13 +133,12 @@ def generate_label_probabilities(all_predicted_labels, labels_set, invalid_label
 
     return label_probabilities
 
-def perform_runs(params, model, model_args, start_points, attractors, final_state_path, n_runs):
+def perform_runs(params, model, model_args, start_points, attractors, generated_trajectories_path, n_runs, batch_size=None):
     attractor_threshold = params["attractor_threshold"]
-    batch_size = params["batch_size"]
+    batch_size = int(batch_size) if batch_size is not None else params["batch_size"]
     invalid_label = params["invalid_label"]
 
     all_predicted_labels = []
-    trajectories = []
 
     for i in range(n_runs):
         print(f"[ scripts/estimate_roa ] Run {i+1}/{n_runs}\n\n")
@@ -152,17 +151,14 @@ def perform_runs(params, model, model_args, start_points, attractors, final_stat
 
         run_predicted_labels = utils.get_trajectory_attractor_labels(final_states, attractors, attractor_threshold, invalid_label)
 
-        save_attractor_labels(start_points, run_predicted_labels, final_states, path.join(final_state_path, f"attractor_labels_{i}.txt"))
+        save_attractor_labels(start_points, run_predicted_labels, final_states, path.join(generated_trajectories_path, f"attractor_labels_{i}.txt"))
+        # np.save(path.join(generated_trajectories_path, f"generated_trajectories_{i}.npy"), generated_trajs)
 
         all_predicted_labels.append(run_predicted_labels)
-        trajectories.append(generated_trajs)
         
     all_predicted_labels = np.array(all_predicted_labels)
-    trajectories = np.array(trajectories)
 
-    # Modify trajectories from (n_runs, n_points, 2) to (n_points, n_runs, 2)
-    trajectories = trajectories.transpose(1, 0, 2)
-    return trajectories, all_predicted_labels
+    return all_predicted_labels
 
 def load_dataset_params(dataset):
     config = f'config.{dataset}'
@@ -271,7 +267,7 @@ def perform_roa_estimation(dataset, exp_name, timestamp, generate_img, path_pref
     print("Recall:", recall)
     print("F1 score:", f1_score)
 
-def generate_and_analyze_runs(dataset, exp_name, model_state_name, generate_img, path_prefix="diffusion", n_runs=None):
+def generate_and_analyze_runs(dataset, exp_name, model_state_name, generate_img, path_prefix="diffusion", n_runs=None, batch_size=None):
     params = load_dataset_params(dataset)
 
     attractors = params["attractors"]
@@ -286,17 +282,14 @@ def generate_and_analyze_runs(dataset, exp_name, model_state_name, generate_img,
 
     exp_path = path.join("experiments", dataset, path_prefix, exp_name)
     generated_trajectories_path = path.join(exp_path, "generated_trajectories", timestamp)
-    final_state_path = path.join(generated_trajectories_path, "final_states")
 
-    os.makedirs(final_state_path, exist_ok=True)
+    os.makedirs(generated_trajectories_path, exist_ok=True)
 
     model, model_args = mg_diffuse.utils.model.load_model(exp_path, model_state_name)
 
-    trajectories, _ = perform_runs(params, model, model_args, start_points, attractors, final_state_path, n_runs)
+    perform_runs(params, model, model_args, start_points, attractors, generated_trajectories_path, n_runs, batch_size)
     
-    print(f"[ scripts/estimate_roa ] Attractor labels saved in {final_state_path}")
-
-    np.save(path.join(generated_trajectories_path, "generated_trajectories.npy"), trajectories)
+    print(f"[ scripts/estimate_roa ] Attractor labels saved in {generated_trajectories_path}")
     
     perform_roa_estimation(dataset, exp_name, timestamp, generate_img, n_runs=n_runs, path_prefix=path_prefix)
 
@@ -316,7 +309,7 @@ if __name__ == "__main__":
     parser.add_argument("--exp_name", type=str, required=True, help="Experiment name")
 
     parser.add_argument(
-        "--model_state_name", type=str, required=True, help="Model state file name"
+        "--model_state_name", type=str, default="best.pt", help="Model state file name"
     )
 
     parser.add_argument(
@@ -343,11 +336,18 @@ if __name__ == "__main__":
         help="Number of runs to generate or load",
     )
 
+    parser.add_argument(
+        "--batch_size",
+        type=float,
+        help="Batch size for generating trajectories",
+    )
+
     args = parser.parse_args()
 
     if args.type == "generate":
         generate_and_analyze_runs(
-            args.dataset, args.exp_name, args.model_state_name, not args.no_img, path_prefix=args.path_prefix, n_runs=args.n_runs
+            args.dataset, args.exp_name, args.model_state_name, not args.no_img, 
+            path_prefix=args.path_prefix, n_runs=args.n_runs, batch_size=args.batch_size
         )
     else:
         perform_roa_estimation(
