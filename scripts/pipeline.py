@@ -3,6 +3,7 @@ from viz_model import visualize_generated_trajectories
 from estimate_roa import generate_and_analyze_runs
 import sys
 import argparse
+from flow_matching.utils.manifolds import Euclidean, Sphere, FlatTorus, Product
 
 
 # -----------------------------------------------------------------------------#
@@ -96,11 +97,22 @@ if __name__ == '__main__':
         # # ------------------------------ model & trainer ------------------------------#
         # # -----------------------------------------------------------------------------#
 
+        manifold=Product(sphere_dim = args.sphere_dim, torus_dim = args.torus_dim, euclidean_dim = args.euclidean_dim)
+        # # manifold = FlatTorus()
+        # unwrapped_manifold_dim = 1
+        # # observation_dim = observation_dim + unwrapped_manifold_dim
+
+        # sphere and torus have two features for dimension (cos, sin)
+        features_dim = 2*args.sphere_dim + 2*args.torus_dim + args.euclidean_dim
+        output_dim = args.sphere_dim + args.torus_dim + args.euclidean_dim  # dimension of the manifold
+
+        assert output_dim == observation_dim  # observation_dim is the dim of the manifold
+
         model_config = utils.Config(
             args.model,
             savepath=(args.savepath, "model_config.pkl"),
             horizon=args.horizon,
-            transition_dim=observation_dim,
+            transition_dim=features_dim,
             cond_dim=observation_dim,
             dim_mults=args.dim_mults,
             attention=args.attention,
@@ -120,6 +132,7 @@ if __name__ == '__main__':
             loss_weights=args.loss_weights,
             loss_discount=args.loss_discount,
             device=args.device,
+            manifold=manifold
         )
 
         trainer_config = utils.Config(
@@ -224,7 +237,7 @@ if __name__ == '__main__':
         
         visualize_generated_trajectories(
             dataset=args.dataset,
-            num_trajs=30,
+            num_trajs=20,
             compare=False,
             show_traj_ends=True,
             exp_name=exp_name,

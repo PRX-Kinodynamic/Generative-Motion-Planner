@@ -1,19 +1,94 @@
 from collections import namedtuple
 
-from torch import nn
+from torch import nn, Tensor
 import torch
 
 # flow_matching
 from flow_matching.path.scheduler import CondOTScheduler
-from flow_matching.path import AffineProbPath
-from flow_matching.solver import ODESolver
+from flow_matching.path import AffineProbPath, GeodesicProbPath
+from flow_matching.solver import ODESolver, RiemannianODESolver
 from flow_matching.utils import ModelWrapper
+from flow_matching.utils.manifolds import Manifold, Product, Euclidean
+
 
 from .helpers import apply_conditioning
 from .helpers.losses import Losses
 
 
 Sample = namedtuple("Sample", "trajectories values chains")
+
+def wrap(manifold, samples):
+    center = torch.zeros_like(samples)
+    return manifold.expmap(center, samples)
+
+class FourierFeatures(nn.Module):
+    """Assumes input is in [0, 2pi]."""
+
+    def __init__(self, n_fourier_features: int):
+        super().__init__()
+        self.n_fourier_features = n_fourier_features
+
+    def forward(self, x: Tensor) -> Tensor:
+        feature_vector = [
+            torch.sin((i + 1) * x) for i in range(self.n_fourier_features)
+        ]
+        feature_vector += [
+            torch.cos((i + 1) * x) for i in range(self.n_fourier_features)
+        ]
+        return torch.cat(feature_vector, dim=-1)
+
+
+
+class ProductFeatures(nn.Module):
+    """The product of manifolds, Sphere, Torus and Euclidean."""
+    """"TODO: Sphere_feature is id for now, update it"""
+
+    def __init__(self, sphere_dim = 0, torus_dim = 0, euclidean_dim = 0):
+        super().__init__()
+        self.sphere_dim = sphere_dim
+        self.torus_dim = torus_dim
+        self.euclidean_dim = euclidean_dim
+        self.size = [sphere_dim] + [1]*torus_dim + [euclidean_dim]
+
+        self.torus_feature = FourierFeatures(1)
+
+    def forward(self, x: Tensor) -> Tensor:
+        x_splitted = torch.split(x, self.size, dim=-1)
+        x_torus = [self.torus_feature(x_) for x_ in x_splitted[1:-1]] 
+        x_torus = torch.cat(x_torus, dim=-1)
+
+        # return = (sphere, torus, euclidean) = (x_splitted[0], x_torus,x_splitted[-1])
+        return torch.cat((x_splitted[0], x_torus, x_splitted[-1]), dim=-1)
+
+
+class ProjectToTangent(nn.Module):
+    """Projects a vector field onto the tangent plane at the input."""
+
+    def __init__(self, model: nn.Module, manifold: Manifold):
+        super().__init__()
+        self.model_euclidean = model  # nn model has an Euclidean input
+        self.manifold = manifold
+
+        # adding layer Manifold -> Euclidean
+        self.input_layer = ProductFeatures(manifold.sphere_dim, manifold.torus_dim, manifold.euclidean_dim)
+
+        features_dim = 2*manifold.sphere_dim + 2*manifold.torus_dim + manifold.euclidean_dim
+        output_dim = manifold.sphere_dim + manifold.torus_dim + manifold.euclidean_dim
+
+        # adding extra layer to the model: Euclidean features_dim -> Euclidean output_dim
+        self.output_layer = nn.Linear(features_dim, output_dim)  # reducing the dimension here to not modify the original self.model_euclidean
+
+        
+
+    def forward(self, x: Tensor, t: Tensor) -> Tensor:
+        x = self.manifold.projx(x)
+        x_in = self.input_layer(x)
+        v = self.model_euclidean(x_in, t)
+        v = self.output_layer(v)
+        v = self.manifold.proju(x, v)
+        return v
+    
+
 
 class WrappedModel(ModelWrapper):
     def forward(self, x: torch.Tensor, t: torch.Tensor, **extras):
@@ -46,10 +121,9 @@ class FlowMatching(nn.Module):
         loss_type="l1",
         loss_weights=None,
         loss_discount=1.0,
+        manifold=Euclidean()
     ):
         super().__init__()
-
-        self.model = model
 
         self.observation_dim = observation_dim
         self.transition_dim = observation_dim
@@ -62,12 +136,19 @@ class FlowMatching(nn.Module):
 
         self.loss_fn = Losses[loss_type](loss_weights)
 
-        # instantiate an affine path object
-        self.prob_path = AffineProbPath(scheduler=CondOTScheduler())
+        self.manifold = manifold
+        if manifold==Euclidean() or (self.manifold.sphere_dim == 0 and self.manifold.torus_dim == 0):
+            self.manifold = Euclidean()  # overide Product (product of manifolds) since Euclidean() is simpler
+            self.model = model  # velocity field model init
+            self.prob_path = AffineProbPath(scheduler=CondOTScheduler())
+            wrapped_vf = WrappedModel(self.model)  # wrapped vector field model to be used for ODE solver
+            self.solver = ODESolver(velocity_model=wrapped_vf)  # create an ODESolver class
 
-        wrapped_vf = WrappedModel(self.model)
-
-        self.solver = ODESolver(velocity_model=wrapped_vf)  # create an ODESolver class
+        else:
+            self.model = ProjectToTangent(model, manifold=manifold)  # velocity field: Ensures we can just use Euclidean divergence.
+            self.prob_path = GeodesicProbPath(scheduler=CondOTScheduler(), manifold=manifold) # instantiate an geodesic path object
+            wrapped_vf = WrappedModel(self.model)  # wrapped vector field model to be used for ODE solver
+            self.solver = RiemannianODESolver(velocity_model=wrapped_vf, manifold=manifold)  # create an ODESolver class on Manifold
 
     def get_loss_weights(self, discount, weights_dict):
         '''
@@ -103,35 +184,33 @@ class FlowMatching(nn.Module):
         **sample_kwargs
     ):
         """
-
         Apply conditioning to x by fixing the states in x at the given timesteps from cond
-
-        Then loop through the timesteps in reverse order and sample from the model, applying conditioning at each step
+        Then solve ODE to get the flow solution, the path is constant at the condition
         """
-
-        # device = self.device
-        batch_size = shape[0]
-
         # step size for ode solver
         step_size = 0.05
-        eps_time = 1e-2
         T = torch.linspace(0,1,self.n_timesteps)  # sample times
         # T = T.to(device=device)
 
         # x_init = torch.randn(shape, device=device)
         x_init = torch.randn(shape)
         x_init = apply_conditioning(x_init, cond)
+        x_init = wrap(self.manifold, x_init)
 
-        # sample from the model
+        # solve ode
         sol = self.solver.sample(time_grid=T, x_init=x_init, method='midpoint', step_size=step_size, return_intermediates=True)  
 
-        x_end = sol[-1]
+        x_end = sol[-1]  # the end point of the flow (generated distribution)
 
-        chain = sol if return_chain else None
+        # x_end = wrap(self.manifold, x_end)
+        # chain = wrap(self.manifold, chain) if return_chain else None  # from the normal distribution to last step (t=1, the predition)
 
-        values = torch.zeros(len(x_end), device=x_end.device)
+        chain = self.manifold, chain if return_chain else None  # from the normal distribution to last step (t=1, the predition)
 
-        x_end, values = sort_by_values(x_end, values)
+        values = torch.zeros(len(x_end), device=x_end.device)  # values for future implementation
+        x_end, values = sort_by_values(x_end, values)  # identity for now
+
+
 
         return Sample(x_end, values, chain)
 
@@ -150,22 +229,25 @@ class FlowMatching(nn.Module):
     # ------------------------------------------ training ------------------------------------------#
     
     def loss_vf(self, x, cond):
-        # Get a normal distribution of noise and sample a noisy x by adding a scaled noise to a scaled x_start
-        # Apply conditioning to the noisy x
+        # Get a normal distribution of noise
+        # Apply conditioning to the noise
         noise = torch.randn_like(x)
-        batch_size = len(x)
-        t = torch.rand((batch_size,), device=x.device)
-        # t = torch.rand(x.shape[0], device=x.device)
-
-        # x_noisy = self.q_sample(x_start=x, t=t, noise=noise)
-        x_noisy = noise
-
-        x_noisy = apply_conditioning(x_noisy, cond)
+        x_noisy = apply_conditioning(noise, cond)
 
         # Apply conditioning to the target x
         x_target = apply_conditioning(x, cond)
 
-        assert noise.shape == x_target.shape        
+        # breakpoint()
+        assert noise.shape == x_target.shape
+        x_noisy = wrap(self.manifold, x_noisy)
+        x_target = wrap(self.manifold, x_target)
+
+        # breakpoint()
+
+        batch_size = len(x)
+        t = torch.rand((batch_size,), device=x.device)
+
+        # breakpoint()
 
         path_sample = self.prob_path.sample(t=t, x_0=x_noisy, x_1=x_target)
 

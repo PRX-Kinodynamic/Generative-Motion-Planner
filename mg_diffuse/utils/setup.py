@@ -95,7 +95,8 @@ class Parser(Tap):
         dataset = args.dataset.replace("-", "_")
         print(f"[ utils/setup ] Reading config: {args.config}:{dataset}")
         module = importlib.import_module(args.config)
-        params = getattr(module, "base")[method_type]
+        params = getattr(module, "base")[method_type] # add model parameters
+        params.update(getattr(module, "base")["manifold"]) # add manifold parameters
         if hasattr(module, variation) and method_type in getattr(module, variation):
             print(
                 f"[ utils/setup ] Using overrides | config: {args.config} | variation: {variation}"

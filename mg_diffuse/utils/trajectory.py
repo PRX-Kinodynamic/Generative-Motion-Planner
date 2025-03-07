@@ -64,8 +64,8 @@ def generate_trajectories(
         verbose: If True, print progress.
         batch_size: The batch size to use for generating the trajectories.
     """
-    # from mg_diffuse.datasets.normalization import DebugNormalizer as LimitsNormalizer
-    from mg_diffuse.datasets.normalization import LimitsNormalizer
+    from mg_diffuse.datasets.normalization import DebugNormalizer as LimitsNormalizer
+    # from mg_diffuse.datasets.normalization import LimitsNormalizer
 
     normalizer = LimitsNormalizer(params=model_args.normalization_params)
 
@@ -95,6 +95,7 @@ def generate_trajectories(
 
     if return_normalize:
         return trajectories
+    
 
     return unnormalize_trajectories(trajectories, model_args, verbose)
 
@@ -103,8 +104,8 @@ def unnormalize_trajectories(trajectories, model_args, verbose=False):
     """
     Process the trajectories to make them more interpretable.
     """
-    # from mg_diffuse.datasets.normalization import DebugNormalizer as LimitsNormalizer
-    from mg_diffuse.datasets.normalization import LimitsNormalizer
+    from mg_diffuse.datasets.normalization import DebugNormalizer as LimitsNormalizer
+    # from mg_diffuse.datasets.normalization import LimitsNormalizer
 
     if verbose:
         print("[ utils/trajectory ] Processing trajectories")
@@ -116,8 +117,10 @@ def unnormalize_trajectories(trajectories, model_args, verbose=False):
     for trajectory in trajectories:
         trajectory = normalizer.unnormalize(trajectory)
         # If value of trajectory[0] is greater than pi, then subtract 2pi from the trajectory
-        trajectory[trajectory[:, 0] > np.pi, 0] -= 2 * np.pi
-        trajectory[trajectory[:, 0] < -np.pi, 0] += 2 * np.pi
+        # trajectory[trajectory[:, 0] > np.pi, 0] -= 2 * np.pi
+        # trajectory[trajectory[:, 0] < -np.pi, 0] += 2 * np.pi
+
+        trajectory[trajectory[:, 0] < 0, 0] += 2 * np.pi
 
         processed_trajectories.append(trajectory)
 

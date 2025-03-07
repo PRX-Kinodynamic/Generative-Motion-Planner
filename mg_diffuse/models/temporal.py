@@ -45,6 +45,7 @@ class ResidualTemporalBlock(nn.Module):
         returns:
         out : [ batch_size x out_channels x horizon ]
         """
+        # breakpoint()
         out = self.blocks[0](x) + self.time_mlp(t)
         out = self.blocks[1](out)
         return out + self.residual_conv(x)
@@ -62,6 +63,10 @@ class TemporalUnet(nn.Module):
         attention=False,
     ):
         super().__init__()
+
+
+        self.transition_dim = transition_dim
+        self.time_dim = horizon
 
         dims = [transition_dim, *map(lambda m: dim * m, dim_mults)]
         in_out = list(zip(dims[:-1], dims[1:]))
@@ -152,10 +157,7 @@ class TemporalUnet(nn.Module):
         """
         x : [ batch x horizon x transition ]
         """
-
-        x = einops.rearrange(x, "b h t -> b t h")
-        
-
+        x = einops.rearrange(x, "b h t -> b t h")        
         t = self.time_mlp(time)
         h = []
 

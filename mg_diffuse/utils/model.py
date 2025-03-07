@@ -4,6 +4,8 @@ import torch
 
 from mg_diffuse.utils import JSONArgs, import_class
 
+from flow_matching.utils.manifolds import Product
+
 
 def load_model_args(experiments_path):
     model_args_path = path.join(experiments_path, "args.json")
@@ -23,9 +25,12 @@ def load_model(experiments_path, model_state_name, verbose=False):
     model_class = import_class(model_args.model)
     method_class = import_class(model_args.method_type)
 
+    # sphere and torus have two features for dimension (cos, sin)
+    features_dim = 2*model_args.sphere_dim + 2*model_args.torus_dim + model_args.euclidean_dim
+
     model = model_class(
         horizon=model_args.horizon,
-        transition_dim=model_args.observation_dim,
+        transition_dim=features_dim,
         cond_dim=model_args.observation_dim,
         dim_mults=model_args.dim_mults,
         attention=model_args.attention,
@@ -42,6 +47,7 @@ def load_model(experiments_path, model_state_name, verbose=False):
         ## loss weighting
         loss_weights=model_args.loss_weights,
         loss_discount=model_args.loss_discount,
+        manifold=Product(model_args.sphere_dim, model_args.torus_dim, model_args.euclidean_dim)
     ).to(model_args.device)
 
     # Load model state dict
