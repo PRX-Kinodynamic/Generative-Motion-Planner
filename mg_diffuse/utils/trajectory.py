@@ -7,7 +7,6 @@ import torch
 import numpy as np
 
 
-
 def generate_trajectory_batch(start_states, model, model_args, only_execute_next_step=False):
     batch_size = len(start_states)
     max_path_length = model_args.max_path_length
@@ -48,8 +47,9 @@ def generate_trajectory_batch(start_states, model, model_args, only_execute_next
 
     return trajectories
 
+
 def generate_trajectories(
-    model, model_args, unnormalized_start_states, only_execute_next_step, return_normalize=False, verbose=False, batch_size=5000
+    model, model_args, unnormalized_start_states, only_execute_next_step=False, return_normalized=False, verbose=False, batch_size=5000
 ):
     """
     Generate a trajectory from the model given the start states.
@@ -60,6 +60,7 @@ def generate_trajectories(
         unnormalized_start_states: The initial states to start the trajectory from. These are un-normalized and will be normalized before passing to the model.
             batch_size x observation_dim
         only_execute_next_step: If True, only execute the next step of the trajectory. (like MPC)
+        return_normalized: If True, return the normalized trajectories. Otherwise, return the un-normalized trajectories true to the actual state space.
         verbose: If True, print progress.
         batch_size: The batch size to use for generating the trajectories.
     """
@@ -91,7 +92,7 @@ def generate_trajectories(
 
     trajectories = np.concatenate(trajectories, axis=0)
 
-    if return_normalize:
+    if return_normalized:
         return trajectories
 
     return unnormalize_trajectories(trajectories, model_args, verbose)
@@ -201,6 +202,7 @@ def save_trajectories_image(trajectories, image_path, verbose=False, comparison_
     if verbose:
         print(f"[ utils/trajectory ] Trajectories saved at {image_path}")
 
+
 def get_fnames_to_load(dataset_path, trajectories_path, num_trajs):
     indices_fpath = path.join(dataset_path, "shuffled_indices.txt")
 
@@ -224,6 +226,7 @@ def get_fnames_to_load(dataset_path, trajectories_path, num_trajs):
 
     return fnames
 
+
 def read_trajectory(sequence_path):
     with open(sequence_path, "r") as f:
         lines = f.readlines()
@@ -237,6 +240,7 @@ def read_trajectory(sequence_path):
         trajectory.append(state)
 
     return trajectory
+
 
 def load_trajectories(dataset, dataset_size=None, parallel=True, fnames=None):
     """

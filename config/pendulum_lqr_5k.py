@@ -1,4 +1,4 @@
-from mg_diffuse.utils import watch, handle_angle_wraparound
+from mg_diffuse.utils import watch, handle_angle_wraparound, augment_unwrapped_state_data
 
 DATASET_SIZE = 5565
 
@@ -52,8 +52,10 @@ base = {
         ## dataset
         "loader": "datasets.TrajectoryDataset",
         "normalizer": "LimitsNormalizer",
-        "preprocess_fns": [handle_angle_wraparound],
-        "preprocess_kwargs": {},
+        "preprocess_fns": [handle_angle_wraparound, augment_unwrapped_state_data],
+        "preprocess_kwargs": {
+            "angle_indices": [0],
+        },
         "use_padding": True,
         "max_path_length": 502,
         ## serialization
