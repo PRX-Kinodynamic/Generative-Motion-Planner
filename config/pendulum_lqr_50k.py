@@ -1,4 +1,4 @@
-from mg_diffuse.utils import watch, handle_angle_wraparound
+from mg_diffuse.utils import watch, handle_angle_wraparound, augment_unwrapped_state_data
 
 # ------------------------ base ------------------------#
 
@@ -28,8 +28,8 @@ base = {
         },
         "invalid_label": -1,
         "attractor_threshold": 0.05,
-        "n_runs": 20,
-        "batch_size": 200000,
+        "n_runs": 100,
+        "batch_size": int(1e6),
         "attractor_probability_upper_threshold": 0.95,
     },
 
@@ -50,9 +50,9 @@ base = {
         ## dataset
         "loader": "datasets.TrajectoryDataset",
         "normalizer": "LimitsNormalizer",
-        "preprocess_fns": [handle_angle_wraparound],
+        "preprocess_fns": [handle_angle_wraparound, augment_unwrapped_state_data],
         "preprocess_kwargs": {
-            "augment_new_state_data": False,
+            "angle_indices": [0],
         },
         "use_padding": True,
         "max_path_length": 502,

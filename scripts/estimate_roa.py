@@ -139,6 +139,7 @@ def perform_runs(params, model, model_args, start_points, attractors, generated_
     invalid_label = params["invalid_label"]
 
     all_predicted_labels = []
+    all_final_states = []
 
     for i in range(n_runs):
         print(f"[ scripts/estimate_roa ] Run {i+1}/{n_runs}\n\n")
@@ -155,10 +156,11 @@ def perform_runs(params, model, model_args, start_points, attractors, generated_
         # np.save(path.join(generated_trajectories_path, f"generated_trajectories_{i}.npy"), generated_trajs)
 
         all_predicted_labels.append(run_predicted_labels)
-        
-    all_predicted_labels = np.array(all_predicted_labels)
+        all_final_states.append(final_states)
 
-    return all_predicted_labels
+    all_predicted_labels = np.array(all_predicted_labels, dtype=np.int32)
+    all_final_states = np.array(all_final_states, dtype=np.float32)
+    return all_predicted_labels, all_final_states
 
 def load_dataset_params(dataset):
     config = f'config.{dataset}'
@@ -183,9 +185,22 @@ def get_labels_array(expected_labels, invalid_label):
 
     return labels_set, labels_array
 
-def perform_roa_estimation(dataset, exp_name, timestamp, generate_img, path_prefix="diffusion", n_runs=None):
+def perform_roa_estimation(dataset, exp_name, timestamp, generate_img, path_prefix="diffusion", n_runs=None, generated_data=None):
     print('[ scripts/estimate_roa ] Performing RoA estimation')
-    
+
+    exp_path = path.join("experiments", dataset, path_prefix, exp_name)
+
+    if timestamp is None:
+        gen_traj_dirs = os.listdir(path.join(exp_path, "generated_trajectories"))
+        if len(gen_traj_dirs) == 0:
+            raise ValueError("No generated trajectories found")
+        elif len(gen_traj_dirs) > 1:
+            timestamp = gen_traj_dirs[-1]
+            print(f"Multiple generated trajectories found. Using the latest one - {timestamp}")
+        else:
+            timestamp = gen_traj_dirs[0]
+
+    dir_path = path.join(exp_path, "generated_trajectories", timestamp)
     params = load_dataset_params(dataset)
 
     invalid_label = params["invalid_label"]
@@ -198,8 +213,10 @@ def perform_roa_estimation(dataset, exp_name, timestamp, generate_img, path_pref
     
     labels_set, labels_array = get_labels_array(expected_labels, invalid_label)
 
-    exp_path = path.join("experiments", dataset, path_prefix, exp_name)
-    all_predicted_labels, all_final_states = load_final_states_data(path.join(exp_path, "final_states", timestamp), n_runs, invalid_label)
+    if generated_data is None:
+        all_predicted_labels, all_final_states = load_final_states_data(dir_path, n_runs, invalid_label)
+    else:
+        all_predicted_labels, all_final_states = generated_data
 
     label_probabilities = generate_label_probabilities(all_predicted_labels[:1], labels_set, invalid_label)
 
@@ -208,17 +225,17 @@ def perform_roa_estimation(dataset, exp_name, timestamp, generate_img, path_pref
 
         plt.scatter(start_points[:, 0], start_points[:, 1], c=label_probabilities[:, 1], s=0.1, cmap='viridis')
         plt.colorbar()
-        plt.savefig(path.join(exp_path, "success_probability_img.png"))
+        plt.savefig(path.join(dir_path, "success_probability_img.png"))
 
         plt.clf()
         plt.scatter(start_points[:, 0], start_points[:, 1], c=label_probabilities[:, 0], s=0.1, cmap='viridis')
         plt.colorbar()
-        plt.savefig(path.join(exp_path, "failure_probability_img.png"))
+        plt.savefig(path.join(dir_path, "failure_probability_img.png"))
 
         plt.clf()
         plt.scatter(start_points[:, 0], start_points[:, 1], c=label_probabilities[:, 2], s=0.1, cmap='viridis')
         plt.colorbar()
-        plt.savefig(path.join(exp_path, "invalid_probability_img.png"))
+        plt.savefig(path.join(dir_path, "invalid_probability_img.png"))
 
         predicted_labels_img = np.zeros(len(start_points), dtype=np.int32)
         predicted_labels_img[label_probabilities[:, 0] > attractor_probability_upper_threshold] = -1
@@ -227,7 +244,7 @@ def perform_roa_estimation(dataset, exp_name, timestamp, generate_img, path_pref
         plt.clf()
         plt.scatter(start_points[:, 0], start_points[:, 1], c=predicted_labels_img, s=0.1, cmap='RdBu')
         plt.colorbar()
-        plt.savefig(path.join(exp_path,
+        plt.savefig(path.join(dir_path,
                               f"predicted_labels_{str(attractor_probability_upper_threshold).replace('.', 'p')}_img.png"))
 
     predicted_labels = get_predicted_labels(label_probabilities, attractor_probability_upper_threshold, labels_array, invalid_label)
@@ -287,11 +304,11 @@ def generate_and_analyze_runs(dataset, exp_name, model_state_name, generate_img,
 
     model, model_args = mg_diffuse.utils.model.load_model(exp_path, model_state_name)
 
-    perform_runs(params, model, model_args, start_points, attractors, generated_trajectories_path, n_runs, batch_size)
+    all_predicted_labels, all_final_states = perform_runs(params, model, model_args, start_points, attractors, generated_trajectories_path, n_runs, batch_size)
     
     print(f"[ scripts/estimate_roa ] Attractor labels saved in {generated_trajectories_path}")
     
-    perform_roa_estimation(dataset, exp_name, timestamp, generate_img, n_runs=n_runs, path_prefix=path_prefix)
+    perform_roa_estimation(dataset, exp_name, timestamp, generate_img, n_runs=n_runs, path_prefix=path_prefix, generated_data=(all_predicted_labels, all_final_states))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Visualize model trajectories")
