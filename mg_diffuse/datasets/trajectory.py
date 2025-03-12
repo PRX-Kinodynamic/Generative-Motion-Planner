@@ -14,7 +14,9 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         self,
         dataset=None,
         horizon=64,
+        stride=1,
         normalizer="LimitsNormalizer",
+        normalizer_params={},
         preprocess_fns=(),
         preprocess_kwargs={},
         dataset_size=None,
@@ -25,6 +27,7 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         self.horizon = horizon
         self.max_path_length = max_path_length
         self.use_padding = use_padding
+        self.stride = stride
 
         if dataset is None:
             raise ValueError("dataset not specified")
@@ -43,13 +46,15 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         for preprocess_fn in preprocess_fns:
             trajectories = preprocess_fn(trajectories, **preprocess_kwargs)
 
+        trajectories = np.array(trajectories, dtype=np.float32)
+
         path_lengths = [len(trajectory) for trajectory in trajectories]
 
         if type(normalizer) == str:
             normalizer = eval(normalizer)
 
-        self.normalizer = normalizer(trajectories)
-        self.indices = self.make_indices(path_lengths, horizon)
+        self.normalizer = normalizer(trajectories, **normalizer_params)
+        self.indices = self.make_indices(path_lengths)
 
         self.observation_dim = trajectories.shape[-1]
         self.trajectories = trajectories
@@ -68,19 +73,21 @@ class TrajectoryDataset(torch.utils.data.Dataset):
             self.n_episodes, self.max_path_length, -1
         )
 
-    def make_indices(self, path_lengths, horizon):
+    def make_indices(self, path_lengths):
         """
         makes indices for sampling from dataset;
         each index maps to a datapoint
         """
         indices = []
+        actual_horizon = 1 + (self.horizon - 1) * self.stride
         for i, path_length in enumerate(path_lengths):
-            max_start = min(path_length - 1, self.max_path_length - horizon)
+            max_start = min(path_length - 3, self.max_path_length - 3)
             if not self.use_padding:
-                max_start = min(max_start, path_length - horizon)
+                max_start = min(max_start, path_length - actual_horizon)
             for start in range(max_start+1):
-                end = start + horizon
+                end = start + actual_horizon
                 indices.append((i, start, end))
+                breakpoint()
         indices = np.array(indices)
         return indices
 
@@ -96,10 +103,15 @@ class TrajectoryDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx, eps=1e-4):
         path_ind, start, end = self.indices[idx]
 
-        trajectories = self.normed_trajectories[path_ind, start:end]
+        trajectory = self.normed_trajectories[path_ind, start:end+1:self.stride]
 
+        if self.use_history_padding and len(trajectory) < self.horizon:
+            padding_length = self.horizon - len(trajectory)
+            padding = np.tile(trajectory[-1], (padding_length, 1))
+            trajectory = np.concatenate([trajectory, padding], axis=0)
 
+        assert len(trajectory) == self.horizon, "Trajectory length is not as expected"
 
-        conditions = self.get_conditions(trajectories)
-        batch = Batch(trajectories, conditions)
+        conditions = self.get_conditions(trajectory)
+        batch = Batch(trajectories=trajectory, conditions=conditions)
         return batch
