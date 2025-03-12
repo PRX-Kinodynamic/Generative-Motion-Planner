@@ -20,6 +20,7 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         dataset_size=None,
         max_path_length=1000,
         use_padding=True,
+        use_plans=False,
     ):
         self.horizon = horizon
         self.max_path_length = max_path_length
@@ -27,10 +28,17 @@ class TrajectoryDataset(torch.utils.data.Dataset):
 
         if dataset is None:
             raise ValueError("dataset not specified")
+        
+        if use_plans:
+            from mg_diffuse.utils.plan import load_plans, combine_plans_trajectories
+            plans = load_plans(dataset, dataset_size)
+            trajectories = plans["trajectories"]
+            plans = plans["plans"]
+            trajectories = combine_plans_trajectories(plans, trajectories)
+        else:
+            from mg_diffuse.utils.trajectory import load_trajectories
 
-        from mg_diffuse.utils.trajectory import load_trajectories
-
-        trajectories = load_trajectories(dataset, dataset_size)
+            trajectories = load_trajectories(dataset, dataset_size)
 
         for preprocess_fn in preprocess_fns:
             trajectories = preprocess_fn(trajectories, **preprocess_kwargs)
