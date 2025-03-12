@@ -92,7 +92,7 @@ class ProjectToTangent(nn.Module):
 
 class WrappedModel(ModelWrapper):
     def forward(self, x: torch.Tensor, t: torch.Tensor, **extras):
-        t=t.unsqueeze(0)  # for the model t has to have dimension but the ODE solver gives as input
+        t=t.unsqueeze(0)  # for the model t has to have dimension but the ODE solver uses 0-D t
         return self.model(x, t)
 
 
@@ -202,10 +202,10 @@ class FlowMatching(nn.Module):
 
         x_end = sol[-1]  # the end point of the flow (generated distribution)
 
+        chain = self.manifold, chain if return_chain else None  # from the normal distribution to last step (t=1, the predition)
+
         # x_end = wrap(self.manifold, x_end)
         # chain = wrap(self.manifold, chain) if return_chain else None  # from the normal distribution to last step (t=1, the predition)
-
-        chain = self.manifold, chain if return_chain else None  # from the normal distribution to last step (t=1, the predition)
 
         values = torch.zeros(len(x_end), device=x_end.device)  # values for future implementation
         x_end, values = sort_by_values(x_end, values)  # identity for now
@@ -251,12 +251,7 @@ class FlowMatching(nn.Module):
 
         path_sample = self.prob_path.sample(t=t, x_0=x_noisy, x_1=x_target)
 
-        if self.predict_epsilon:
-            raise NotImplementedError
-        else:
-            loss, info = self.loss_fn(self.model(path_sample.x_t, path_sample.t), path_sample.dx_t)
-
-        return loss, info
+        return self.loss_fn(self.model(path_sample.x_t, path_sample.t), path_sample.dx_t)
     
     def loss(self, x, *args):
         """

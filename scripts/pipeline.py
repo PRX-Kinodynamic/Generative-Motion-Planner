@@ -62,6 +62,8 @@ if __name__ == '__main__':
         # ---------------------------------- dataset ----------------------------------#
         # -----------------------------------------------------------------------------#
 
+        manifold=Product(sphere_dim = args.sphere_dim, torus_dim = args.torus_dim, euclidean_dim = args.euclidean_dim)
+
         dataset_config = utils.Config(
             args.loader,
             savepath=(args.savepath, "dataset_config.pkl"),
@@ -73,6 +75,7 @@ if __name__ == '__main__':
             dataset_size=args.train_set_limit,
             use_padding=args.use_padding,
             max_path_length=args.max_path_length,
+            manifold=manifold
         )
 
         dataset = dataset_config()
@@ -97,7 +100,7 @@ if __name__ == '__main__':
         # # ------------------------------ model & trainer ------------------------------#
         # # -----------------------------------------------------------------------------#
 
-        manifold=Product(sphere_dim = args.sphere_dim, torus_dim = args.torus_dim, euclidean_dim = args.euclidean_dim)
+        
         # # manifold = FlatTorus()
         # unwrapped_manifold_dim = 1
         # # observation_dim = observation_dim + unwrapped_manifold_dim
@@ -234,10 +237,10 @@ if __name__ == '__main__':
 
 
 
-        
+        ##TODO: the manifold.expmap is not being applied to the starting points. Either apply or change dataloader
         visualize_generated_trajectories(
             dataset=args.dataset,
-            num_trajs=20,
+            num_trajs=30,
             compare=False,
             show_traj_ends=True,
             exp_name=exp_name,

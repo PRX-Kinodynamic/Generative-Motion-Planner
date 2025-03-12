@@ -1,5 +1,6 @@
 import numpy as np
 import scipy.interpolate as interpolate
+import torch
 
 #-----------------------------------------------------------------------------#
 #--------------------------- multi-field normalizer --------------------------#
@@ -268,3 +269,68 @@ def atleast_2d(x):
         x = x[:,None]
     return x
 
+class WrapManifold(Normalizer):
+    '''
+        maps [ x_euclidean_min, x_euclidean_max ] to [ -1, 1 ] and 
+        wraps the coordinates on non-euclidean manifold 
+    '''
+    def __init__(self, manifold, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.manifold = manifold
+        self.maxs = self.maxs[manifold.sphere_dim + manifold.torus_dim:]
+        self.mins = self.mins[manifold.sphere_dim + manifold.torus_dim:]
+
+        assert self.mins.shape[-1] == manifold.euclidean_dim
+
+
+    def wrap(self, x_sphere, x_torus, x_euclidean):
+        """ wrap the coordinates on non-euclidean manifold"""
+
+        center_euclidean = torch.zeros_like(x_euclidean) #euclidean
+        center_torus = torch.zeros_like(x_torus) #torus
+        
+        #sphere
+        center_sphere = torch.cat([torch.zeros_like(x_sphere), torch.ones_like(x_sphere[..., 0:1])], dim=-1)
+        x_sphere = torch.cat([x_sphere, torch.zeros_like(x_sphere[..., 0:1])], dim=-1) / 2
+
+        # concatenate
+        center = torch.cat((center_sphere, center_torus, center_euclidean), dim=-1)
+        x = torch.cat((x_sphere, x_torus, x_euclidean), dim=-1)
+
+        return self.manifold.expmap(center, x).detach().cpu().numpy()
+
+
+    def normalize(self, x):
+        '''
+            apply wrap for non-euclidean coordinates and 
+            normalize (x_euclidean to [-1,1] ) for euclidean coordinates
+        '''
+        x = torch.from_numpy(x)
+        x_sphere, x_torus, x_euclidean = self.manifold.split(x)
+
+        # euclidean
+        ## [ 0, 1 ]
+        x_euclidean = (x_euclidean - self.mins) / (self.maxs - self.mins)
+        ## [ -1, 1 ]
+        x_euclidean = 2 * x_euclidean - 1
+
+        return self.wrap(x_sphere, x_torus, x_euclidean)
+
+    def unnormalize(self, x, eps=1e-4):
+        '''
+            apply wrap for non-euclidean coordinates and 
+            unnormalize ([-1,1] to x_euclidean) for euclidean coordinates
+        '''
+        x = torch.from_numpy(x)
+        x_sphere, x_torus, x_euclidean = self.manifold.split(x)
+
+        # euclidean
+        if x_euclidean.max() > 1 + eps or x_euclidean.min() < -1 - eps:
+
+            x_euclidean = torch.clip(x_euclidean, -1, 1)
+
+        ## [ -1, 1 ] --> [ 0, 1 ]
+        x_euclidean = (x_euclidean + 1) / 2.
+        x_euclidean = x_euclidean * (self.maxs - self.mins) + self.mins
+
+        return self.wrap(x_sphere, x_torus, x_euclidean)

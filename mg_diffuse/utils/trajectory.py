@@ -6,6 +6,8 @@ from random import shuffle
 import torch
 import numpy as np
 
+from mg_diffuse.datasets.normalization import WrapManifold
+from flow_matching.utils.manifolds import Product
 
 
 def generate_trajectory_batch(start_states, model, model_args, only_execute_next_step=False):
@@ -64,10 +66,12 @@ def generate_trajectories(
         verbose: If True, print progress.
         batch_size: The batch size to use for generating the trajectories.
     """
-    from mg_diffuse.datasets.normalization import DebugNormalizer as LimitsNormalizer
-    # from mg_diffuse.datasets.normalization import LimitsNormalizer
 
-    normalizer = LimitsNormalizer(params=model_args.normalization_params)
+    manifold=Product(sphere_dim = model_args.sphere_dim, torus_dim = model_args.torus_dim, euclidean_dim = model_args.euclidean_dim)
+
+    # normalizer = LimitsNormalizer(params=model_args.normalization_params)
+
+    normalizer = WrapManifold(manifold, params=model_args.normalization_params)
 
     start_states = normalizer.normalize(unnormalized_start_states)
 
@@ -104,13 +108,15 @@ def unnormalize_trajectories(trajectories, model_args, verbose=False):
     """
     Process the trajectories to make them more interpretable.
     """
-    from mg_diffuse.datasets.normalization import DebugNormalizer as LimitsNormalizer
-    # from mg_diffuse.datasets.normalization import LimitsNormalizer
+
+    manifold=Product(sphere_dim = model_args.sphere_dim, torus_dim = model_args.torus_dim, euclidean_dim = model_args.euclidean_dim)
+
+    # normalizer = LimitsNormalizer(params=model_args.normalization_params)
+
+    normalizer = WrapManifold(manifold, params=model_args.normalization_params)
 
     if verbose:
         print("[ utils/trajectory ] Processing trajectories")
-
-    normalizer = LimitsNormalizer(params=model_args.normalization_params)
 
     processed_trajectories = []
 
@@ -120,7 +126,7 @@ def unnormalize_trajectories(trajectories, model_args, verbose=False):
         # trajectory[trajectory[:, 0] > np.pi, 0] -= 2 * np.pi
         # trajectory[trajectory[:, 0] < -np.pi, 0] += 2 * np.pi
 
-        trajectory[trajectory[:, 0] < 0, 0] += 2 * np.pi
+        # trajectory[trajectory[:, 0] < 0, 0] += 2 * np.pi
 
         processed_trajectories.append(trajectory)
 

@@ -3,6 +3,7 @@ from collections import namedtuple
 import torch
 
 from .normalization import *
+from flow_matching.utils.manifolds import Euclidean
 
 
 Batch = namedtuple("Batch", "trajectories conditions")
@@ -20,6 +21,7 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         dataset_size=None,
         max_path_length=1000,
         use_padding=True,
+        manifold=False
     ):
         self.horizon = horizon
         self.max_path_length = max_path_length
@@ -40,7 +42,11 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         if type(normalizer) == str:
             normalizer = eval(normalizer)
 
-        self.normalizer = normalizer(trajectories)
+        if manifold:
+            self.normalizer = normalizer(manifold, trajectories)
+        else:
+            self.normalizer = normalizer(trajectories)
+
         self.indices = self.make_indices(path_lengths, horizon)
 
         self.observation_dim = trajectories.shape[-1]

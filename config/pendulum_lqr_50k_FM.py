@@ -51,13 +51,13 @@ base = {
         "loss_weights": None,
         "loss_discount": 1,
         "predict_epsilon": False,
-        "dim_mults": (1, 2, 4, 8),
+        "dim_mults": (1, 2, 4),
         "attention": False,
         "clip_denoised": False,
         "observation_dim": 2,
         ## dataset
         "loader": "datasets.TrajectoryDataset",
-        "normalizer": "DebugNormalizer",
+        "normalizer": "WrapManifold",
         "preprocess_fns": [],
         "preprocess_kwargs": {
             "augment_new_state_data": False,
