@@ -31,9 +31,9 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         
         if use_plans:
             from mg_diffuse.utils.plan import load_plans, combine_plans_trajectories
-            plans = load_plans(dataset, dataset_size)
-            trajectories = plans["trajectories"]
-            plans = plans["plans"]
+            data = load_plans(dataset, dataset_size)
+            trajectories = data["trajectories"]
+            plans = data["plans"]
             trajectories = combine_plans_trajectories(plans, trajectories)
         else:
             from mg_diffuse.utils.trajectory import load_trajectories
