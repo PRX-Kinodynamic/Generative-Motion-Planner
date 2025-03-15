@@ -255,7 +255,7 @@ if __name__ == '__main__':
 
         analize_model(
             dataset=args.dataset,
-            num_trajs=1,
+            num_trajs=13387908,
             compare=False,
             show_traj_ends=True,
             exp_name=exp_name,

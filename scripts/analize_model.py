@@ -39,45 +39,42 @@ def analize_model(dataset, num_trajs, compare, show_traj_ends, exp_name, model_s
     ### Load normalization parameters
     # Merge trajectory and plan normalization parameters
     normalizer_params = model_args.normalizer_params
-    merged_traj_plan_norm_params = {
-        "mins": normalizer_params["trajectory"]["mins"] + normalizer_params["plan"]["mins"],
-        "maxs": normalizer_params["trajectory"]["maxs"] + normalizer_params["plan"]["maxs"],
-    }
+    if model_args.use_plans:
+        merged_traj_plan_norm_params = {
+            "mins": normalizer_params["trajectory"]["mins"] + normalizer_params["plan"]["mins"],
+            "maxs": normalizer_params["trajectory"]["maxs"] + normalizer_params["plan"]["maxs"],
+        }
+    else: # No plans
+        merged_traj_plan_norm_params = model_args.normalizer_params["trajectory"]
+
     normalizer = WrapManifold(manifold, params=merged_traj_plan_norm_params)
     ###
 
-    
-    trajectories_predition = []
-    trajectories_test = []
+    # Initialize lists to store trajectories and conditions
+    trajectories_list = []
+    conditions_list = []
+    # Loop over dataset and extract trajectories and conditions
+    for data in tqdm(dataset):
+        trajectories_list.append(data.trajectories)
+        conditions_list.append(list(data.conditions.values())[0])
 
-    for i in tqdm(range(len(dataset))):
-        batch = utils.batchify(dataset[i])
-        cond = batch[1] 
+    # Stack tensors to create batches
+    trajectories_test = torch.stack(trajectories_list)  # Shape: (batch_size, sequence_length, feature_dim)
+    conditions_batch = {0: torch.stack(conditions_list)}  # Shape: (batch_size, feature_dim)
 
-        traj_pred = model.forward(
-                cond, horizon=model_args.horizon, verbose=False
-            ).trajectories
-
-        # Apply unnormalization to the predicted trajectory   
-        traj_pred_norm = normalizer.unnormalize(traj_pred.cpu().numpy()[0]) #traj_pred_norm.cpu().numpy()[0]
-        trajectories_predition.append(traj_pred_norm)
+    trajectories_prediction = model.forward(
+        conditions_batch, horizon=model_args.horizon, verbose=False
+    ).trajectories
 
 
-        # Apply unnormalization to the test trajectory
-        traj_test_norm = normalizer.unnormalize(batch[0].cpu().numpy()[0])
-        trajectories_test.append(traj_test_norm)
+    trajectories_prediction = normalizer.unnormalize(trajectories_prediction.cpu().numpy())
+    trajectories_test = normalizer.unnormalize(trajectories_test.cpu().numpy())
 
-        
-    trajectories_prediction = np.stack(trajectories_predition)
-    trajectories_test = np.array(trajectories_test)
 
     error = np.linalg.norm(trajectories_prediction - trajectories_test, axis=(0,2)) /trajectories_prediction.shape[0]
     # /(trajectories_prediction.shape[0]*trajectories_prediction.shape[2])
 
-
     print("Average error: ", error)
-
-
 
     # Compute cumulative error along axis 0
     cumulative_error = np.cumsum(error, axis=0)

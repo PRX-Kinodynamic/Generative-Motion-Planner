@@ -54,7 +54,6 @@ def single_traj(dataset, exp_name, model_state_name):
 
     traj_pred = normalizer.unnormalize(traj_pred.cpu().numpy())
 
-    breakpoint()
     print(traj_pred[0])
 
 
