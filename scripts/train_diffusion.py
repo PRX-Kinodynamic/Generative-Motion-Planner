@@ -187,14 +187,11 @@ if __name__ == '__main__':
     # # -----------------------------------------------------------------------------#
     
     print("Generating runs for RoA estimation...")
-    
+    path_prefix, actual_exp_name = args.exp_name.split("/")
     generate_and_analyze_runs(
         dataset=args.dataset,
-        exp_name=args.exp_name,
+        exp_name=actual_exp_name,
         model_state_name='best.pt',
         generate_img=True,
+        path_prefix=path_prefix,
     )
-    
-    
-    
-    

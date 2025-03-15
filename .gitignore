@@ -2,6 +2,7 @@ data_trajectories/
 *.egg-info/
 __pycache__/
 logs/
+.ipynb_checkpoints/
 experiments/
 .DS_Store
 .vscode

@@ -1,4 +1,5 @@
 from mg_diffuse.utils import watch, handle_angle_wraparound
+import numpy as np
 
 # ------------------------ base ------------------------#
 
@@ -35,8 +36,8 @@ base = {
 
     "manifold": {
         "sphere_dim":0,
-        "torus_dim":1,
-        "euclidean_dim":1
+        "torus_dim":2,
+        "euclidean_dim":3
     },
 
     "method": {
@@ -45,27 +46,42 @@ base = {
         "model": "models.TemporalUnet",
         "flowmatching": "models.FlowMatching",
         "method_type":"models.FlowMatching",
-        "horizon": 32,
+        "horizon": 16,
         "method_steps": 20,
         "action_weight": 10,
         "loss_weights": None,
         "loss_discount": 1,
         "predict_epsilon": False,
-        "dim_mults": (1, 2, 4),
-        "attention": False,
+        "dim_mults": (1, 2, 4, 8),
+        "attention": True,
         "clip_denoised": False,
-        "observation_dim": 2,
+        "observation_dim": 5,
         ## dataset
-        # "stride": 1,
         "loader": "datasets.TrajectoryDataset",
+        "stride": 16,
+        "dt": 0.002,
         "normalizer": "WrapManifold",
-        "preprocess_fns": [],
-        "preprocess_kwargs": {
-            "augment_new_state_data": False,
+        "plan_normalizer": "LimitsNormalizer",
+        "use_plans": True,
+        "normalizer_params": {
+            "trajectory": {
+                "mins": [-np.pi, -np.pi, -30.0, -30.0],
+                "maxs": [np.pi, np.pi, 30.0, 30.0],
+            },
+            "plan": {
+                "mins": [-6.0],
+                "maxs": [6.0],
+            },
         },
-        "use_padding": False,
-        "max_path_length": 502,
+        "trajectory_preprocess_fns": [],
+        "plan_preprocess_fns": [],
+        "preprocess_kwargs": {
+            "angle_indices": [0, 1],
+        },
+        "use_history_padding": False,
         "train_set_limit": None,
+        "use_padding" : False,
+        "max_path_length":2000,
         ## serialization
         "logbase": logbase,
         "prefix": "flowmatching/",

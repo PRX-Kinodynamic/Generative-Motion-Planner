@@ -17,6 +17,11 @@ from .helpers.losses import Losses
 
 Sample = namedtuple("Sample", "trajectories values chains")
 
+if torch.cuda.is_available():
+    DEVICE = 'cuda'
+else:
+    DEVICE = 'cpu'
+
 def wrap(manifold, samples):
     center = torch.zeros_like(samples)
     return manifold.expmap(center, samples)
@@ -132,6 +137,8 @@ class FlowMatching(nn.Module):
         self.n_timesteps = int(n_timesteps)
         self.horizon = horizon
 
+        self.device = DEVICE
+
         loss_weights = self.get_loss_weights(loss_discount, loss_weights)
 
         self.loss_fn = Losses[loss_type](loss_weights)
@@ -189,11 +196,11 @@ class FlowMatching(nn.Module):
         """
         # step size for ode solver
         step_size = 0.05
-        T = torch.linspace(0,1,self.n_timesteps)  # sample times
+        T = torch.linspace(0,1,self.n_timesteps, device=self.device)  # sample times 
         # T = T.to(device=device)
 
         # x_init = torch.randn(shape, device=device)
-        x_init = torch.randn(shape)
+        x_init = torch.randn(shape, device=self.device)
         x_init = apply_conditioning(x_init, cond)
         x_init = wrap(self.manifold, x_init)
 
@@ -237,17 +244,12 @@ class FlowMatching(nn.Module):
         # Apply conditioning to the target x
         x_target = apply_conditioning(x, cond)
 
-        # breakpoint()
         assert noise.shape == x_target.shape
         x_noisy = wrap(self.manifold, x_noisy)
-        x_target = wrap(self.manifold, x_target)
-
-        # breakpoint()
 
         batch_size = len(x)
         t = torch.rand((batch_size,), device=x.device)
 
-        # breakpoint()
 
         path_sample = self.prob_path.sample(t=t, x_0=x_noisy, x_1=x_target)
 
