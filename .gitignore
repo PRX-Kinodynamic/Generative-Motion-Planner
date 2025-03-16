@@ -4,3 +4,9 @@ __pycache__/
 logs/
 .ipynb_checkpoints/
 experiments/
+3rd_party/
+*.pyc
+*.pyo
+*.pyd
+*.pyw
+*.pyz

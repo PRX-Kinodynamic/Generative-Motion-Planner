@@ -11,6 +11,7 @@ from .helpers import (
     cosine_beta_schedule,
     extract,
     apply_conditioning,
+    sort_by_values,
 )
 from .helpers.losses import Losses
 
@@ -34,13 +35,6 @@ def default_sample_fn(model, x, cond, t):
 
     values = torch.zeros(len(x), device=x.device)
     return model_mean + model_std * noise, values
-
-
-def sort_by_values(x, values):
-    inds = torch.argsort(values, descending=True)
-    x = x[inds]
-    values = values[inds]
-    return x, values
 
 
 def make_timesteps(batch_size, i, device):

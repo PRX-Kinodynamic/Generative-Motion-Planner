@@ -1,3 +1,4 @@
+import numpy as np
 from mg_diffuse.utils import watch, handle_angle_wraparound, augment_unwrapped_state_data
 
 # ------------------------ base ------------------------#
@@ -38,6 +39,7 @@ base = {
         "model": "models.TemporalUnet",
         "diffusion": "models.GaussianDiffusion",
         "horizon": 32,
+        "stride": 2,
         "n_diffusion_steps": 20,
         "action_weight": 10,
         "loss_weights": None,
@@ -50,6 +52,9 @@ base = {
         ## dataset
         "loader": "datasets.TrajectoryDataset",
         "normalizer": "LimitsNormalizer",
+        "normalizer_params": {
+            "mins": [-np.pi, ]
+        },    
         "preprocess_fns": [handle_angle_wraparound, augment_unwrapped_state_data],
         "preprocess_kwargs": {
             "angle_indices": [0],

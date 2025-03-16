@@ -28,6 +28,7 @@ if __name__ == '__main__':
         savepath=(args.savepath, "dataset_config.pkl"),
         dataset=args.dataset,
         horizon=args.horizon,
+        stride=args.stride,
         normalizer=args.normalizer,
         preprocess_fns=args.preprocess_fns,
         preprocess_kwargs=args.preprocess_kwargs,

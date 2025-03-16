@@ -46,9 +46,7 @@ class Trainer(object):
         step_start_ema=2000,
         update_ema_every=10,
         log_freq=100,
-        sample_freq=1000,
         save_freq=1000,
-        label_freq=100000,
         save_parallel=False,
         results_folder='./results',
         n_reference=8,
@@ -62,9 +60,7 @@ class Trainer(object):
 
         self.step_start_ema = step_start_ema
         self.log_freq = log_freq
-        self.sample_freq = sample_freq
         self.save_freq = save_freq
-        self.label_freq = label_freq
         self.save_parallel = save_parallel
 
         self.batch_size = train_batch_size
@@ -121,16 +117,17 @@ class Trainer(object):
                 self.step_ema()
 
             if self.step % self.save_freq == 0:
-                epoch = self.step // self.label_freq * self.label_freq
+                epoch = self.step // self.save_freq * self.save_freq
                 self.save(f'state_{epoch}')
 
             if self.step % self.log_freq == 0:
                 infos_str = ' | '.join([f'{key}: {val:8.4f}' for key, val in infos.items()])
-                print(f'{self.step}: {loss:8.6f} | {infos_str} | t: {timer():8.4f}', flush=True)
+                print(f'{self.step}: {loss * self.gradient_accumulate_every:8.6f} | {infos_str} | t: {timer():8.4f}', flush=True)
 
             self.step += 1
 
         if total_loss < best_loss:
+            print(f'New best loss: {total_loss}')
             best_loss = total_loss
             self.save('best')
 

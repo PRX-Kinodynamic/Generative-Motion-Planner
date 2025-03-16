@@ -161,3 +161,11 @@ def apply_preprocess_fns(data, trajectory_preprocess_fns, plan_preprocess_fns, *
     assert len(data["trajectories"]) == len(data["plans"]), f"Number of trajectories {len(data['trajectories'])} is not equal to number of plans {len(data['plans'])}"
         
     return data
+
+
+def combine_plans_trajectories(plans, trajectories):
+    combined = []
+    for plan, trajectory in zip(plans, trajectories):
+        plan = np.concatenate([np.zeros((1, plan.shape[1])), plan], axis=0)
+        combined.append(np.concatenate([plan, trajectory], axis=1))
+    return combined

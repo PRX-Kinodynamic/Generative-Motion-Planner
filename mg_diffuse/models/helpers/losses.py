@@ -13,21 +13,30 @@ import mg_diffuse.utils as utils
 
 class WeightedLoss(nn.Module):
 
-    def __init__(self, weights):
+    def __init__(self, weights, history_length=1, action_indices=None):
         super().__init__()
         self.register_buffer("weights", weights)
-
-    def forward(self, pred, targ):
+        self.history_length = history_length
+        self.action_indices = action_indices
+    def forward(self, pred, targ, loss_weights=None):
         """
         pred, targ : tensor
             [ batch_size x horizon x transition_dim ]
         """
+        weights = loss_weights if loss_weights is not None else self.weights
+
         loss = self._loss(pred, targ)
-        weighted_loss = (loss * self.weights).mean()
-        a0_loss = (
-            loss[:, 0] / self.weights[0]
+        weighted_loss = (loss * weights).mean()
+        cond_loss = (
+            loss[:, :self.history_length] / weights[:self.history_length]
         ).mean()
-        return weighted_loss, {"a0_loss": a0_loss}
+
+        if self.action_indices is not None:
+            action_loss = loss[:, :, self.action_indices].mean()
+        else:
+            action_loss = 0
+
+        return weighted_loss, {"cond_loss": cond_loss, "action_loss": action_loss}
 
 
 class ValueLoss(nn.Module):

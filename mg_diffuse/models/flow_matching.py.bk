@@ -1,0 +1,157 @@
+from collections import namedtuple
+
+from mg_diffuse.models.helpers import sort_by_values, Losses
+import torch
+from torch import nn
+# Import the flow_matching library components
+from flow_matching.path import ProbPath, AffineProbPath
+from flow_matching.path.scheduler import CosineScheduler
+from flow_matching.loss import MixturePathGeneralizedKL
+from flow_matching.solver import ODESolver, Solver
+
+Sample = namedtuple("Sample", "horizon values chains")
+
+class EucledianFlowMatching(nn.Module):
+    def __init__(self,
+        model,
+        history_length,
+        n_timesteps,
+        output_dim,
+        horizon, 
+        clip_denoised=False, 
+        loss_type="l2", 
+        loss_weights=None, 
+        loss_discount=1.0,
+        step_size=0.05,
+        integration_method="midpoint",
+    ):
+        super().__init__()
+
+        self.model = model
+        self.history_length = history_length
+        self.output_dim = output_dim
+        self.horizon = horizon
+        self.clip_denoised = clip_denoised
+        self.loss_type = loss_type
+        self.loss_weights = loss_weights
+        self.loss_discount = loss_discount
+        self.n_timesteps = n_timesteps
+        self.step_size = step_size
+        self.integration_method = integration_method
+
+        # Setup loss weights for the loss calculation
+        self.loss_weights = self.get_loss_weights(loss_discount, loss_weights)
+        self.loss_fn = Losses[loss_type](self.loss_weights)
+        
+        # Setup flow matching components
+        self.scheduler = CosineScheduler()
+        self.path = AffineProbPath(self.scheduler)
+        self.solver = ODESolver(self.vector_field)
+
+    def get_loss_weights(self, discount, weights_dict):
+        '''
+            sets loss coefficients for trajectory
+
+            discount   : float
+                multiplies t^th timestep of trajectory loss by discount**t
+            weights_dict    : dict
+                { i: c } multiplies dimension i of observation loss by c
+        '''
+
+        dim_weights = torch.ones(self.output_dim, dtype=torch.float32)
+
+        ## set loss coefficients for dimensions of observation
+        if weights_dict is None: weights_dict = {}
+        for ind, w in weights_dict.items():
+            dim_weights[ind] *= w
+
+        ## decay loss with trajectory timestep: discount**t
+        discounts = discount ** torch.arange(self.horizon, dtype=torch.float)
+        discounts = discounts / discounts.mean()
+        loss_weights = torch.einsum('h,t->ht', discounts, dim_weights)
+
+        return loss_weights
+    
+    def vector_field(self, x, t, cond=None):
+        """
+        The vector field function that will be used by the ODE solver.
+        
+        Args:
+            t (torch.Tensor): Time parameter with shape [batch_size]
+            x (torch.Tensor): Current state in flow with shape [batch_size, horizon, transition_dim]
+            history (torch.Tensor, optional): Conditioning information
+            
+        Returns:
+            torch.Tensor: Vector field at given points and times
+        """
+        return self.model(x=x, cond=cond, t=t)
+    
+    # ------------------------------------------ training ------------------------------------------#
+        
+    def loss(self, x0, x1, history=None):
+        """
+        Computes the flow matching loss between source (x0) and target (x1) distributions
+        
+        Args:
+            x0 (torch.Tensor): Source distribution samples [batch_size, horizon, transition_dim]
+            x1 (torch.Tensor): Target distribution samples [batch_size, horizon, transition_dim]
+            history (torch.Tensor, optional): Conditioning information
+            
+        Returns:
+            tuple: (loss_value, loss_dict)
+        """
+        batch_size = x0.shape[0]
+        
+        # Sample random times for flow matching
+        t = torch.rand(batch_size, device=x0.device)
+        
+        path_sample = self.path.sample(t, x0, x1)
+        
+        # Make the model predict the vector field
+        pred_dx_t = self.model(x=path_sample.x_t, cond=history, t=path_sample.t)
+        
+        # Calculate flow matching loss
+        loss, loss_info = self.loss_fn(pred_dx_t, path_sample.dx_t)
+        
+        return loss, loss_info
+    
+    # ------------------------------------------ inference ------------------------------------------#
+        
+    @torch.no_grad()
+    def sample(self, cond, device=None, return_intermediates=False):
+        """
+        Sample from the learned flow-based generative model using the ODE solver
+        
+        Args:
+            history (torch.Tensor): Conditioning information
+            steps (int, optional): Number of steps for numerical integration
+            device (torch.device, optional): Device to perform sampling on
+            
+        Returns:
+            torch.Tensor: Generated trajectories
+        """
+        batch_size = cond.shape[0]
+        
+        x0 = torch.randn(batch_size, self.horizon, self.output_dim, device=device)
+
+        time_grid = torch.linspace(0.0, 1.0, self.n_timesteps, device=device)
+        
+        # Use the ODE solver to integrate from t=0 to t=1
+        sol = self.solver.sample(time_grid=time_grid, x_init=x0, method=self.integration_method, step_size=self.step_size, return_intermediates=return_intermediates, cond=cond)
+
+        x1 = sol[-1]
+
+        if self.clip_denoised:
+            x1 = torch.clamp(x1, -1.0, 1.0)
+
+        chain = None
+
+        values = torch.zeros(len(x1), device=x1.device)  # values for future implementation
+
+        x1, values = sort_by_values(x1, values)
+       
+        return Sample(horizon=x1, values=values, chains=chain)
+    
+    def forward(self, cond, device=None):
+        return self.sample(cond, device)
+            
