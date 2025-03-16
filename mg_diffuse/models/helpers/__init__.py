@@ -40,3 +40,9 @@ def apply_conditioning(x, conditions):
     for t, val in conditions.items():
         x[:, t] = val.clone()
     return x
+
+def sort_by_values(x, values):
+    inds = torch.argsort(values, descending=True)
+    x = x[inds]
+    values = values[inds]
+    return x, values
