@@ -21,9 +21,9 @@ def import_class(_class):
     return _class
 
 
-class Config(collections.Mapping):
-
+class Config:
     def __init__(self, _class, verbose=True, savepath=None, device=None, **kwargs):
+        self.savepath = savepath
         self._class = import_class(_class)
         self._device = device
         self._dict = {}
@@ -34,10 +34,11 @@ class Config(collections.Mapping):
         if verbose:
             print(self)
 
-        if savepath is not None:
-            savepath = os.path.join(*savepath) if type(savepath) is tuple else savepath
+    def save(self):
+        if self.savepath is not None:
+            savepath = os.path.join(*self.savepath) if type(self.savepath) is tuple else self.savepath
             pickle.dump(self, open(savepath, "wb"))
-            print(f"[ utils/config ] Saved config to: {savepath}\n")
+            print(f"[ utils/config ] Saved config to: {savepath}")
 
     def __repr__(self):
         string = f"\n[utils/config ] Config: {self._class}\n"

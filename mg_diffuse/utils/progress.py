@@ -2,6 +2,93 @@ import time
 import math
 
 
+def format_time(seconds):
+    """
+    Format seconds into HH:MM:SS format
+    
+    Args:
+        seconds: Time in seconds
+        
+    Returns:
+        Formatted time string in HH:MM:SS format
+    """
+    if seconds is None:
+        return "N/A"
+    
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    seconds = int(seconds % 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+class ETAIterator:
+    """
+    Iterator wrapper that provides ETA calculation.
+    
+    This class wraps any iterator and tracks elapsed time to estimate
+    the remaining time to completion.
+    """
+    
+    def __init__(self, iterator, total):
+        """
+        Initialize an ETAIterator.
+        
+        Args:
+            iterator: The iterator to wrap
+            total: The total number of iterations expected
+        """
+        self.iterator = iterator
+        self.total = total
+        self.current = 0
+        self.start_time = None
+        self._eta = None
+        
+    def __iter__(self):
+        """Return self as iterator"""
+        self.start_time = time.time()
+        return self
+        
+    def __next__(self):
+        """Get the next item and update ETA"""
+        try:
+            if self.current > 0:
+                elapsed = time.time() - self.start_time
+                iterations_done = self.current
+                iterations_left = self.total - self.current
+                
+                seconds_per_iter = elapsed / iterations_done
+                self._eta = seconds_per_iter * iterations_left
+
+            item = next(self.iterator)
+            self.current += 1
+            
+            return item
+        except StopIteration:
+            raise
+            
+    @property
+    def eta(self):
+        """Get the ETA in seconds"""
+        return self._eta
+        
+    @property
+    def eta_formatted(self):
+        """Get the ETA formatted as HH:MM:SS"""
+        return format_time(self._eta)
+        
+    @property
+    def progress(self):
+        """Get the current progress as a fraction (0.0 to 1.0)"""
+        if self.total > 0:
+            return self.current / self.total
+        return 0
+        
+    @property
+    def progress_percent(self):
+        """Get the current progress as a percentage"""
+        return self.progress * 100
+
+
 class Progress:
 
     def __init__(

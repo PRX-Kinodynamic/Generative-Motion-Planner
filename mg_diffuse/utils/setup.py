@@ -1,7 +1,9 @@
 import os
 import importlib
 import random
+import sys
 import time
+from typing import List
 
 import numpy as np
 import torch
@@ -23,8 +25,10 @@ def set_seed(seed):
 
 def watch(args_to_watch):
     def _fn(args):
-        exp_name = []
         timestamp = f"{time.strftime('%y_%m_%d-%H_%M_%S')}"
+        exp_name = [
+            f"{args.prefix}{timestamp}"
+        ]
         
         for key, label in args_to_watch:
             if not hasattr(args, key):
@@ -36,12 +40,13 @@ def watch(args_to_watch):
                 val = "T" if val else "F"
             if val is None:
                 val = "F"
-            exp_name.append(f"{label}{val}")
+            if type(val) == float:
+                val = str(val).replace(".", "p")
 
-            if key == "prefix":
-                exp_name.append(timestamp)
+            exp_name.append(f"{label}-{val}")
+                
 
-        exp_name = "_".join(exp_name) + ("" if args.variation == "" else f"_{args.variation}")
+        exp_name = "_".join(exp_name) + ("" if not args.used_variations else f"_{'_'.join(args.used_variations)}")
         exp_name = exp_name.replace("/_", "/")
         exp_name = exp_name.replace("(", "").replace(")", "")
         exp_name = exp_name.replace(", ", "-")
@@ -57,12 +62,40 @@ def lazy_fstring(template, args):
 
 
 class Parser(Tap):
-    def save(self):
-        fullpath = os.path.join(self.savepath, "args.json")
+    first_save = True
+
+    def __init__(self, **kwargs):
+        super().__init__()
+        self._args = []
+
+        for k, v in kwargs.items():
+            self._args.append(f"--{str(k)}")
+            self._args.append(str(v))
+        
+
+    def save(self, args):
+        if self.first_save:
+            self.first_save = False
+            self.mkdir(args)
+            self.save_diff(args)
+
+        fullpath = os.path.join(args.savepath, "args.json")
         print(f"[ utils/setup ] Saved args to {fullpath}")
         super().save(fullpath, skip_unpicklable=True)
 
-    def parse_args(self, experiment=None):
+    def get_args(self, ignore_sys_argv=False):
+        if ignore_sys_argv:
+            return self._args
+        elif len(self._args) == 0:
+            return sys.argv[1:]
+        elif len(sys.argv) == 1:
+            return self._args
+        elif len(sys.argv) % 2 != 0:
+            return sys.argv[1:] + self._args
+        else:
+            return sys.argv + self._args
+
+    def parse_args(self, ignore_sys_argv=False):
         """
         Parse arguments and set up experiment
 
@@ -70,22 +103,22 @@ class Parser(Tap):
         Read config file and override parameters of experiment if necessary
         Add extras from command line to override parameters from config file
         """
-        args = super().parse_args(known_only=True)
-        ## if not loading from a config script, skip the result of the setup
-        if not hasattr(args, "config"):
-            return args
-        args = self.read_config(args, experiment, variation=args.variation)
+        cmd_args = self.get_args(ignore_sys_argv)
+        args = super().parse_args(known_only=True, args=cmd_args)
+        args.config = f"config.{args.dataset}"
+        args = self.read_config(args, method=args.method, variations=args.variations)
         self.add_extras(args)
         self.eval_fstrings(args)
         self.set_seed(args)
         self.get_commit(args)
         self.set_loadbase(args)
         self.generate_exp_name(args)
-        self.mkdir(args)
-        self.save_diff(args)
+
+        args.savepath = os.path.join(args.logbase, args.dataset, args.exp_name)
+
         return args
 
-    def read_config(self, args, experiment, variation=""):
+    def read_config(self, args, method, variations):
         """
         Load parameters from config file
 
@@ -95,13 +128,28 @@ class Parser(Tap):
         dataset = args.dataset.replace("-", "_")
         print(f"[ utils/setup ] Reading config: {args.config}:{dataset}")
         module = importlib.import_module(args.config)
-        params = getattr(module, "base")[experiment]
-        if hasattr(module, variation) and experiment in getattr(module, variation):
-            print(
-                f"[ utils/setup ] Using overrides | config: {args.config} | variation: {variation}"
-            )
-            overrides = getattr(module, variation)[experiment]
-            params.update(overrides)
+        params = getattr(module, "base")["base"].copy()
+
+        if method not in getattr(module, "base"):
+            raise ValueError(f"[ utils/setup ] Method {method} not found in config: {args.config}")
+        
+        print(f"[ utils/setup ] Using method: {method}")
+
+        params.update(getattr(module, "base")[method])
+
+        args.used_variations = []
+        
+        if variations:
+            for variation in variations:
+                if hasattr(module, variation):
+                    print(
+                        f"[ utils/setup ] Using overrides | config: {args.config} | variation: {variation}"
+                    )
+                    overrides = getattr(module, variation)
+                    params.update(overrides)
+                    args.used_variations.append(variation)
+                else:
+                    print(f"[ utils/setup ] Warning: variation {variation} not found in config: {args.config}")
         else:
             print(
                 f"[ utils/setup ] Not using overrides | config: {args.config} | variation: base"
@@ -187,14 +235,12 @@ class Parser(Tap):
             and "dataset" in dir(args)
             and "exp_name" in dir(args)
         ):
-            args.savepath = os.path.join(args.logbase, args.dataset, args.exp_name)
             self._dict["savepath"] = args.savepath
             if "suffix" in dir(args):
                 args.savepath = os.path.join(args.savepath, args.suffix)
             if mkdir(args.savepath):
                 print(f"[ utils/setup ] Made savepath: {args.savepath}")
-            # self.save()
-    #
+
     def get_commit(self, args):
         args.commit = get_git_rev()
 
@@ -203,3 +249,9 @@ class Parser(Tap):
             save_git_diff(os.path.join(args.savepath, "diff.txt"))
         except:
             print("[ utils/setup ] WARNING: did not save git diff")
+
+
+class TrainingParser(Parser):
+    dataset: str
+    method: str
+    variations: List[str] = []

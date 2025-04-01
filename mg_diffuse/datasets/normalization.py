@@ -38,23 +38,14 @@ class Normalizer:
         parent class, subclass by defining the `normalize` and `unnormalize` methods
     '''
 
-    def __init__(self, X=None, params=None):
-        if X is None and params is None:
-            raise ValueError('Either dataset or params must be provided')
+    def __init__(self, params=None, **kwargs):
+        if params is None:
+            raise ValueError('params must be provided')
 
-        if params is not None:
-            self.params = params
-            self.mins = np.array(params['mins'], np.float32)
-            self.maxs = np.array(params['maxs'], np.float32)
-            self.X = None
-        else:
-            self.mins = X.min(axis=(0, 1))
-            self.maxs = X.max(axis=(0, 1))
-            self.X = X.astype(np.float32)
-            self.params = {
-                'mins': list(self.mins),
-                'maxs': list(self.maxs)
-            }
+        self.params = params
+        self.mins = np.array(params['mins'], np.float32)
+        self.maxs = np.array(params['maxs'], np.float32)
+        self.X = None
 
     def __repr__(self):
         return (
@@ -174,7 +165,7 @@ class CDFNormalizer(Normalizer):
         makes training data uniform (over each dimension) by transforming it with marginal CDFs
     '''
 
-    def __init__(self, X):
+    def __init__(self, X=None, params=None):
         super().__init__(atleast_2d(X))
         self.dim = self.X.shape[1]
         self.cdfs = [
@@ -208,7 +199,7 @@ class CDFNormalizer1d:
         CDF normalizer for a single dimension
     '''
 
-    def __init__(self, X):
+    def __init__(self, X=None, params=None):
         assert X.ndim == 1
         self.X = X.astype(np.float32)
         quantiles, cumprob = empirical_cdf(self.X)

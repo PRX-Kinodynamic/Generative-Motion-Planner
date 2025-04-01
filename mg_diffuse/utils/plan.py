@@ -109,12 +109,14 @@ def read_plans_trajectories(dataset_path, dt, file_suffix):
     
     return plan, trajectory
 
-def load_plans(dataset, dataset_size=None, parallel=True, fnames=None, dt=0.002):
+def load_plans(dataset, dataset_size=None, parallel=True, fnames=None, dt=None):
     """
     Load plans and trajectories from dataset.
     Trajectory length is 1 + plan length.
     """
     print(f"[ utils/plan ] Loading plans for dataset {dataset}")
+
+    assert dt is not None, "dt must be provided"
 
     dataset_path = os.path.join("data_trajectories", dataset)
     file_suffixes = get_fnames_to_load(dataset_path, dataset_size)
@@ -154,18 +156,15 @@ def load_plans(dataset, dataset_size=None, parallel=True, fnames=None, dt=0.002)
     
 def apply_preprocess_fns(data, trajectory_preprocess_fns, plan_preprocess_fns, **preprocess_kwargs):
     for trajectory_preprocess_fn in trajectory_preprocess_fns:
-        data = trajectory_preprocess_fn(data, parallel=True, **preprocess_kwargs)
+        data = trajectory_preprocess_fn(data, parallel=True, **preprocess_kwargs["trajectory"])
     for plan_preprocess_fn in plan_preprocess_fns:
-        data["plans"] = plan_preprocess_fn(data["plans"], parallel=True, **preprocess_kwargs)
+        data = plan_preprocess_fn(data, parallel=True, **preprocess_kwargs["plan"])
 
     assert len(data["trajectories"]) == len(data["plans"]), f"Number of trajectories {len(data['trajectories'])} is not equal to number of plans {len(data['plans'])}"
         
     return data
 
 
-def combine_plans_trajectories(plans, trajectories):
-    combined = []
-    for plan, trajectory in zip(plans, trajectories):
-        plan = np.concatenate([np.zeros((1, plan.shape[1])), plan], axis=0)
-        combined.append(np.concatenate([plan, trajectory], axis=1))
-    return combined
+def combine_plan_trajectory(plan, trajectory):
+    plan = np.concatenate([np.zeros((1, plan.shape[1])), plan], axis=0)
+    return np.concatenate([plan, trajectory], axis=1)
