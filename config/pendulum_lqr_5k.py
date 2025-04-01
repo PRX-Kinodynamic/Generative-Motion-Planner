@@ -1,6 +1,5 @@
+import numpy as np
 from mg_diffuse.utils import watch, handle_angle_wraparound, augment_unwrapped_state_data
-
-DATASET_SIZE = 5565
 
 # ------------------------ base ------------------------#
 
@@ -8,15 +7,11 @@ DATASET_SIZE = 5565
 ## by labelling folders with these args
 
 args_to_watch = [
-    ("prefix", ""),
-    ("horizon", "H"),
-    ("n_diffusion_steps", "T"),
-    ("use_padding", "PAD"),
-    ("predict_epsilon", "EPS"),
-    ("attention", "ATN"),
-    ("loss_discount", "LD"),
-    ## value kwargs
-    ("discount", "d"),
+    ("history_length", "HILEN"),
+    ("horizon_length", "HOLEN"),
+    ("use_history_padding", "HIPAD"),
+    ("use_horizon_padding", "HOPAD"),
+    ("stride", "STRD"),
 ]
 
 logbase = "experiments"
@@ -29,85 +24,192 @@ base = {
             (0, 0): 1,
         },
         "invalid_label": -1,
-        "attractor_threshold": 0.05,
-        "n_runs": 20,
-        "batch_size": 270000,
-        "attractor_probability_upper_threshold": 0.5,
+        "n_runs": 100,
+        "batch_size": int(1e6),
+        "attractor_dist_threshold": 0.05,
+        "attractor_prob_threshold": 0.95,
+        "max_path_length": 502,
+        "flow_matching": {
+            "step_size": 0.05,
+            "integration_method": "euler",
+        },
     },
 
-    "diffusion": {
-        ## model
-        "model": "models.TemporalUnet",
-        "diffusion": "models.GaussianDiffusion",
-        "horizon": 32,
-        "stride": 2,
-        "n_diffusion_steps": 20,
-        "action_weight": 10,
+    "base": {
+        "action_indices": None,
+        "loss_type": "l2",
         "loss_weights": None,
         "loss_discount": 1,
-        "predict_epsilon": False,
-        "dim_mults": (1, 2, 4, 8),
-        "attention": False,
         "clip_denoised": False,
         "observation_dim": 2,
-        ## dataset
+        "has_query": False,
+
+        #-------------------------------- dataset --------------------------------#
         "loader": "datasets.TrajectoryDataset",
-        "normalizer": "LimitsNormalizer",
-        "preprocess_fns": [handle_angle_wraparound, augment_unwrapped_state_data],
-        "preprocess_kwargs": {
-            "angle_indices": [0],
+        "trajectory_normalizer": "LimitsNormalizer",
+        "plan_normalizer": None,
+        "normalizer_params": {
+            "trajectory": {
+                "mins": [-2*np.pi, -2*np.pi],
+                "maxs": [2*np.pi, 2*np.pi],
+            },
+            "plan": None,
         },
-        "use_padding": True,
-        "max_path_length": 502,
-        ## serialization
+        "plan_preprocess_fns": None,    
+        "trajectory_preprocess_fns": [
+            handle_angle_wraparound,
+            augment_unwrapped_state_data,
+        ],
+        "preprocess_kwargs": {
+            "trajectory": {
+                "angle_indices": [0],
+            },
+            "plan": None,
+        },
+        "use_history_padding": False,
+        "use_horizon_padding": True,
+        "use_plan": False,
+        "train_dataset_size": None,
+        "is_history_conditioned": True,
+
+        #---------------------------- serialization ----------------------------#
         "logbase": logbase,
-        "prefix": "diffusion/",
         "exp_name": watch(args_to_watch),
-        ## training
-        "n_steps_per_epoch": 10000,
-        "loss_type": "l2",
-        "n_train_steps": 1e6,
+
+        #---------------------------- training ----------------------------#
+        "num_epochs": 100,
+        "min_num_batches_per_epoch": 1e4,
+        "save_freq": 1e5,
+        "log_freq": 1e3,
         "batch_size": 32,
         "learning_rate": 2e-4,
         "gradient_accumulate_every": 2,
         "ema_decay": 0.995,
-        "save_freq": 200000,
-        "sample_freq": 20000,
         "save_parallel": False,
         "n_reference": 8,
         "bucket": None,
         "device": "cuda",
         "seed": None,
-        ## visualization
-        "sampling_limits": (-1, 1),
-        "granularity": 0.01,
+
+        #---------------------------- validation ----------------------------#
+        "val_dataset_size": 100,
+        "val_num_batches": 10,
+        "patience": 10,
+        "early_stopping": True,
+    },
+
+    "diffusion": {
+        "method_name": "diffusion",
+        "model": "models.temporal.TemporalUnet",
+        "method": "models.generative.Diffusion",
+        "horizon_length": 31,
+        "history_length": 1,
+        "stride": 1,
+        
+        "model_kwargs": {
+            "base_hidden_dim": 32,
+            "hidden_dim_mult": (1, 2, 4, 8),
+            "conv_kernel_size": 5,
+            "attention": False,
+        },
+        "method_kwargs": {
+            "predict_epsilon": False,
+            "n_timesteps": 20,
+        },
+        "prefix": "diffusion/",
+        "min_delta": 1e-4,
+        "validation_kwargs": {},
+    },
+
+    "flow_matching": {
+        "method_name": "flow_matching",
+        "method": "models.generative.FlowMatching",
+        "horizon_length": 31,
+        "history_length": 1,
+        "stride": 1,
+        "model": "models.temporal.TemporalUnet",
+        "model_kwargs": {
+            "base_hidden_dim": 32,
+            "hidden_dim_mult": (1, 2, 4, 8),
+            "conv_kernel_size": 5,
+            "attention": False,
+        },
+        # "model": "models.temporal.TemporalTransformer",
+        # "model_kwargs": {
+        #     "hidden_dim": 128,
+        #     "depth": 4,
+        #     "heads": 4,
+        #     "dropout": 0.05,
+        #     "time_embed_dim": None,
+        #     "use_relative_pos": True,
+        #     "recency_decay_rate": 0.0,
+        # },
+        "method_kwargs": {
+            "scheduler": None,
+            "path": "CondOTProbPath",
+            "solver": "ODESolver",
+        },
+        "prefix": "flow_matching/",
+        "min_delta": 1e-3,
+        "validation_kwargs": {
+            "step_size": 0.05,
+            "integration_method": "euler",
+        },
     }
 }
 
 # ------------------------ overrides ------------------------#
 
 fewer_steps = {
-    "diffusion": {
-        "n_diffusion_steps": 5,
-        "exp_name": watch(args_to_watch),
-    }
+    "n_diffusion_steps": 5,
 }
 
 one_step = {
-    "diffusion": {
-        "n_diffusion_steps": 1,
-        "exp_name": watch(args_to_watch),
-    }
+    "n_diffusion_steps": 1,
 }
 
 long_horizon = {
-    "diffusion": {
-        "horizon": 80,
-    }
+    "horizon_length": 80,
 }
 
 longer_horizon = {
-    "diffusion": {
-        "horizon": 160,
-    }
+    "horizon_length": 160,
+}
+
+data_lim_100 = {
+    "train_dataset_size": 100,
+}
+
+data_lim_500 = {
+    "train_dataset_size": 500,
+}
+
+data_lim_1000 = {
+    "train_dataset_size": 1000
+}
+
+data_lim_2000 = {
+    "train_dataset_size": 2000
+}
+
+data_lim_3500 = {
+    "train_dataset_size": 3500
+}
+
+data_lim_5000 = {
+    "train_dataset_size": 5000
+}
+
+transformer = {
+    "model": "models.temporal.TemporalTransformer",
+    "model_kwargs": {
+        "hidden_dim": 144,
+        "hidden_dim_mult": 8,
+        "depth": 8,
+        "heads": 8,
+        "dropout": 0.01,
+        "time_embed_dim": None,
+        "use_relative_pos": False,
+        "recency_decay_rate": 0.0,
+    },
 }

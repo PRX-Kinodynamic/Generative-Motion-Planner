@@ -6,27 +6,25 @@ import numpy as np
 
 import mg_diffuse.utils as utils
 
-from .helpers import (
+from ..helpers import (
     apply_conditioning,
     cosine_beta_schedule,
     extract,
     apply_conditioning,
     sort_by_values,
 )
-from .helpers.losses import Losses
 
-
-Sample = namedtuple("Sample", "trajectories values chains")
+from .abs_gen_model import GenerativeModel, Sample
 
 
 @torch.no_grad()
-def default_sample_fn(model, x, cond, t):
+def default_sample_fn(model, x, query, t, **kwargs):
     """
     Get the model_mean and the fixed variance from the model
 
     then sample noise from a normal distribution
     """
-    model_mean, _, model_log_variance = model.p_mean_variance(x=x, cond=cond, t=t)
+    model_mean, _, model_log_variance = model.p_mean_variance(x=x, query=query, t=t)
     model_std = torch.exp(0.5 * model_log_variance)
 
     # no noise when t == 0
@@ -42,34 +40,43 @@ def make_timesteps(batch_size, i, device):
     return t
 
 
-class GaussianDiffusion(nn.Module):
+class Diffusion(GenerativeModel):
     def __init__(
         self,
         model,
-        observation_dim,
-        horizon,
-        n_timesteps=100,
+        input_dim,
+        output_dim,
+        prediction_length,
+        history_length,
         clip_denoised=False,
-        predict_epsilon=True,
-        loss_type="l1",
+        loss_type="l2",
         loss_weights=None,
         loss_discount=1.0,
+        action_indices=None,
+        has_query=False,
+        # Diffusion specific parameters
+        n_timesteps=100,
+        predict_epsilon=True,
+        **kwargs,
     ):
-        super().__init__()
-
-        self.model = model
-
-        self.observation_dim = observation_dim
-        self.transition_dim = observation_dim
-        self.clip_denoised = clip_denoised
+        super().__init__(
+            model=model,
+            input_dim=input_dim,
+            output_dim=output_dim,
+            prediction_length=prediction_length,
+            history_length=history_length,
+            clip_denoised=clip_denoised,
+            loss_type=loss_type,
+            loss_weights=loss_weights,
+            loss_discount=loss_discount,
+            action_indices=action_indices,
+            has_query=has_query,
+            **kwargs
+        )
+        
         self.predict_epsilon = predict_epsilon
         self.n_timesteps = int(n_timesteps)
-        self.horizon = horizon
-
-        loss_weights = self.get_loss_weights(loss_discount, loss_weights)
-
-        self.loss_fn = Losses[loss_type](loss_weights)
-
+        
         # ----- calculations for diffusion noising and denoising parameters ------
 
         betas = cosine_beta_schedule(n_timesteps)
@@ -118,29 +125,52 @@ class GaussianDiffusion(nn.Module):
             (1.0 - alphas_cumprod_prev) * np.sqrt(alphas) / (1.0 - alphas_cumprod),
         )
 
-    def get_loss_weights(self, discount, weights_dict):
-        '''
-            sets loss coefficients for trajectory
 
-            discount   : float
-                multiplies t^th timestep of trajectory loss by discount**t
-            weights_dict    : dict
-                { i: c } multiplies dimension i of observation loss by c
-        '''
 
-        dim_weights = torch.ones(self.transition_dim, dtype=torch.float32)
+    # ------------------------------------------ training ------------------------------------------#
 
-        ## set loss coefficients for dimensions of observation
-        if weights_dict is None: weights_dict = {}
-        for ind, w in weights_dict.items():
-            dim_weights[ind] *= w
+    def q_sample(self, x_start, t, noise=None):
+        if noise is None:
+            noise = torch.randn_like(x_start)
 
-        ## decay loss with trajectory timestep: discount**t
-        discounts = discount ** torch.arange(self.horizon, dtype=torch.float)
-        discounts = discounts / discounts.mean()
-        loss_weights = torch.einsum('h,t->ht', discounts, dim_weights)
+        sample = (
+            extract(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start
+            + extract(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise
+        )
 
-        return loss_weights
+        return sample
+
+    def compute_loss(self, x_start, cond, query=None):
+        """
+        Get a normal distribution of noise and sample a noisy x by adding a scaled noise to a scaled x_start
+        Apply conditioning to the noisy x
+
+        Then get the reconstructed x by passing the noisy x through the model and apply conditioning to the reconstructed x
+
+        If predict epsilon, calculate the loss between the reconstructed x and the noise
+        else, calculate the loss between the reconstructed x and the x_start
+        """
+        batch_size = len(x_start)
+        t = torch.randint(0, self.n_timesteps, (batch_size,), device=x_start.device).long()
+
+        noise = torch.randn_like(x_start)
+
+        x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
+        x_noisy = apply_conditioning(x_noisy, cond)
+
+        x_recon = self.model(x_noisy, query, t)
+
+        assert noise.shape == x_recon.shape
+
+        if self.predict_epsilon:
+            loss, info = self.loss_fn(x_recon, noise, self.loss_weights)
+        else:
+            x_recon = apply_conditioning(x_recon, cond)
+            loss, info = self.loss_fn(x_recon, x_start, self.loss_weights)
+
+        return loss, info
+    
+    # ------------------------------------------ inference ------------------------------------------#
 
     def predict_start_from_noise(self, x_t, t, model_output):
         """
@@ -159,7 +189,7 @@ class GaussianDiffusion(nn.Module):
             )
         else:
             return model_output
-
+    
     def q_posterior(self, x_start, x_t, t):
         """
         Get a mean of the x_start and x_t by using the posterior mean coefficients
@@ -175,8 +205,8 @@ class GaussianDiffusion(nn.Module):
             self.posterior_log_variance_clipped, t, x_t.shape
         )
         return posterior_mean, posterior_variance, posterior_log_variance_clipped
-
-    def p_mean_variance(self, x, cond, t):
+    
+    def p_mean_variance(self, x, query, t):
         """
         Reconstructs x by getting an output from the model and then either subtracting the noise and returning the output directly as x_con
 
@@ -186,7 +216,7 @@ class GaussianDiffusion(nn.Module):
         """
 
         x_recon = self.predict_start_from_noise(
-            x, t=t, model_output=self.model(x, cond, t)
+            x, t=t, model_output=self.model(x, query, t)
         )
 
         if self.clip_denoised:
@@ -200,14 +230,15 @@ class GaussianDiffusion(nn.Module):
         return model_mean, posterior_variance, posterior_log_variance
 
     @torch.no_grad()
-    def p_sample_loop(
-        self,
-        shape,
-        cond,
-        verbose=True,
-        return_chain=False,
-        sample_fn=default_sample_fn,
-        **sample_kwargs
+    def conditional_sample(
+        self, 
+        cond, 
+        shape, 
+        query=None, 
+        verbose=False, 
+        return_chain=False, 
+        sample_fn=default_sample_fn, 
+        **sample_kwargs,
     ):
         """
 
@@ -226,7 +257,7 @@ class GaussianDiffusion(nn.Module):
         progress = utils.Progress(self.n_timesteps) if verbose else utils.Silent()
         for i in reversed(range(0, self.n_timesteps)):
             t = make_timesteps(batch_size, i, device)
-            x, values = sample_fn(self, x, cond, t, **sample_kwargs)
+            x, values = sample_fn(self, x, query, t, **sample_kwargs)
             x = apply_conditioning(x, cond)
 
             progress.update(
@@ -238,69 +269,8 @@ class GaussianDiffusion(nn.Module):
         progress.stamp()
 
         x, values = sort_by_values(x, values)
+
         if return_chain:
             chain = torch.stack(chain, dim=1)
-        return Sample(x, values, chain)
 
-    @torch.no_grad()
-    def conditional_sample(self, cond, horizon=None, **sample_kwargs):
-        """
-        conditions : [ (time, state), ... ]
-        """
-        device = self.betas.device
-        batch_size = len(cond[0])
-        horizon = horizon or self.horizon
-        shape = (batch_size, horizon, self.transition_dim)
-
-        return self.p_sample_loop(shape, cond, **sample_kwargs)
-
-    # ------------------------------------------ training ------------------------------------------#
-
-    def q_sample(self, x_start, t, noise=None):
-        if noise is None:
-            noise = torch.randn_like(x_start)
-
-        sample = (
-            extract(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start
-            + extract(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise
-        )
-
-        return sample
-
-    def p_losses(self, x_start, cond, t):
-        """
-        Get a normal distribution of noise and sample a noisy x by adding a scaled noise to a scaled x_start
-        Apply conditioning to the noisy x
-
-        Then get the reconstructed x by passing the noisy x through the model and apply conditioning to the reconstructed x
-
-        If predict epsilon, calculate the loss between the reconstructed x and the noise
-        else, calculate the loss between the reconstructed x and the x_start
-        """
-        noise = torch.randn_like(x_start)
-
-        x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
-        x_noisy = apply_conditioning(x_noisy, cond)
-
-        x_recon = self.model(x_noisy, cond, t)
-        x_recon = apply_conditioning(x_recon, cond)
-
-        assert noise.shape == x_recon.shape
-
-        if self.predict_epsilon:
-            loss, info = self.loss_fn(x_recon, noise)
-        else:
-            loss, info = self.loss_fn(x_recon, x_start)
-
-        return loss, info
-
-    def loss(self, x, *args):
-        """
-        Choose a random timestep t and calculate the loss for the model
-        """
-        batch_size = len(x)
-        t = torch.randint(0, self.n_timesteps, (batch_size,), device=x.device).long()
-        return self.p_losses(x, *args, t)
-
-    def forward(self, cond, *args, **kwargs):
-        return self.conditional_sample(cond, *args, **kwargs)
+        return Sample(trajectories=x, values=values, chains=chain)

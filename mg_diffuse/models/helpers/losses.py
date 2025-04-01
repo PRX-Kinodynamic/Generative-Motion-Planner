@@ -13,30 +13,27 @@ import mg_diffuse.utils as utils
 
 class WeightedLoss(nn.Module):
 
-    def __init__(self, weights, history_length=1, action_indices=None):
+    def __init__(self, history_length=1, action_indices=None):
         super().__init__()
-        self.register_buffer("weights", weights)
         self.history_length = history_length
         self.action_indices = action_indices
-    def forward(self, pred, targ, loss_weights=None):
+
+    def forward(self, pred, targ, loss_weights):
         """
         pred, targ : tensor
-            [ batch_size x horizon x transition_dim ]
+            [ batch_size x horizon x output_dim ]
         """
-        weights = loss_weights if loss_weights is not None else self.weights
-
         loss = self._loss(pred, targ)
-        weighted_loss = (loss * weights).mean()
-        cond_loss = (
-            loss[:, :self.history_length] / weights[:self.history_length]
-        ).mean()
+        weighted_loss = (loss * loss_weights).mean()
+        info = {}
+
+        if self.history_length > 1:
+            info["cond_loss"] = (loss[:, :self.history_length] / loss_weights[:self.history_length]).mean()
 
         if self.action_indices is not None:
-            action_loss = loss[:, :, self.action_indices].mean()
-        else:
-            action_loss = 0
+            info["action_loss"] = loss[:, :, self.action_indices].mean()
 
-        return weighted_loss, {"cond_loss": cond_loss, "action_loss": action_loss}
+        return weighted_loss, info
 
 
 class ValueLoss(nn.Module):
@@ -96,3 +93,28 @@ Losses = {
     "value_l1": ValueL1,
     "value_l2": ValueL2,
 }
+
+
+def get_loss_weights(output_dim, prediction_length, discount, weights_dict):
+    '''
+        sets loss coefficients for trajectory
+
+        discount   : float
+            multiplies t^th timestep of trajectory loss by discount**t
+        weights_dict    : dict
+            { i: c } multiplies dimension i of observation loss by c
+    '''
+
+    dim_weights = torch.ones(output_dim, dtype=torch.float32)
+
+    ## set loss coefficients for dimensions of observation
+    if weights_dict is None: weights_dict = {}
+    for ind, w in weights_dict.items():
+        dim_weights[ind] *= w
+
+    ## decay loss with trajectory timestep: discount**t
+    discounts = discount ** torch.arange(prediction_length, dtype=torch.float)
+    discounts = discounts / discounts.mean()
+    loss_weights = torch.einsum('h,t->ht', discounts, dim_weights)
+
+    return loss_weights

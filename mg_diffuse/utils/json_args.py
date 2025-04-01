@@ -25,7 +25,7 @@ def process_data_structures(data_obj, verbose=False):
     return data_obj
 
 
-class JSONArgs(collections.Mapping):
+class JSONArgs:
     def __init__(self, json_file, verbose=False):
         with open(json_file, 'r') as f:
             self._raw_data = json.load(f)
@@ -39,7 +39,7 @@ class JSONArgs(collections.Mapping):
             if processed_value is not None:
                 self._data[key] = processed_value
             else:
-                if verbose: print(' [ utils/json_args ] Unable to process complex data structure:', key)
+                if verbose: print('[ utils/json_args ] Unable to process complex data structure:', key)
                 self._data[key] = value
 
     def __getitem__(self, key):

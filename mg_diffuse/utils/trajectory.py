@@ -6,50 +6,67 @@ from random import shuffle
 import torch
 import numpy as np
 
+from mg_diffuse.datasets.normalization import *
+from mg_diffuse.models.generative.abs_gen_model import GenerativeModel
 
-def generate_trajectory_batch(start_states, model, model_args, only_execute_next_step=False):
+def _get_normalizer_params(model_args):
+    normalizer_params = None
+
+    if hasattr(model_args, "normalizer_params"):
+        normalizer_params = model_args.normalizer_params["trajectory"]
+    elif hasattr(model_args, "normalization_params"):
+        normalizer_params = model_args.normalization_params
+    else:
+        raise ValueError("Normalizer params not found in model_args")
+
+    return normalizer_params
+
+def _generate_trajectory_batch(start_states: np.ndarray, model: GenerativeModel, model_args: dict, max_path_length: int, only_execute_next_step: bool = False, conditional_sample_kwargs: dict = {}, only_return_final_states: bool = False):
     batch_size = len(start_states)
-    max_path_length = model_args.max_path_length
 
     current_states = torch.tensor(start_states, dtype=torch.float32).to(
         model_args.device
     )
-    current_idx = 1
-    next_path_lengths = model_args.horizon - 1 if not only_execute_next_step else 1
+    current_idx = model_args.history_length
+    prediction_length = model_args.horizon_length if not only_execute_next_step else 1
 
-    trajectories = np.zeros((batch_size, max_path_length, model_args.observation_dim))
-    trajectories[:, 0] = np.array(start_states)
-
-    with tqdm(total=max_path_length) as pbar:
+    if not only_return_final_states:
+        trajectories = np.zeros((batch_size, max_path_length, model_args.observation_dim))
+        trajectories[:, 0] = np.array(start_states)
+    else:
+        trajectories = None
+    
+    with tqdm(total=max_path_length - model_args.history_length) as pbar:
         while current_idx < max_path_length:
             conditions = {0: current_states}
 
-            # Forward pass to get the next states
-            next_trajs = model.forward(
-                conditions, horizon=model_args.horizon, verbose=False
-            ).trajectories
+            next_trajs = model.forward(conditions, verbose=False, return_chain=False, **conditional_sample_kwargs).trajectories
 
-            # Check what is the size of trajectory required to reach max_path_length
-            slice_path_length = min(next_path_lengths, max_path_length - current_idx)
-
-            # Removing the start state and taking only the required path lengths
-            next_trajs = next_trajs[:, 1: 1 + slice_path_length]
+            slice_path_length = min(prediction_length, max_path_length - current_idx)
+            next_trajs = next_trajs[:, model_args.history_length: model_args.history_length + slice_path_length]
 
             # Adding the next states to the trajectory
-            trajectories[:, current_idx: current_idx + slice_path_length] = (
-                next_trajs.cpu().numpy()
-            )
+            if not only_return_final_states:
+                trajectories[:, current_idx: current_idx + slice_path_length] = next_trajs.cpu().numpy()
 
             current_states = next_trajs[:, -1]
-            current_idx += next_path_lengths
+            current_idx += slice_path_length
 
-            pbar.update(slice_path_length+1)
+            # Free memory
+            del next_trajs
+            if next(model.parameters()).device.type == "cuda" and hasattr(torch, 'cuda') and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+            pbar.update(slice_path_length)
+
+    if only_return_final_states:
+        return current_states.cpu().detach().numpy()
 
     return trajectories
 
 
 def generate_trajectories(
-    model, model_args, unnormalized_start_states, only_execute_next_step=False, return_normalized=False, verbose=False, batch_size=5000
+    model, model_args, unnormalized_start_states, max_path_length, only_execute_next_step: bool = False, verbose: bool = False, batch_size: int = 5000, conditional_sample_kwargs: dict = {}, only_return_final_states: bool = False
 ):
     """
     Generate a trajectory from the model given the start states.
@@ -59,18 +76,22 @@ def generate_trajectories(
         model_args: The arguments used to generate the model.
         unnormalized_start_states: The initial states to start the trajectory from. These are un-normalized and will be normalized before passing to the model.
             batch_size x observation_dim
+        max_path_length: The maximum length of the trajectory to generate.
         only_execute_next_step: If True, only execute the next step of the trajectory. (like MPC)
-        return_normalized: If True, return the normalized trajectories. Otherwise, return the un-normalized trajectories true to the actual state space.
         verbose: If True, print progress.
         batch_size: The batch size to use for generating the trajectories.
+        only_return_final_states: If True, only return the final states of the trajectories.
     """
-    from mg_diffuse.datasets.normalization import LimitsNormalizer
+    normalizer_class = eval(model_args.trajectory_normalizer)
 
-    normalizer = LimitsNormalizer(params=model_args.normalization_params)
+    normalizer: Normalizer = normalizer_class(params=_get_normalizer_params(model_args))
 
     start_states = normalizer.normalize(unnormalized_start_states)
 
-    trajectories = []
+    if only_return_final_states:
+        final_states = np.zeros_like(start_states)
+    else:
+        trajectories = []
 
     if verbose:
         import math
@@ -80,38 +101,56 @@ def generate_trajectories(
         if verbose:
             current_batch = math.ceil(idx / batch_size)
 
-            print(f"[ scripts/visualize_trajectories ] Generating trajectories for batch {current_batch + 1}/{total_num_batches}" if total_num_batches > 1 else f"[ scripts/visualize_trajectories ] Generating trajectories")
+            print(f"[ utils/trajectory ] Generating trajectories for batch {current_batch + 1}/{total_num_batches}" if total_num_batches > 1 else f"[ utils/trajectory ] Generating trajectories")
 
         batch_start_states = start_states[idx: idx + batch_size]
 
-        batch_trajectories = generate_trajectory_batch(
-            batch_start_states, model, model_args, only_execute_next_step
+        results = _generate_trajectory_batch(
+            batch_start_states, model, model_args, max_path_length, only_execute_next_step, conditional_sample_kwargs, only_return_final_states=only_return_final_states
         )
 
-        trajectories.append(batch_trajectories)
+        if only_return_final_states:
+            final_states[idx:idx+batch_size] = results
+        else:
+            trajectories.append(results)
+            
+        # Free memory
+        if next(model.parameters()).device.type == "cuda" and hasattr(torch, 'cuda') and torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
-    trajectories = np.concatenate(trajectories, axis=0)
+    if not only_return_final_states:
+        trajectories = np.concatenate(trajectories, axis=0)
+    
+    if only_return_final_states:
+        return process_states(final_states, normalizer, verbose)
 
-    if return_normalized:
-        return trajectories
+    return process_trajectories(trajectories, normalizer, verbose)
 
-    return unnormalize_trajectories(trajectories, model_args, verbose)
-
-
-def unnormalize_trajectories(trajectories, model_args, verbose=False):
+def process_states(states, normalizer, verbose=False):
     """
-    Process the trajectories to make them more interpretable.
+    Process the states
+    - Un-normalize the states
+    - Move the states from [-2pi, 2pi] to [-pi, pi]
     """
-    from mg_diffuse.datasets.normalization import LimitsNormalizer
+    states = normalizer.unnormalize(states)
 
-    if verbose:
-        print("[ utils/trajectory ] Processing trajectories")
+    states[states[:, 0] > np.pi, 0] -= 2 * np.pi
+    states[states[:, 0] < -np.pi, 0] += 2 * np.pi
 
-    normalizer = LimitsNormalizer(params=model_args.normalization_params)
+    return states
 
+
+def process_trajectories(trajectories, normalizer, verbose=False):
+    """
+    Process the trajectories
+    - Un-normalize the trajectories
+    - Move the trajectories from [-2pi, 2pi] to [-pi, pi]
+    """
     processed_trajectories = []
 
-    for trajectory in trajectories:
+    itr = tqdm(trajectories, desc="[ utils/trajectory ] Processing trajectories") if verbose else trajectories
+
+    for trajectory in itr:
         trajectory = normalizer.unnormalize(trajectory)
         # If value of trajectory[0] is greater than pi, then subtract 2pi from the trajectory
         trajectory[trajectory[:, 0] > np.pi, 0] -= 2 * np.pi
@@ -129,10 +168,7 @@ def save_trajectories_image(trajectories, image_path, verbose=False, comparison_
     Visualize the trajectories generated by the model.
     """
 
-    if verbose:
-        print("[ utils/trajectory ] Visualizing trajectories")
-
-    for idx in tqdm(range(trajectories.shape[0])):
+    for idx in tqdm(range(trajectories.shape[0]), desc="[ utils/trajectory ] Visualizing generated trajectories"):
         trajectory = trajectories[idx]
 
         plt.scatter(
@@ -164,10 +200,8 @@ def save_trajectories_image(trajectories, image_path, verbose=False, comparison_
             )
 
     if comparison_trajectories is not None:
-        if verbose:
-            print("[ utils/trajectory ] Visualizing ground-truth trajectories")
 
-        for idx in tqdm(range(len(comparison_trajectories))):
+        for idx in tqdm(range(len(comparison_trajectories)), desc="[ utils/trajectory ] Visualizing ground-truth trajectories"):
             trajectory = comparison_trajectories[idx]
             plt.scatter(
                 trajectory[:, 0],
@@ -198,19 +232,19 @@ def save_trajectories_image(trajectories, image_path, verbose=False, comparison_
                 )
 
     plt.savefig(image_path)
+    plt.close()
 
     if verbose:
         print(f"[ utils/trajectory ] Trajectories saved at {image_path}")
 
 
-def get_fnames_to_load(dataset_path, trajectories_path, num_trajs):
+def get_fnames_to_load(dataset_path, trajectories_path, num_trajs=None, load_reverse=False):
     indices_fpath = path.join(dataset_path, "shuffled_indices.txt")
 
     if path.exists(indices_fpath):
         with open(indices_fpath, "r") as f:
             fnames = f.readlines()
             fnames = [f.strip() for f in fnames]
-            fnames = fnames[:num_trajs]
 
     else:
         print(f"[ utils/trajectory ] Could not find shuffled indices at {indices_fpath}. Generating new shuffled indices")
@@ -222,7 +256,11 @@ def get_fnames_to_load(dataset_path, trajectories_path, num_trajs):
             for fname in fnames:
                 f.write(fname + "\n")
 
-    fnames = fnames[:num_trajs]
+    if num_trajs is not None:
+        if not load_reverse:
+            fnames = fnames[:num_trajs]
+        else:
+            fnames = fnames[-num_trajs:]
 
     return fnames
 
@@ -242,7 +280,7 @@ def read_trajectory(sequence_path):
     return trajectory
 
 
-def load_trajectories(dataset, dataset_size=None, parallel=True, fnames=None):
+def load_trajectories(dataset, dataset_size=None, parallel=True, fnames=None, load_reverse=False):
     """
     load dataset from directory
     """
@@ -250,13 +288,7 @@ def load_trajectories(dataset, dataset_size=None, parallel=True, fnames=None):
     trajectories_path = path.join(dataset_path, "trajectories")
 
     if fnames is None:
-        if dataset_size is None:
-            try:
-                fnames = listdir(trajectories_path)
-            except FileNotFoundError:
-                raise ValueError(f"Could not find dataset at {trajectories_path}")
-        else:
-            fnames = get_fnames_to_load(dataset_path, trajectories_path, dataset_size)
+        fnames = get_fnames_to_load(dataset_path, trajectories_path, dataset_size, load_reverse)
 
     trajectories = []
 
@@ -280,7 +312,7 @@ def load_trajectories(dataset, dataset_size=None, parallel=True, fnames=None):
     return np.array(trajectories, dtype=np.float32)
 
 
-def get_trajectory_attractor_labels(final_states, attractors, attractor_threshold, invalid_label=-1):
+def get_trajectory_attractor_labels(final_states: np.ndarray, attractors: dict, attractor_dist_threshold: float, invalid_label: int = -1):
     print("[ utils/trajectory ] Getting attractor labels for trajectories")
 
     attractor_states = attractors.keys()
@@ -298,8 +330,8 @@ def get_trajectory_attractor_labels(final_states, attractors, attractor_threshol
 
     predicted_labels = np.zeros_like(min_distance)
 
-    predicted_labels[min_distance <= attractor_threshold] = attractor_labels[min_distance_idx[min_distance < attractor_threshold]].flatten()
-    predicted_labels[min_distance > attractor_threshold] = invalid_label
+    predicted_labels[min_distance <= attractor_dist_threshold] = attractor_labels[min_distance_idx[min_distance < attractor_dist_threshold]].flatten()
+    predicted_labels[min_distance > attractor_dist_threshold] = invalid_label
 
     return predicted_labels
 
