@@ -1,10 +1,4 @@
-einops==0.8.1
-GitPython==3.1.44
-matplotlib==3.10.0
-numpy==2.2.3
-scikit_learn==1.6.1
-scipy==1.15.2
 setuptools==75.1.0
-tqdm==4.66.5
 typed_argument_parser==1.10.1
-torch==2.6.0+cu118
+torch==2.6.0 --index-url https://download.pytorch.org/whl/cu118
+flow_matching

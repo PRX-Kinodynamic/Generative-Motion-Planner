@@ -3,9 +3,9 @@ from collections import namedtuple
 import torch
 import numpy as np
 
-from mg_diffuse.datasets.normalization import *
-from mg_diffuse.datasets.utils import apply_padding, make_indices
-from mg_diffuse.utils.plan import apply_preprocess_fns, combine_plan_trajectory, load_plans
+from genMoPlan.datasets.normalization import *
+from genMoPlan.datasets.utils import apply_padding, make_indices
+from genMoPlan.utils.plan import apply_preprocess_fns, combine_plan_trajectory, load_plans
 
 
 Batch = namedtuple("Batch", "trajectory conditions query")
@@ -73,13 +73,13 @@ class TrajectoryDataset(torch.utils.data.Dataset):
 
     def _load_data(self, dataset, dataset_size, dt, trajectory_preprocess_fns, plan_preprocess_fns, preprocess_kwargs, is_validation):
         if self.use_plan:
-            from mg_diffuse.utils.plan import apply_preprocess_fns, load_plans
+            from genMoPlan.utils.plan import apply_preprocess_fns, load_plans
 
             data = load_plans(dataset, dataset_size, dt=dt)
             data = apply_preprocess_fns(data, trajectory_preprocess_fns, plan_preprocess_fns, preprocess_kwargs)
             return data["trajectories"], data["plans"]
         else:
-            from mg_diffuse.utils.trajectory import load_trajectories
+            from genMoPlan.utils.trajectory import load_trajectories
 
             trajectories = load_trajectories(dataset, dataset_size, load_reverse=is_validation)
             for trajectory_preprocess_fn in trajectory_preprocess_fns:
@@ -127,7 +127,7 @@ class TrajectoryDataset(torch.utils.data.Dataset):
             normed_traj = normed_all_trajectories[traj_start_idx:traj_end_idx]
             
             if self.use_plan:
-                from mg_diffuse.utils.plan import combine_plan_trajectory
+                from genMoPlan.utils.plan import combine_plan_trajectory
 
                 plan_length = plan_lengths[i]
                 plan_end_idx = plan_start_idx + plan_length

@@ -1,7 +1,7 @@
 from os import path
 from argparse import ArgumentParser
 
-import mg_diffuse.utils as utils
+import genMoPlan.utils as utils
 
 
 def main(args):
@@ -35,7 +35,7 @@ def main(args):
         "data_trajectories", args.dataset, fname + ".png"
     )
 
-    utils.save_trajectories_image(trajectories, img_path, verbose=True)
+    utils.plot_trajectories(trajectories, img_path, verbose=True)
 
 
 if __name__ == "__main__":

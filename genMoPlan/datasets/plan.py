@@ -4,9 +4,9 @@ import math
 import torch
 import numpy as np
 
-from mg_diffuse.utils.plan import load_plans, apply_preprocess_fns
-from mg_diffuse.datasets.normalization import *
-from mg_diffuse.datasets.utils import apply_padding, make_indices
+from genMoPlan.utils.plan import load_plans, apply_preprocess_fns
+from genMoPlan.datasets.normalization import *
+from genMoPlan.datasets.utils import apply_padding, make_indices
 
 Batch = namedtuple("Batch", "plan query")
 

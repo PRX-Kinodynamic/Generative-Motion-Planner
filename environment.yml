@@ -1,4 +1,4 @@
-name: mg_diffuse
+name: genMoPlan
 channels:
   - conda-forge
   - robostack-staging
@@ -7,7 +7,6 @@ dependencies:
   - numpy
   - matplotlib
   - tqdm
-  - pytorch-cuda=11.8
   - einops
   - git
   - gitpython
@@ -15,7 +14,6 @@ dependencies:
   - notebook
   - gh
   - scikit-learn
-  - pandas[version='>=1.2.0']
   - pip
   - pip:
     - -r requirements.txt

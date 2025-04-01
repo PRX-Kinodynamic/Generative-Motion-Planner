@@ -1,6 +1,6 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="mg_diffuse",
+    name="genMoPlan",
     packages=find_packages(),
 )

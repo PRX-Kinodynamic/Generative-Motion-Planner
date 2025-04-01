@@ -1,6 +1,7 @@
 from typing import List
 from math import ceil
-import mg_diffuse.utils as utils
+import genMoPlan.utils as utils
+from scripts.viz_model import visualize_generated_trajectories
 
 
 # -----------------------------------------------------------------------------#
@@ -180,6 +181,20 @@ if __name__ == '__main__':
 
     trainer.train()
 
+    # -----------------------------------------------------------------------------#
+    # ------------------------------visualize trajectories-------------------------#
+    # -----------------------------------------------------------------------------#
+
+    visualize_generated_trajectories(
+        args.dataset,
+        num_trajs=1000,
+        compare=False,
+        show_traj_ends=False,
+        model_path=args.savepath,
+        model_state_name="best.pt",
+        only_execute_next_step=True,
+    )
+
 
     # -----------------------------------------------------------------------------#
     # ---------------------------------- estimate roa -----------------------------#
@@ -189,7 +204,7 @@ if __name__ == '__main__':
         utils.ROAEstimator,
         savepath=(args.savepath, "roa_estimator_config.pkl"),
         dataset=args.dataset,
-        exp_path=args.savepath,
+        model_path=args.savepath,
     )
 
     roa_estimator = roa_estimator_config()

@@ -1,35 +1,48 @@
 from os import path
 import argparse
 
-from mg_diffuse.utils import ROAEstimator, load_trajectories, save_trajectories_image
+from genMoPlan.utils import ROAEstimator, load_trajectories, plot_trajectories
 
 
-def visualize_generated_trajectories(dataset, num_trajs, compare, show_traj_ends, exp_path, model_state_name, only_execute_next_step, batch_size=None):
+def visualize_generated_trajectories(
+        dataset, 
+        num_trajs, 
+        compare, 
+        show_traj_ends, 
+        model_paths, 
+        model_state_name, 
+        only_execute_next_step, 
+        batch_size=None,
+    ):
     test_trajs = load_trajectories(dataset, num_trajs)
     start_points = test_trajs[:, 0]
 
-    roa_estimator = ROAEstimator(dataset, model_state_name, exp_path, n_runs=1, batch_size=batch_size)
-    roa_estimator.start_points = start_points
-    roa_estimator.generate_trajectories(compute_labels=False, discard_trajectories=False, verbose=True, save=False)
+    if isinstance(model_paths, str):
+        model_paths = [model_paths]
 
-    generated_trajs = roa_estimator.trajectories[:, 0]
+    for model_path in model_paths:
+        roa_estimator = ROAEstimator(dataset, model_state_name, model_path, n_runs=1, batch_size=batch_size)
+        roa_estimator.start_points = start_points
+        roa_estimator.generate_trajectories(compute_labels=False, discard_trajectories=False, verbose=True, save=False)
 
-    image_name = "trajectories"
+        generated_trajs = roa_estimator.trajectories[:, 0]
 
-    if only_execute_next_step:
-        image_name += "_MPC"
+        image_name = "trajectories"
 
-    image_name += f"_{num_trajs}.png"
+        if only_execute_next_step:
+            image_name += "_MPC"
 
-    image_path = path.join(exp_path, image_name)
+        image_name += f"_{num_trajs}.png"
 
-    save_trajectories_image(
-        generated_trajs,
-        image_path,
-        verbose=True,
-        comparison_trajectories=test_trajs if compare else None,
-        show_traj_ends=show_traj_ends,
-    )
+        image_path = path.join(model_path, image_name)
+
+        plot_trajectories(
+            generated_trajs,
+            image_path=image_path,
+            verbose=True,
+            comparison_trajectories=test_trajs if compare else None,
+            show_traj_ends=show_traj_ends,
+        )
 
 
 if __name__ == "__main__":
@@ -54,13 +67,13 @@ if __name__ == "__main__":
         action="store_true",
         help="Show the start and end points of the trajectories",
     )
-    parser.add_argument("--exp_path", type=str, help="Experiment path")
+    parser.add_argument("--model_path", type=str, help="Experiment path")
     
     parser.add_argument(
-        "--exp_paths", 
+        "--model_paths", 
         type=str, 
         nargs="+", 
-        help="Multiple experiment paths. If provided, will override --exp_path"
+        help="Multiple experiment paths. If provided, will override --model_path"
     )
     
     parser.add_argument(
@@ -77,30 +90,16 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    if args.exp_path is None and args.exp_paths is None:
-        raise ValueError("Either exp_path or exp_paths must be provided")
+    if args.model_path is None and args.model_paths is None:
+        raise ValueError("Either model_path or model_paths must be provided")
     
-    if args.exp_paths is not None:
-        for exp_path in args.exp_paths:
-            visualize_generated_trajectories(
-                args.dataset,
-                args.num_trajs,
-                args.compare,
-                args.show_traj_ends,
-                exp_path,
-                args.model_state_name,
-                args.only_execute_next_step,
-                args.batch_size,
-            )
-
-    else:
-        visualize_generated_trajectories(
-            args.dataset,
-            args.num_trajs,
-            args.compare,
-            args.show_traj_ends,
-            args.exp_path,
-            args.model_state_name,
-            args.only_execute_next_step,
-            args.batch_size,
-        )
+    visualize_generated_trajectories(
+        args.dataset,
+        args.num_trajs,
+        args.compare,
+        args.show_traj_ends,
+        args.model_paths if args.model_paths is not None else args.model_path,
+        args.model_state_name,
+        args.only_execute_next_step,
+        args.batch_size,
+    )

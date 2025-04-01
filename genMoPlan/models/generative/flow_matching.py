@@ -5,7 +5,7 @@ from torch import nn
 import torch
 import numpy as np
 
-from mg_diffuse.models.helpers import (
+from genMoPlan.models.helpers import (
     apply_conditioning,
 )
 

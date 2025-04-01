@@ -3,7 +3,7 @@ from torch import nn
 import torch.nn.functional as F
 import numpy as np
 
-import mg_diffuse.utils as utils
+import genMoPlan.utils as utils
 
 
 # -----------------------------------------------------------------------------#
