@@ -1,5 +1,5 @@
 import numpy as np
-from mg_diffuse.utils import watch, handle_angle_wraparound, augment_unwrapped_state_data
+from genMoPlan.utils import watch, handle_angle_wraparound, augment_unwrapped_state_data
 
 # ------------------------ base ------------------------#
 

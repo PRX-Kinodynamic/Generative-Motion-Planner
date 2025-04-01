@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import math
 
-from mg_diffuse.models.helpers import SinusoidalPosEmb
+from genMoPlan.models.helpers import SinusoidalPosEmb
 
 class TemporalTransformer(nn.Module):
     def __init__(

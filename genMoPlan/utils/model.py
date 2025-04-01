@@ -3,8 +3,8 @@ from os import path
 from typing import Tuple
 import torch
 
-from mg_diffuse.models.generative.abs_gen_model import GenerativeModel
-from mg_diffuse.utils import JSONArgs, import_class
+from genMoPlan.models.generative.abs_gen_model import GenerativeModel
+from genMoPlan.utils import JSONArgs, import_class
 
 def get_method_name(model_args: JSONArgs) -> str:
     method_name = None

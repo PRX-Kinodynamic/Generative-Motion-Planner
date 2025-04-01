@@ -118,12 +118,12 @@ class ROAEstimator:
 
             
     def _load_model(self, model_state_name: str = "best.pt"):
-        from mg_diffuse.utils import load_model
+        from genMoPlan.utils import load_model
 
         self.model, self.model_args = load_model(self.exp_path, model_state_name, verbose=True)
     
     def _load_params(self, n_runs: int, batch_size: int):
-        from mg_diffuse.utils import load_roa_estimation_params, get_method_name
+        from genMoPlan.utils import load_roa_estimation_params, get_method_name
 
         self.roa_estimation_params = load_roa_estimation_params(self.dataset)
 
@@ -144,7 +144,7 @@ class ROAEstimator:
         self.conditional_sample_kwargs = self.roa_estimation_params[self.method_name] if self.method_name in self.roa_estimation_params else {}
 
     def _setup_results_path(self):
-        from mg_diffuse.utils import generate_timestamp
+        from genMoPlan.utils import generate_timestamp
 
         if self.results_path is not None:
             return
@@ -192,7 +192,7 @@ class ROAEstimator:
         
     
     def _generate_single_run_trajs(self, run_idx, compute_labels, verbose, discard_trajectories, save):
-        from mg_diffuse.utils import generate_trajectories
+        from genMoPlan.utils import generate_trajectories
 
         results = generate_trajectories(
             self.model, self.model_args, self.start_points, 
@@ -212,7 +212,7 @@ class ROAEstimator:
         assert final_states.shape == self.start_points.shape
 
         if compute_labels:
-            from mg_diffuse.utils import get_trajectory_attractor_labels
+            from genMoPlan.utils import get_trajectory_attractor_labels
 
             attractor_labels = get_trajectory_attractor_labels(final_states, self.attractors, self.attractor_dist_threshold, self.invalid_label)
             self.attractor_labels.append(attractor_labels)
@@ -267,14 +267,14 @@ class ROAEstimator:
             verbose: bool = False,
             save: bool = False,
         ):
-        from mg_diffuse.utils.progress import ETAIterator
+        from genMoPlan.utils.progress import ETAIterator
 
         if save and not compute_labels:
             warnings.warn("Cannot save final states without computing attractor labels")
             compute_labels = True
 
         if self._timestamp is None:
-            from mg_diffuse.utils import generate_timestamp
+            from genMoPlan.utils import generate_timestamp
 
             self.timestamp = generate_timestamp()
 
@@ -339,7 +339,7 @@ class ROAEstimator:
         return self.final_states
     
     def compute_attractor_labels(self, verbose=True):
-        from mg_diffuse.utils import get_trajectory_attractor_labels
+        from genMoPlan.utils import get_trajectory_attractor_labels
 
         if verbose:
             print(f"[ utils/roa ] Computing attractor labels")

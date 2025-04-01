@@ -1,5 +1,5 @@
 import pytest
-from mg_diffuse.datasets.utils import make_indices, compute_actual_length, apply_padding
+from genMoPlan.datasets.utils import make_indices, compute_actual_length, apply_padding
 import torch
 
 

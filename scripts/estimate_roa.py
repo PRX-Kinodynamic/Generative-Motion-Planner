@@ -1,9 +1,12 @@
 import argparse
 
-from mg_diffuse.utils import ROAEstimator
+from genMoPlan.utils import ROAEstimator
 
-def estimate_roa(dataset, model_state_name, exp_path, n_runs, batch_size, timestamp, no_img, continue_gen, analyze):
-    roa_estimator = ROAEstimator(dataset, model_state_name, exp_path, n_runs, batch_size)
+def estimate_roa(dataset, model_state_name, model_path, n_runs, batch_size, timestamp, no_img, continue_gen, analyze):
+    if batch_size is not None:
+        batch_size = int(batch_size)
+
+    roa_estimator = ROAEstimator(dataset, model_state_name, model_path, n_runs, batch_size)
     roa_estimator.init_ground_truth()
 
     if analyze or continue_gen:
@@ -32,13 +35,13 @@ if __name__ == "__main__":
         "--dataset", type=str, required=True, help="Dataset name"
     )
 
-    parser.add_argument("--exp_path", type=str, help="Experiment path")
+    parser.add_argument("--model_path", type=str, help="Experiment path")
 
     parser.add_argument(
-        "--exp_paths", 
+        "--model_paths", 
         type=str, 
         nargs="+", 
-        help="Multiple experiment paths. If provided, will override --exp_path"
+        help="Multiple experiment paths. If provided, will override --model_path"
     )
 
     parser.add_argument(
@@ -88,9 +91,9 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    if args.exp_paths:
-        for exp_path in args.exp_paths:
-            print(f"\n\n[ scripts/estimate_roa ] Estimating ROA for {exp_path}\n\n")
-            estimate_roa(args.dataset, args.model_state_name, exp_path, args.n_runs, args.batch_size, args.timestamp, args.no_img, args.continue_gen, args.analyze)
+    if args.model_paths:
+        for model_path in args.model_paths:
+            print(f"\n\n[ scripts/estimate_roa ] Estimating ROA for {model_path}\n\n")
+            estimate_roa(args.dataset, args.model_state_name, model_path, args.n_runs, args.batch_size, args.timestamp, args.no_img, args.continue_gen, args.analyze)
     else:
-        estimate_roa(args.dataset, args.model_state_name, args.exp_path, args.n_runs, args.batch_size, args.timestamp, args.no_img, args.continue_gen, args.analyze)
+        estimate_roa(args.dataset, args.model_state_name, args.model_path, args.n_runs, args.batch_size, args.timestamp, args.no_img, args.continue_gen, args.analyze)

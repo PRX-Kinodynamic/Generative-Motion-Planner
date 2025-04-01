@@ -3,7 +3,7 @@ import torch.nn as nn
 import einops
 from einops.layers.torch import Rearrange
 
-from mg_diffuse.models.helpers import (
+from genMoPlan.models.helpers import (
     SinusoidalPosEmb,
     Downsample1d,
     Upsample1d,
