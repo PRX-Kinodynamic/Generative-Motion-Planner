@@ -28,6 +28,20 @@ genMoPlan/
 └── experiments/        # Experiment results organized as <dataset>/<method_name>/
 ```
 
+## Data Structure
+
+The `data_trajectories` directory contains trajectory datasets organized as follows:
+
+```
+data_trajectories/
+├── <dataset_name>/        # e.g., pendulum_lqr_50k
+│   ├── trajectories/      # Essential folder containing individual trajectory files
+│   │   └── sequence_<n>.txt  # Individual trajectory files with state data
+│   └── roa_labels.txt     # Labels for Region of Attraction estimation (only required for RoA estimation)
+```
+
+Each trajectory file (`sequence_<n>.txt`) contains comma-separated state variables (e.g., angle and angular velocity for pendulum systems) with one state per line representing a timestep in the sequence.
+
 ## Installation
 
 ```bash
@@ -123,3 +137,6 @@ Main dependencies:
 
 See `environment.yml` and `requirements.txt` for complete dependency information.
 
+## TODO
+
+- [ ] Add support for custom dataset readers to allow for different data formats and structures
