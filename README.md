@@ -1,6 +1,6 @@
 # GenMoPlan: Generative Motion Planner
 
-A framework for motion generation using generative machine learning methods
+A framework for motion planning using generative machine learning methods
 
 ## Overview
 
