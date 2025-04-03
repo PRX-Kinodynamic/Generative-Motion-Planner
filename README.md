@@ -46,7 +46,7 @@ Each trajectory file (`sequence_<n>.txt`) contains comma-separated state variabl
 
 ```bash
 # Clone the repository
-git clone <repository-url>
+git clone https://github.com/PRX-Kinodynamic/Generative-Motion-Planner.git
 cd genMoPlan
 
 # Create conda environment and install packages
