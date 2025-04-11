@@ -1,6 +1,8 @@
 from typing import List
 from math import ceil
 import genMoPlan.utils as utils
+from genMoPlan.models import GenerativeModel, TemporalModel
+from scripts.estimate_roa import estimate_roa
 from scripts.viz_model import visualize_generated_trajectories
 
 
@@ -130,17 +132,19 @@ if __name__ == '__main__':
         results_folder=args.savepath,
         bucket=args.bucket,
         n_reference=args.n_reference,
+        method=args.method,
+        exp_name=args.exp_name,
     )
 
     # # -----------------------------------------------------------------------------#
     # # -------------------------------- instantiate --------------------------------#
     # # -----------------------------------------------------------------------------#
 
-    ml_model = ml_model_config()
+    ml_model: TemporalModel = ml_model_config()
 
-    gen_model = gen_model_config(ml_model)
+    gen_model: GenerativeModel = gen_model_config(ml_model)
 
-    trainer = trainer_config(gen_model, dataset, val_dataset)
+    trainer: utils.Trainer = trainer_config(gen_model, dataset, val_dataset)
 
     # # -----------------------------------------------------------------------------#
     # # ---------------------------- update and save args ---------------------------#
@@ -174,7 +178,6 @@ if __name__ == '__main__':
     trainer_config.save()
 
 
-
     # # -----------------------------------------------------------------------------#
     # # --------------------------------- main loop ---------------------------------#
     # # -----------------------------------------------------------------------------#
@@ -185,32 +188,29 @@ if __name__ == '__main__':
     # ------------------------------visualize trajectories-------------------------#
     # -----------------------------------------------------------------------------#
 
-    visualize_generated_trajectories(
-        args.dataset,
-        num_trajs=1000,
-        compare=False,
-        show_traj_ends=False,
-        model_path=args.savepath,
-        model_state_name="best.pt",
-        only_execute_next_step=True,
-    )
+    try:
+        visualize_generated_trajectories(
+            args.dataset,
+            num_trajs=1000,
+            compare=False,
+            show_traj_ends=False,
+            model_paths=args.savepath,
+            model_state_name="best.pt",
+            only_execute_next_step=True,
+        )
+    except Exception as e:
+        print(f"Error visualizing trajectories: {e}")
 
 
     # -----------------------------------------------------------------------------#
     # ---------------------------------- estimate roa -----------------------------#
     # -----------------------------------------------------------------------------#
 
-    roa_estimator_config = utils.Config(
-        utils.ROAEstimator,
-        savepath=(args.savepath, "roa_estimator_config.pkl"),
-        dataset=args.dataset,
-        model_path=args.savepath,
-    )
-
-    roa_estimator = roa_estimator_config()
-    roa_estimator.initialize()
-    roa_estimator.generate_trajectories(save=True, discard_trajectories=True, verbose=True)
-    roa_estimator.compute_attractor_probabilities(plot=True)
-    roa_estimator.predict_attractor_labels(plot=True)
-    roa_estimator.plot_roas()
-    roa_estimator.compute_prediction_metrics(save=True)
+    try:
+        estimate_roa(
+            dataset,
+            model_state_name="best.pt",
+            model_paths=args.savepath,
+        )
+    except Exception as e:
+        print(f"Error estimating ROA: {e}")

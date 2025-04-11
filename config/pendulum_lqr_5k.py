@@ -30,7 +30,7 @@ base = {
         "attractor_prob_threshold": 0.95,
         "max_path_length": 502,
         "flow_matching": {
-            "step_size": 0.05,
+            "n_timesteps": 10,
             "integration_method": "euler",
         },
     },
@@ -152,7 +152,7 @@ base = {
         "prefix": "flow_matching/",
         "min_delta": 1e-3,
         "validation_kwargs": {
-            "step_size": 0.05,
+            "n_timesteps": 5,
             "integration_method": "euler",
         },
     }

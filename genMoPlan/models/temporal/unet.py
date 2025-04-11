@@ -12,8 +12,9 @@ from genMoPlan.models.helpers import (
     PreNorm,
     LinearAttention,
 )
+from genMoPlan.models.temporal.base import TemporalModel
 
-class TemporalUnet(nn.Module):
+class TemporalUnet(TemporalModel):
     """Temporal UNet model for diffusion.
     
     A U-Net architecture specifically designed for temporal data, with optional attention mechanisms.
@@ -36,15 +37,23 @@ class TemporalUnet(nn.Module):
         input_dim,
         output_dim,
         query_dim=0,
+        query_length=0,
         # UNet specific parameters
         base_hidden_dim=32,
         hidden_dim_mult=(1, 2, 4, 8),
         conv_kernel_size=5,
         attention=False,
         time_embed_dim=None,
+        verbose=True,
         **kwargs,
     ):
-        super().__init__()
+        super().__init__(
+            prediction_length,
+            input_dim,
+            output_dim,
+            query_dim,
+            query_length,
+        )
 
         assert input_dim == output_dim, "Input and output dimensions must be the same"
 
@@ -53,7 +62,8 @@ class TemporalUnet(nn.Module):
         if time_embed_dim is None:
             time_embed_dim = base_hidden_dim
 
-        print(f"[ models/unet ] Channel dimensions: {in_out}, time_embed_dim: {time_embed_dim}")
+        if verbose:
+            print(f"[ models/unet ] Channel dimensions: {in_out}, time_embed_dim: {time_embed_dim}")
 
         self.time_mlp = nn.Sequential(
             SinusoidalPosEmb(base_hidden_dim),

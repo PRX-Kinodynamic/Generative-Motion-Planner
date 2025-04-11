@@ -14,7 +14,7 @@ from ..helpers import (
     sort_by_values,
 )
 
-from .abs_gen_model import GenerativeModel, Sample
+from .base import GenerativeModel, Sample
 
 
 @torch.no_grad()
@@ -129,18 +129,18 @@ class Diffusion(GenerativeModel):
 
     # ------------------------------------------ training ------------------------------------------#
 
-    def q_sample(self, x_start, t, noise=None):
+    def q_sample(self, x_target, t, noise=None):
         if noise is None:
-            noise = torch.randn_like(x_start)
+            noise = torch.randn_like(x_target)
 
         sample = (
-            extract(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start
-            + extract(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise
+            extract(self.sqrt_alphas_cumprod, t, x_target.shape) * x_target
+            + extract(self.sqrt_one_minus_alphas_cumprod, t, x_target.shape) * noise
         )
 
         return sample
 
-    def compute_loss(self, x_start, cond, query=None):
+    def compute_loss(self, x_target, cond, query=None):
         """
         Get a normal distribution of noise and sample a noisy x by adding a scaled noise to a scaled x_start
         Apply conditioning to the noisy x
@@ -150,12 +150,12 @@ class Diffusion(GenerativeModel):
         If predict epsilon, calculate the loss between the reconstructed x and the noise
         else, calculate the loss between the reconstructed x and the x_start
         """
-        batch_size = len(x_start)
-        t = torch.randint(0, self.n_timesteps, (batch_size,), device=x_start.device).long()
+        batch_size = len(x_target)
+        t = torch.randint(0, self.n_timesteps, (batch_size,), device=x_target.device).long()
 
-        noise = torch.randn_like(x_start)
+        noise = torch.randn_like(x_target)
 
-        x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
+        x_noisy = self.q_sample(x_target=x_target, t=t, noise=noise)
         x_noisy = apply_conditioning(x_noisy, cond)
 
         x_recon = self.model(x_noisy, query, t)
@@ -166,7 +166,7 @@ class Diffusion(GenerativeModel):
             loss, info = self.loss_fn(x_recon, noise, self.loss_weights)
         else:
             x_recon = apply_conditioning(x_recon, cond)
-            loss, info = self.loss_fn(x_recon, x_start, self.loss_weights)
+            loss, info = self.loss_fn(x_recon, x_target, self.loss_weights)
 
         return loss, info
     

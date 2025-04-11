@@ -1,12 +1,12 @@
 import numpy as np
-from genMoPlan.utils import watch, handle_angle_wraparound, augment_unwrapped_state_data
+from genMoPlan.utils import watch, handle_angle_wraparound, augment_unwrapped_state_data, watch_dict
 
 # ------------------------ base ------------------------#
 
 ## automatically make experiment names for planning
 ## by labelling folders with these args
 
-args_to_watch = [
+exp_args_to_watch = [
     ("history_length", "HILEN"),
     ("horizon_length", "HOLEN"),
     ("use_history_padding", "HIPAD"),
@@ -14,10 +14,17 @@ args_to_watch = [
     ("stride", "STRD"),
 ]
 
+results_args_to_watch = [
+    ("n_runs", "NRUN"),
+    ("attractor_dist_threshold", "ADTH"),
+    ("attractor_prob_threshold", "APTH"),
+]
+
 logbase = "experiments"
 
 base = {
     "roa_estimation": {
+        "results_name": watch_dict(results_args_to_watch),
         "attractors": {
             (-2.1, 0): 0,
             (2.1, 0): 0,
@@ -27,10 +34,10 @@ base = {
         "n_runs": 100,
         "batch_size": int(1e6),
         "attractor_dist_threshold": 0.05,
-        "attractor_prob_threshold": 0.95,
+        "attractor_prob_threshold": 0.98,
         "max_path_length": 502,
         "flow_matching": {
-            "step_size": 0.1,
+            "n_timesteps": 5,
             "integration_method": "euler",
         },
     },
@@ -74,7 +81,7 @@ base = {
 
         #---------------------------- serialization ----------------------------#
         "logbase": logbase,
-        "exp_name": watch(args_to_watch),
+        "exp_name": watch(exp_args_to_watch),
 
         #---------------------------- training ----------------------------#
         "num_epochs": 100,
@@ -117,7 +124,7 @@ base = {
             "n_timesteps": 20,
         },
         "prefix": "diffusion/",
-        "min_delta": 1e-4,
+        "min_delta": 1e-3,
         "validation_kwargs": {},
     },
 
@@ -136,13 +143,13 @@ base = {
         },
         "method_kwargs": {
             "scheduler": "CondOTScheduler",
-            "path": "CondOTProbPath",
+            "path": "AffineProbPath",
             "solver": "ODESolver",
         },
         "prefix": "flow_matching/",
-        "min_delta": 1e-4,
+        "min_delta": 1e-3,
         "validation_kwargs": {
-            "step_size": 0.1,
+            "n_timesteps": 5,
             "integration_method": "euler",
         },
     }
@@ -190,16 +197,15 @@ data_lim_5000 = {
     "train_dataset_size": 5000
 }
 
-transformer = {
-    "model": "models.temporal.TemporalTransformer",
-    "model_kwargs": {
-        "hidden_dim": 144,
-        "hidden_dim_mult": 8,
-        "depth": 8,
-        "heads": 8,
-        "dropout": 0.01,
-        "time_embed_dim": None,
-        "use_relative_pos": False,
-        "recency_decay_rate": 0.0,
-    },
+data_lim_10 = {
+    "train_dataset_size": 10
 }
+
+data_lim_25 = {
+    "train_dataset_size": 25
+}
+
+data_lim_50 = {
+    "train_dataset_size": 50
+}
+
