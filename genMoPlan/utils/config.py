@@ -4,7 +4,7 @@ import importlib
 import pickle
 
 
-def import_class(_class):
+def import_class(_class, verbose=True):
     if type(_class) is not str:
         return _class
     ## 'diffusion' on standard installs
@@ -17,7 +17,8 @@ def import_class(_class):
     module = importlib.import_module(f"{repo_name}.{module_name}")
     ## eg, diffusion.utils.Renderer
     _class = getattr(module, class_name)
-    print(f"[ utils/config ] Imported {repo_name}.{module_name}:{class_name}")
+    if verbose:
+        print(f"[ utils/config ] Imported {repo_name}.{module_name}:{class_name}")
     return _class
 
 

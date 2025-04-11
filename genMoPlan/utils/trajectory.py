@@ -7,7 +7,7 @@ import torch
 import numpy as np
 
 from genMoPlan.datasets.normalization import *
-from genMoPlan.models.generative.abs_gen_model import GenerativeModel
+from genMoPlan.models.generative.base import GenerativeModel
 
 def _get_normalizer_params(model_args):
     normalizer_params = None
@@ -21,7 +21,7 @@ def _get_normalizer_params(model_args):
 
     return normalizer_params
 
-def _generate_trajectory_batch(start_states: np.ndarray, model: GenerativeModel, model_args: dict, max_path_length: int, only_execute_next_step: bool = False, conditional_sample_kwargs: dict = {}, only_return_final_states: bool = False):
+def _generate_trajectory_batch(start_states: np.ndarray, model: GenerativeModel, model_args: dict, max_path_length: int, only_execute_next_step: bool = False, conditional_sample_kwargs: dict = {}, only_return_final_states: bool = False, verbose: bool = True):
     batch_size = len(start_states)
 
     current_states = torch.tensor(start_states, dtype=torch.float32).to(
@@ -36,7 +36,7 @@ def _generate_trajectory_batch(start_states: np.ndarray, model: GenerativeModel,
     else:
         trajectories = None
     
-    with tqdm(total=max_path_length - model_args.history_length) as pbar:
+    with tqdm(total=max_path_length - model_args.history_length, disable=not verbose) as pbar:
         while current_idx < max_path_length:
             conditions = {0: current_states}
 
@@ -66,7 +66,7 @@ def _generate_trajectory_batch(start_states: np.ndarray, model: GenerativeModel,
 
 
 def generate_trajectories(
-    model, model_args, unnormalized_start_states, max_path_length, only_execute_next_step: bool = False, verbose: bool = False, batch_size: int = 5000, conditional_sample_kwargs: dict = {}, only_return_final_states: bool = False
+    model, model_args, unnormalized_start_states, max_path_length, only_execute_next_step: bool = False, verbose: bool = True, batch_size: int = 5000, conditional_sample_kwargs: dict = {}, only_return_final_states: bool = False
 ):
     """
     Generate a trajectory from the model given the start states.
@@ -106,7 +106,7 @@ def generate_trajectories(
         batch_start_states = start_states[idx: idx + batch_size]
 
         results = _generate_trajectory_batch(
-            batch_start_states, model, model_args, max_path_length, only_execute_next_step, conditional_sample_kwargs, only_return_final_states=only_return_final_states
+            batch_start_states, model, model_args, max_path_length, only_execute_next_step, conditional_sample_kwargs, only_return_final_states=only_return_final_states, verbose=verbose
         )
 
         if only_return_final_states:
@@ -318,8 +318,9 @@ def load_trajectories(dataset, dataset_size=None, parallel=True, fnames=None, lo
     return np.array(trajectories, dtype=np.float32)
 
 
-def get_trajectory_attractor_labels(final_states: np.ndarray, attractors: dict, attractor_dist_threshold: float, invalid_label: int = -1):
-    print("[ utils/trajectory ] Getting attractor labels for trajectories")
+def get_trajectory_attractor_labels(final_states: np.ndarray, attractors: dict, attractor_dist_threshold: float, invalid_label: int = -1, verbose: bool = True):
+    if verbose:
+        print("[ utils/trajectory ] Getting attractor labels for trajectories")
 
     attractor_states = attractors.keys()
     attractor_states = np.array(list(attractor_states))

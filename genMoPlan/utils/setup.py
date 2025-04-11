@@ -23,6 +23,37 @@ def set_seed(seed):
     torch.cuda.manual_seed_all(seed)
 
 
+def watch_dict(args_to_watch):
+    def _fn(args, method_name: str = None):
+        timestamp = f"{time.strftime('%y_%m_%d-%H_%M_%S')}"
+
+        actual_args_to_watch = [(method_name, "METHOD"), *args_to_watch]
+
+        exp_name = [
+            timestamp
+        ]
+
+        for key, label in actual_args_to_watch:
+            if key not in args:
+                continue
+            val = args[key]
+            if type(val) == dict:
+                val = "_".join(f"{k}-{v}" for k, v in val.items())
+            if type(val) == bool:
+                val = "T" if val else "F"
+            if val is None:
+                val = "F"
+            if type(val) == float:
+                val = str(val).replace(".", "p")
+            if type(val) == int:
+                val = str(val)
+
+            exp_name.append(f"{label}-{val}")
+
+        return "_".join(exp_name)
+    return _fn
+
+
 def watch(args_to_watch):
     def _fn(args):
         timestamp = f"{time.strftime('%y_%m_%d-%H_%M_%S')}"

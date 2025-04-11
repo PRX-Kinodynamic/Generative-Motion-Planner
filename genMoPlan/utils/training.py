@@ -26,7 +26,6 @@ def plot_losses(losses, filepath, title):
         plt.xlabel('Step' if 'Training' in title else 'Epoch')
         plt.ylabel('Loss')
         plt.grid(True)
-        plt.ylim(0, 1)
         plt.savefig(filepath)
         plt.close() # Close the plot to free memory
     except Exception as e:
@@ -76,6 +75,8 @@ class Trainer(object):
         patience: int = 10,
         min_delta: float = 1e-4,
         early_stopping: bool = False,
+        method: str = "",
+        exp_name: str = "",
     ):
         super().__init__()
         self.model = model
@@ -99,8 +100,12 @@ class Trainer(object):
         self.logdir = results_folder
         self.bucket = bucket
         self.n_reference = n_reference
+        self.method = method
+        self.exp_name = exp_name
 
-        self.num_batches_per_epoch = max(ceil(len(dataset) / (batch_size * gradient_accumulate_every)), min_num_batches_per_epoch)
+
+        self.num_batches_per_epoch = max(ceil(len(dataset) / (batch_size * gradient_accumulate_every)), 
+        min_num_batches_per_epoch)
 
         print(f"[ utils/training ] Number of batches per epoch: {self.num_batches_per_epoch}")
 

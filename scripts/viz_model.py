@@ -9,9 +9,8 @@ def visualize_generated_trajectories(
         num_trajs, 
         compare, 
         show_traj_ends, 
-        model_paths, 
+        model_paths,
         model_state_name, 
-        only_execute_next_step, 
         batch_size=None,
     ):
     test_trajs = load_trajectories(dataset, num_trajs)
@@ -21,28 +20,10 @@ def visualize_generated_trajectories(
         model_paths = [model_paths]
 
     for model_path in model_paths:
-        roa_estimator = ROAEstimator(dataset, model_state_name, model_path, n_runs=1, batch_size=batch_size)
+        roa_estimator = ROAEstimator(dataset, model_state_name, model_path, n_runs=1, batch_size=batch_size, verbose=True)
         roa_estimator.start_points = start_points
-        roa_estimator.generate_trajectories(compute_labels=False, discard_trajectories=False, verbose=True, save=False)
-
-        generated_trajs = roa_estimator.trajectories[:, 0]
-
-        image_name = "trajectories"
-
-        if only_execute_next_step:
-            image_name += "_MPC"
-
-        image_name += f"_{num_trajs}.png"
-
-        image_path = path.join(model_path, image_name)
-
-        plot_trajectories(
-            generated_trajs,
-            image_path=image_path,
-            verbose=True,
-            comparison_trajectories=test_trajs if compare else None,
-            show_traj_ends=show_traj_ends,
-        )
+        roa_estimator.generate_trajectories(compute_labels=False, discard_trajectories=False, save=False)
+        roa_estimator.plot_trajectories()
 
 
 if __name__ == "__main__":
@@ -79,11 +60,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model_state_name", type=str, default="best.pt", help="Model state file name"
     )
-    parser.add_argument(
-        "--only_execute_next_step",
-        action="store_true",
-        help="Only execute the next step of the trajectory like MPC",
-    )
+
     parser.add_argument(
         "--batch_size", type=float, help="Batch size"
     )
@@ -100,6 +77,5 @@ if __name__ == "__main__":
         args.show_traj_ends,
         args.model_paths if args.model_paths is not None else args.model_path,
         args.model_state_name,
-        args.only_execute_next_step,
         args.batch_size,
     )

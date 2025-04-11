@@ -11,6 +11,8 @@ import matplotlib.pyplot as plt
 
 from tqdm import tqdm
 
+from genMoPlan.utils.trajectory import plot_trajectories
+
 def _load_attractor_labels(file_path):
     labels = []
     final_states = []
@@ -47,32 +49,18 @@ def _get_latest_timestamp(exp_path):
     timestamps = [path.basename(d) for d in glob.glob(path.join(exp_path, "generated_trajectories", "*"))]
     return max(timestamps)
 
-def _load_ground_truth(dataset):
-    print('[ scripts/estimate_roa ] Loading ground truth')
-    roa_labels_fpath = path.join("data_trajectories", dataset, "roa_labels.txt")
-
-    data = []
-    
-    if os.path.exists(roa_labels_fpath):
-        with open(roa_labels_fpath, "r") as f:
-            for line in f:
-                line_data = line.strip().split(' ')[1:]
-                data.append([
-                    np.float32(line_data[0]),
-                    np.float32(line_data[1]),
-                    int(line_data[2])
-                ])
-    else:
-        raise FileNotFoundError(f"File {roa_labels_fpath} not found")
-    
-    return np.array(data, dtype=np.float32)
-
-
 class ROAEstimator:
+    SUCCESS_COLOR_MAP = "tab10_r"
+    FAILURE_COLOR_MAP = "tab20b"
+    FP_COLOR_MAP = "bwr_r"
+    FN_COLOR_MAP = "Wistia_r"
+    SEPARATRIX_COLOR_MAP = "autumn_r"
+
     model_state_name: str = "best.pt"
     exp_path: str = None
     gen_traj_path: str = None
     results_path: str = None
+    traj_plot_path: str = None
     method_name: str = None
     _timestamp: str = None
     
@@ -92,6 +80,7 @@ class ROAEstimator:
     final_states: np.ndarray = None
     predicted_labels: np.ndarray = None
     uncertain_indices: np.ndarray = None
+    separatrix_indices: np.ndarray = None
 
     # Classification
     roa_estimation_params: dict = None
@@ -103,24 +92,25 @@ class ROAEstimator:
     attractor_prob_threshold: float = None
     labels_set: set = None
     labels_array: np.ndarray = None
+    tp_mask: np.ndarray = None
+    tn_mask: np.ndarray = None
+    fp_mask: np.ndarray = None
+    fn_mask: np.ndarray = None
     
-    def __init__(self, dataset:str, model_state_name: str = "best.pt", exp_path: str = None, n_runs: int = None, batch_size: int = None):
+    def __init__(self, dataset:str, model_state_name: str = "best.pt", exp_path: str = None, n_runs: int = None, batch_size: int = None, verbose: bool = True, num_batches: int = None):
         self.dataset = dataset
         self.exp_path = exp_path
-        
+        self.verbose = verbose
+        self.num_batches = num_batches
+
         self._load_model(model_state_name)
         self._load_params(n_runs, batch_size)
 
-    def init_ground_truth(self):
-        ground_truth = _load_ground_truth(self.dataset)
-        self.start_points = ground_truth[:, :2]
-        self.expected_labels = ground_truth[:, 2]
-
-            
-    def _load_model(self, model_state_name: str = "best.pt"):
+       
+    def _load_model(self, model_state_name: str):
         from genMoPlan.utils import load_model
 
-        self.model, self.model_args = load_model(self.exp_path, model_state_name, verbose=True)
+        self.model, self.model_args = load_model(self.exp_path, model_state_name, verbose=self.verbose, strict=False)
     
     def _load_params(self, n_runs: int, batch_size: int):
         from genMoPlan.utils import load_roa_estimation_params, get_method_name
@@ -143,25 +133,83 @@ class ROAEstimator:
         self.method_name = get_method_name(self.model_args)
         self.conditional_sample_kwargs = self.roa_estimation_params[self.method_name] if self.method_name in self.roa_estimation_params else {}
 
-    def _setup_results_path(self):
-        from genMoPlan.utils import generate_timestamp
+    def set_attractor_dist_threshold(self, attractor_dist_threshold: float):
+        self.attractor_dist_threshold = attractor_dist_threshold
+        self.roa_estimation_params["attractor_dist_threshold"] = attractor_dist_threshold
 
+    def set_attractor_prob_threshold(self, attractor_prob_threshold: float):
+        self.attractor_prob_threshold = attractor_prob_threshold
+        self.roa_estimation_params["attractor_prob_threshold"] = attractor_prob_threshold
+
+    def set_batch_size(self, batch_size: int):
+        self.batch_size = batch_size
+        self.roa_estimation_params["batch_size"] = batch_size
+
+    def _setup_results_path(self):
         if self.results_path is not None:
             return
-
-        self.results_path = path.join(self.exp_path, "results", generate_timestamp())
+        
+        if callable(self.roa_estimation_params["results_name"]):
+            self.results_path = path.join(self.exp_path, "results", self.roa_estimation_params["results_name"](self.roa_estimation_params, self.method_name))
+        else:
+            self.results_path = path.join(self.exp_path, "results", self.roa_estimation_params["results_name"])
 
         if not os.path.exists(self.results_path):
             os.makedirs(self.results_path)
 
         self._save_roa_estimation_params()
 
-    def _save_roa_estimation_params(self, verbose=True):
+    def _setup_traj_plot_path(self):
+        if self.traj_plot_path is not None:
+            return
+        
+        if callable(self.roa_estimation_params["results_name"]):
+            self.traj_plot_path = path.join(self.exp_path, "viz_trajs", self.roa_estimation_params["results_name"](self.roa_estimation_params, self.method_name))
+        else:
+            self.traj_plot_path = path.join(self.exp_path, "viz_trajs", self.roa_estimation_params["results_name"])
+
+        if not os.path.exists(self.traj_plot_path):
+            os.makedirs(self.traj_plot_path)
+
+        self._save_roa_estimation_params(self.traj_plot_path)
+
+    def load_ground_truth(self):
+        if self.verbose:
+            print('[ scripts/estimate_roa ] Loading ground truth')
+        roa_labels_fpath = path.join("data_trajectories", self.dataset, "roa_labels.txt")
+
+        start_points = []
+        expected_labels = []
+        
+        if os.path.exists(roa_labels_fpath):
+            with open(roa_labels_fpath, "r") as f:
+                for line in f:
+                    line_data = line.strip().split(' ')[1:]
+                    start_points.append([np.float32(line_data[0]), np.float32(line_data[1])])
+                    expected_labels.append(int(line_data[2]))
+        else:
+            raise FileNotFoundError(f"File {roa_labels_fpath} not found")
+        
+        self.start_points = np.array(start_points, dtype=np.float32)
+        self.expected_labels = np.array(expected_labels, dtype=np.int32)
+
+        if self.num_batches is not None:
+            self.set_batch_size(self.start_points.shape[0] // self.num_batches)
+
+        if self.verbose:
+            print(f"[ utils/roa ] Loaded {self.start_points.shape[0]} ground truth data points")
+     
+    def _save_roa_estimation_params(self, save_path: str = None):
+        if save_path is None:
+            save_path = self.results_path
+
         def convert_keys(obj):
             if isinstance(obj, dict):
                 return {str(k): convert_keys(v) for k, v in obj.items()}
             elif isinstance(obj, list):
                 return [convert_keys(item) for item in obj]
+            elif callable(obj):
+                return obj.__name__
             else:
                 return obj
         
@@ -170,12 +218,12 @@ class ROAEstimator:
         json_safe_params["n_runs"] = self.n_runs
         json_safe_params["batch_size"] = self.batch_size
 
-        json_fpath = path.join(self.results_path, "roa_estimation_params.json")
+        json_fpath = path.join(save_path, "roa_estimation_params.json")
         
         with open(json_fpath, "w") as f:
             json.dump(json_safe_params, f, indent=4)
 
-        if verbose:
+        if self.verbose:
             print(f"[ utils/roa ] ROA estimation params saved in {json_fpath}")
     
     @property
@@ -189,15 +237,17 @@ class ROAEstimator:
 
         if not os.path.exists(self.gen_traj_path):
             os.makedirs(self.gen_traj_path)
+
+        self._save_roa_estimation_params(self.gen_traj_path)
         
     
-    def _generate_single_run_trajs(self, run_idx, compute_labels, verbose, discard_trajectories, save):
+    def _generate_single_run_trajs(self, run_idx, compute_labels, discard_trajectories, save):
         from genMoPlan.utils import generate_trajectories
 
         results = generate_trajectories(
             self.model, self.model_args, self.start_points, 
             max_path_length=self.max_path_length,
-            only_execute_next_step=False, verbose=verbose, batch_size=self.batch_size, 
+            only_execute_next_step=False, verbose=self.verbose, batch_size=self.batch_size, 
             only_return_final_states=discard_trajectories,
             conditional_sample_kwargs=self.conditional_sample_kwargs
         )
@@ -214,7 +264,7 @@ class ROAEstimator:
         if compute_labels:
             from genMoPlan.utils import get_trajectory_attractor_labels
 
-            attractor_labels = get_trajectory_attractor_labels(final_states, self.attractors, self.attractor_dist_threshold, self.invalid_label)
+            attractor_labels = get_trajectory_attractor_labels(final_states, self.attractors, self.attractor_dist_threshold, self.invalid_label, verbose=self.verbose)
             self.attractor_labels.append(attractor_labels)
 
             if save:
@@ -264,7 +314,6 @@ class ROAEstimator:
             self,
             compute_labels: bool = True,
             discard_trajectories: bool = True, 
-            verbose: bool = False,
             save: bool = False,
         ):
         from genMoPlan.utils.progress import ETAIterator
@@ -310,10 +359,11 @@ class ROAEstimator:
         eta_iter = ETAIterator(iter(run_range), n_runs_to_generate)
         
         for run_idx in eta_iter:
-            print(f"[ utils/roa ] Run {run_idx+1}/{start_idx + n_runs_to_generate} (Remaining Time: {eta_iter.eta_formatted})")
+            if self.verbose:
+                print(f"[ utils/roa ] Run {run_idx+1}/{start_idx + n_runs_to_generate} (Remaining Time: {eta_iter.eta_formatted})")
             
             self._generate_single_run_trajs(
-                run_idx, compute_labels, verbose, discard_trajectories, save
+                run_idx, compute_labels, discard_trajectories, save
             )
 
         if not discard_trajectories:
@@ -338,10 +388,10 @@ class ROAEstimator:
 
         return self.final_states
     
-    def compute_attractor_labels(self, verbose=True):
+    def compute_attractor_labels(self):
         from genMoPlan.utils import get_trajectory_attractor_labels
 
-        if verbose:
+        if self.verbose:
             print(f"[ utils/roa ] Computing attractor labels")
         if self.final_states is None:
             raise ValueError("No final states available.")
@@ -350,7 +400,7 @@ class ROAEstimator:
         reshaped_final_states = self.final_states.reshape(-1, dim)
         
         reshaped_labels = get_trajectory_attractor_labels(
-            reshaped_final_states, self.attractors, self.attractor_dist_threshold, self.invalid_label
+            reshaped_final_states, self.attractors, self.attractor_dist_threshold, self.invalid_label, verbose=self.verbose
         )
         
         self.attractor_labels = reshaped_labels.reshape(n, n_runs)
@@ -358,8 +408,8 @@ class ROAEstimator:
         
         return self.attractor_labels
     
-    def save_final_states(self, verbose=True):
-        if verbose:
+    def save_final_states(self):
+        if self.verbose:
             print(f"[ utils/roa ] Saving final states")
         if self.final_states is None:
             raise ValueError("No final states available")
@@ -395,17 +445,26 @@ class ROAEstimator:
                 print(f"[ utils/roa ] Will load {self.n_runs} runs since file {file_path} not found. ")
                 break
 
+        if self.n_runs == 0:
+            raise ValueError("No final states found")
+
         if not parallel:
-            for file_path in tqdm(file_paths, desc="Loading final states"):
+            iter = tqdm(file_paths, desc="Loading final states") if self.verbose else file_paths
+            for file_path in iter:
                 labels, final_states = _load_attractor_labels(file_path)
                
                 all_predicted_labels.append(labels)
                 all_final_states.append(final_states)
         else: 
             with multiprocessing.Pool(processes=multiprocessing.cpu_count()) as pool:
-                results = list(tqdm(pool.imap(_load_attractor_labels, file_paths), 
+                if self.verbose:
+                    iter = tqdm(pool.imap(_load_attractor_labels, file_paths), 
                                    total=len(file_paths), 
-                                   desc="Loading final states"))
+                                   desc="Loading final states")
+                else:
+                    iter = pool.imap(_load_attractor_labels, file_paths)
+
+                results = list(iter)
 
             for labels, final_states in results:
                 all_predicted_labels.append(labels)
@@ -420,10 +479,8 @@ class ROAEstimator:
         
         return self.attractor_labels, self.final_states
     
-    def compute_attractor_probabilities(self, plot=False, verbose=True):
-        self._setup_results_path()
-
-        if verbose:
+    def compute_attractor_probabilities(self, plot=False):
+        if self.verbose:
             print(f"[ utils/roa ] Computing attractor probabilities")
         if self.attractor_labels is None:
             raise ValueError("No attractor labels available")
@@ -448,14 +505,62 @@ class ROAEstimator:
         assert np.allclose(np.sum(self.label_probabilities, axis=1), 1.0, rtol=1e-5, atol=1e-6), "Probabilities do not sum to 1"
         
         if plot:
-            self.plot_attractor_probabilities(verbose)
+            self.plot_attractor_probabilities()
         
         return self.label_probabilities
     
-    def predict_attractor_labels(self, plot=False, verbose=True):
+    def _save_predicted_labels(self):
+        if self.predicted_labels is None:
+            raise ValueError("No predicted labels available")
+        
         self._setup_results_path()
 
-        if verbose:
+        file_path = path.join(self.results_path, f'predicted_attractor_labels.txt')
+
+        with open(file_path, "w") as f:
+            f.write("# ")
+            for i in range(self.start_points.shape[1]):
+                f.write(f"start_{i} ")
+            f.write("label\n")
+
+            for start_point_idx in range(self.start_points.shape[0]):
+                for i in range(self.start_points.shape[1]):
+                    f.write(f"{self.start_points[start_point_idx, i]} ")
+                
+                f.write(f"{self.predicted_labels[start_point_idx]} ")
+                
+                f.write("\n")
+        if self.verbose:
+            print(f"[ utils/roa ] Saved predicted labels to {file_path}")
+    
+    def load_predicted_labels(self, results_path: str):
+        if self.verbose:
+            print(f"[ utils/roa ] Loading predicted labels")
+
+        self.results_path = results_path
+
+        file_path = path.join(results_path, f'predicted_attractor_labels.txt')
+
+        self.predicted_labels = []
+        
+        with open(file_path, "r") as f:
+            lines = f.readlines()
+            for line in lines:
+                if line.startswith("#"):
+                    continue
+                data = line.split()
+                start_points = np.array(data[1:-1], dtype=np.float32)
+                predicted_label = int(data[-1])
+                self.predicted_labels.append(predicted_label)
+        
+        self.predicted_labels = np.array(self.predicted_labels, dtype=np.int32)
+        self.separatrix_indices = np.where(self.predicted_labels == self.invalid_label)[0]
+        
+        if self.verbose:
+            print(f"[ utils/roa ] Loaded {len(self.predicted_labels)} predicted labels")
+    
+    def predict_attractor_labels(self, save=True, plot=False):
+        if self.verbose:
             print(f"[ utils/roa ] Predicting attractor labels")
         invalid_label = self.labels_array[-1]
 
@@ -469,24 +574,55 @@ class ROAEstimator:
         
         # Assign label with highest probability exceeding threshold
         for i in range(len(self.labels_array[:-1])):
-            mask = self.label_probabilities[:, i] > self.attractor_prob_threshold
+            mask = self.label_probabilities[:, i] >= self.attractor_prob_threshold
             predicted_labels[mask] = self.labels_array[i]
 
         self.predicted_labels = predicted_labels
 
         # Store indices of uncertain points - points with no probability exceeding threshold
-        uncertain_indices = np.where(np.sum(self.label_probabilities > self.attractor_prob_threshold, axis=1) == 0)[0]
+        uncertain_indices = np.where(np.sum(self.label_probabilities >= self.attractor_prob_threshold, axis=1) == 0)[0]
         self.uncertain_indices = uncertain_indices
+
+        self.separatrix_indices = np.where(predicted_labels == invalid_label)[0]
+        
+        if self.verbose:
+            print(f"[ utils/roa ] Found {len(uncertain_indices)} uncertain points")
+            print(f"[ utils/roa ] Total separatrix points: {len(self.separatrix_indices)}")
+
+        if save:
+            self._save_predicted_labels()
         
         if plot:
-            self.plot_predicted_attractor_labels(verbose)
+            self.plot_predicted_attractor_labels()
         
         return predicted_labels
     
-    def plot_attractor_probabilities(self, verbose=True):
+    def plot_trajectories(self):
+        self._setup_traj_plot_path()
+
+        if self.verbose:
+            print(f"[ utils/roa ] Plotting trajectories")
+
+        if self.trajectories is None:
+            raise ValueError("No trajectories available")
+        
+        if self.start_points.shape[1] > 2:
+            raise ValueError("Cannot plot trajectories for more than 2D start points")
+        
+        trajectories = np.concatenate(self.trajectories, axis=0)
+
+        image_name = f"trajectories_{len(self.start_points)}_{self.n_runs}.png"
+        image_path = path.join(self.traj_plot_path, image_name)
+        
+        plot_trajectories(trajectories, image_path, self.verbose)
+        
+        if self.verbose:
+            print(f"[ utils/roa ] Trajectories plotted in {image_path}")
+        
+    def plot_attractor_probabilities(self):
         self._setup_results_path()
 
-        if verbose:
+        if self.verbose:
             print(f"[ utils/roa ] Plotting attractor probabilities")
         
         if self.label_probabilities is None:
@@ -497,29 +633,27 @@ class ROAEstimator:
         
         os.makedirs(self.results_path, exist_ok=True)
         
-        # Plot probability of each attractor label
         for i, label in enumerate(self.labels_set):
             plt.figure(figsize=(10, 8))
             plt.scatter(self.start_points[:, 0], self.start_points[:, 1], 
-                       c=self.label_probabilities[:, i], s=0.1, cmap='RdBu')
+                    c=self.label_probabilities[:, i], s=0.1, cmap='RdBu')
             plt.colorbar()
             plt.title(f'Probability of label {label}')
             plt.savefig(path.join(self.results_path, f"probability_{label}.png"))
             plt.close()
 
-        # Plot probability of invalid label
         plt.figure(figsize=(10, 8))
         plt.scatter(self.start_points[:, 0], self.start_points[:, 1], 
-                   c=self.label_probabilities[:, -1], s=0.1, cmap='RdBu')
+                c=self.label_probabilities[:, -1], s=0.1, cmap='RdBu')
         plt.colorbar()
         plt.title('Probability of invalid label')
         plt.savefig(path.join(self.results_path, f"probability_invalid.png"))
         plt.close()
     
-    def plot_predicted_attractor_labels(self, verbose=True):
+    def plot_predicted_attractor_labels(self):
         self._setup_results_path()
 
-        if verbose:
+        if self.verbose:
             print(f"[ utils/roa ] Plotting predicted attractor labels")
 
         if self.predicted_labels is None:
@@ -550,17 +684,21 @@ class ROAEstimator:
         if self.uncertain_indices is not None:
             plt.figure(figsize=(10, 8))
             plt.scatter(self.start_points[self.uncertain_indices, 0], self.start_points[self.uncertain_indices, 1], 
-                       c='red', s=0.1, cmap='viridis')
+                       c='red', s=0.1)
             plt.title('Uncertain points')
             plt.savefig(path.join(self.results_path, f"uncertain_points.png"))
             plt.close()
 
-        print(f"[ utils/roa ] Attractor probabilities plotted in {self.results_path}")
+        else:
+            print(f"[ utils/roa ] No uncertain points found or loaded")
 
-    def plot_roas(self, verbose=True):
+        if self.verbose:    
+            print(f"[ utils/roa ] Attractor probabilities plotted in {self.results_path}")
+
+    def plot_roas(self, plot_separatrix=True):
         self._setup_results_path()
 
-        if verbose:
+        if self.verbose:
             print(f"[ utils/roa ] Plotting ROAs")
         if self.predicted_labels is None:
             raise ValueError("No predicted labels available")
@@ -570,18 +708,33 @@ class ROAEstimator:
         
         labels_to_plot = self.predicted_labels.copy()
         labels_to_plot[labels_to_plot == self.invalid_label] = len(self.labels_set)
+
+        success_mask = labels_to_plot == self.labels_array[1]
+        failure_mask = labels_to_plot == self.labels_array[0]
+        separatrix_mask = labels_to_plot == len(self.labels_set)
         
         plt.figure(figsize=(10, 8))
         
-        plt.scatter(self.start_points[:, 0], self.start_points[:, 1], 
-                   c=labels_to_plot, s=0.1, cmap='viridis')
-        plt.colorbar()
+        plt.scatter(self.start_points[success_mask, 0], self.start_points[success_mask, 1], 
+                   c=labels_to_plot[success_mask], s=0.1, cmap=self.SUCCESS_COLOR_MAP)
+        plt.scatter(self.start_points[failure_mask, 0], self.start_points[failure_mask, 1], 
+                   c=labels_to_plot[failure_mask], s=0.1, cmap=self.FAILURE_COLOR_MAP)
+        plt.scatter(self.start_points[separatrix_mask, 0], self.start_points[separatrix_mask, 1], 
+                   c=labels_to_plot[separatrix_mask], s=0.1, cmap=self.SEPARATRIX_COLOR_MAP)
 
         plt.title('RoAs')
         plt.savefig(path.join(self.results_path, f"roas.png"))
         plt.close()
 
-    def compute_prediction_metrics(self, save=True):
+        if plot_separatrix:
+            plt.figure(figsize=(10, 8))
+            plt.scatter(self.start_points[self.separatrix_indices, 0], self.start_points[self.separatrix_indices, 1], 
+                       c='red', s=0.1)
+            plt.title('Separatrix')
+            plt.savefig(path.join(self.results_path, f"separatrix.png"))
+            plt.close()
+
+    def compute_classification_results(self, save=True):
         self._setup_results_path()
 
         if self.predicted_labels is None:
@@ -590,105 +743,41 @@ class ROAEstimator:
         if self.labels_array is None:
             raise ValueError("Labels array not computed. Call set_labels first.")
         
-        if len(self.labels_array) == 3:
-            invalid_label = self.labels_array[-1]
-            
-            fp = np.sum((self.predicted_labels == self.labels_array[0]) & (self.expected_labels == self.labels_array[1]))
-            fn = np.sum((self.predicted_labels == self.labels_array[1]) & (self.expected_labels == self.labels_array[0]))
-            tp = np.sum((self.predicted_labels == self.labels_array[1]) & (self.expected_labels == self.labels_array[1]))
-            tn = np.sum((self.predicted_labels == self.labels_array[0]) & (self.expected_labels == self.labels_array[0]))
+        fp = np.sum((self.predicted_labels == self.labels_array[1]) & (self.expected_labels == self.labels_array[0]))
+        fn = np.sum((self.predicted_labels == self.labels_array[0]) & (self.expected_labels == self.labels_array[1]))
+        tp = np.sum((self.predicted_labels == self.labels_array[1]) & (self.expected_labels == self.labels_array[1]))
+        tn = np.sum((self.predicted_labels == self.labels_array[0]) & (self.expected_labels == self.labels_array[0]))
 
-            tp_rate = tp / (tp + fn)
-            tn_rate = tn / (tn + fp)
-            fp_rate = fp / (fp + tn)
-            fn_rate = fn / (fn + tp)
+        # Compute masks for true positives, true negatives, false positives, and false negatives
+        self.fp_mask = (self.predicted_labels == self.labels_array[1]) & (self.expected_labels == self.labels_array[0])
+        self.fn_mask = (self.predicted_labels == self.labels_array[0]) & (self.expected_labels == self.labels_array[1])
+        self.tp_mask = (self.predicted_labels == self.labels_array[1]) & (self.expected_labels == self.labels_array[1])
+        self.tn_mask = (self.predicted_labels == self.labels_array[0]) & (self.expected_labels == self.labels_array[0])
 
-            accuracy = (tp + tn) / len(self.expected_labels)
-            precision = tp / (tp + fp) if (tp + fp) > 0 else np.nan
-            recall = tp / (tp + fn) if (tp + fn) > 0 else np.nan
-            f1_score = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else np.nan
+        tp_rate = tp / (tp + fn)
+        tn_rate = tn / (tn + fp)
+        fp_rate = fp / (fp + tn)
+        fn_rate = fn / (fn + tp)
 
-            results = {
-                "true_positives": int(tp),
-                "true_negatives": int(tn),
-                "false_positives": int(fp),
-                "false_negatives": int(fn),
-                "tp_rate": float(tp_rate),
-                "tn_rate": float(tn_rate),
-                "fp_rate": float(fp_rate),
-                "fn_rate": float(fn_rate),
-                "accuracy": float(accuracy),
-                "precision": float(precision),
-                "recall": float(recall),
-                "f1_score": float(f1_score)
-            }
+        accuracy = (tp + tn) / len(self.expected_labels)
+        precision = tp / (tp + fp) if (tp + fp) > 0 else np.nan
+        recall = tp / (tp + fn) if (tp + fn) > 0 else np.nan
+        f1_score = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else np.nan
 
-        else:
-            # Multi-class classification metrics
-            invalid_label = self.labels_array[-1]
-            valid_labels = [label for label in self.labels_array if label != invalid_label]
-            
-            # Compute accuracy
-            accuracy = np.sum(self.predicted_labels == self.expected_labels) / len(self.expected_labels)
-            
-            # Compute per-class metrics
-            class_metrics = {}
-            
-            for label in valid_labels:
-                # One-vs-rest approach
-                true_positives = np.sum((self.predicted_labels == label) & (self.expected_labels == label))
-                false_positives = np.sum((self.predicted_labels == label) & (self.expected_labels != label))
-                false_negatives = np.sum((self.predicted_labels != label) & (self.expected_labels == label))
-                true_negatives = np.sum((self.predicted_labels != label) & (self.expected_labels != label))
-                # Handle division by zero
-                micro_accuracy = (true_positives + true_negatives) / len(self.expected_labels)
-                precision = true_positives / (true_positives + false_positives) if (true_positives + false_positives) > 0 else np.nan
-                recall = true_positives / (true_positives + false_negatives) if (true_positives + false_negatives) > 0 else np.nan
-                f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else np.nan
-
-                tp_rate = true_positives / (true_positives + false_negatives)
-                tn_rate = true_negatives / (true_negatives + false_positives)
-                fp_rate = false_positives / (false_positives + true_negatives)
-                fn_rate = false_negatives / (false_negatives + true_positives)
-                
-                class_metrics[f"class_{label}"] = {
-                    "true_positives": int(true_positives),
-                    "false_positives": int(false_positives),
-                    "true_negatives": int(true_negatives),
-                    "false_negatives": int(false_negatives),
-                    "tp_rate": float(tp_rate),
-                    "tn_rate": float(tn_rate),
-                    "fp_rate": float(fp_rate),
-                    "fn_rate": float(fn_rate),
-                    "accuracy": float(micro_accuracy),
-                    "precision": float(precision),
-                    "recall": float(recall),
-                    "f1_score": float(f1)
-                }
-            
-            # Compute macro-averages
-            macro_precision = np.mean([metrics["precision"] for metrics in class_metrics.values()])
-            macro_recall = np.mean([metrics["recall"] for metrics in class_metrics.values()])
-            macro_f1 = np.mean([metrics["f1_score"] for metrics in class_metrics.values()])
-            
-            # Create confusion matrix
-            confusion_matrix = np.zeros((len(self.labels_array), len(self.labels_array)), dtype=np.int32)
-            
-            for i, true_label in enumerate(self.labels_array):
-                for j, pred_label in enumerate(self.labels_array):
-                    confusion_matrix[i, j] = np.sum(
-                        (self.expected_labels == true_label) & (self.predicted_labels == pred_label)
-                    )
-            
-            results = {
-                "accuracy": float(accuracy),
-                "class_metrics": class_metrics,
-                "macro_precision": float(macro_precision),
-                "macro_recall": float(macro_recall),
-                "macro_f1": float(macro_f1),
-                "confusion_matrix": confusion_matrix.tolist(),
-                "confusion_matrix_labels": self.labels_array.tolist()
-            }
+        results = {
+            "true_positives": int(tp),
+            "true_negatives": int(tn),
+            "false_positives": int(fp),
+            "false_negatives": int(fn),
+            "tp_rate": float(tp_rate),
+            "tn_rate": float(tn_rate),
+            "fp_rate": float(fp_rate),
+            "fn_rate": float(fn_rate),
+            "accuracy": float(accuracy),
+            "precision": float(precision),
+            "recall": float(recall),
+            "f1_score": float(f1_score)
+        }
 
         if save:
             # Create results directory if it doesn't exist
@@ -698,44 +787,127 @@ class ROAEstimator:
             results_fpath = path.join(self.results_path, "classification_results.json")
             with open(results_fpath, "w") as f:
                 json.dump(results, f, indent=4)
-            
-            print(f"[ utils/roa ] Classification results saved to {results_fpath}")
 
-        print(f"\n[ utils/roa ] Classification results for {self.exp_path} | {self.n_runs} runs:\n")
-        for key, value in results.items():
-            if key == "confusion_matrix":
-                print(f"{key}:")
-                # Get the labels for better readability
-                labels = results["confusion_matrix_labels"]
-                
-                # Print header row with predicted labels
-                header = "True\\Pred |"
-                for label in labels:
-                    header += f" {label:^7} |"
-                print(header)
-                print("-" * len(header))
-                
-                # Print each row with the true label and confusion matrix values
-                for i, true_label in enumerate(labels):
-                    row = f" {true_label:^7} |"
-                    for j in range(len(labels)):
-                        row += f" {value[i][j]:^7} |"
-                    print(row)
-                print("-" * len(header))
-            elif key == "class_metrics":
-                print(f"{key}:")
-                for class_label, metrics in value.items():
-                    print(f"  {class_label}:")
-                    for metric_name, metric_value in metrics.items():
-                        print(f"    {metric_name}: {metric_value}")
-            else:
-                print(f"{key}: {value}")
+            if self.verbose:
+                print(f"[ utils/roa ] Classification results saved to {results_fpath}")
+
+        if self.verbose:
+            print(f"\n[ utils/roa ] Classification results for {self.exp_path} | {self.n_runs} runs:\n")
+            for key, value in results.items():
+                if key == "confusion_matrix":
+                    print(f"{key}:")
+                    # Get the labels for better readability
+                    labels = results["confusion_matrix_labels"]
+                    
+                    # Print header row with predicted labels
+                    header = "True\\Pred |"
+                    for label in labels:
+                        header += f" {label:^7} |"
+                    print(header)
+                    print("-" * len(header))
+                    
+                    # Print each row with the true label and confusion matrix values
+                    for i, true_label in enumerate(labels):
+                        row = f" {true_label:^7} |"
+                        for j in range(len(labels)):
+                            row += f" {value[i][j]:^7} |"
+                        print(row)
+                    print("-" * len(header))
+                elif key == "class_metrics":
+                    print(f"{key}:")
+                    for class_label, metrics in value.items():
+                        print(f"  {class_label}:")
+                        for metric_name, metric_value in metrics.items():
+                            print(f"    {metric_name}: {metric_value}")
+                else:
+                    print(f"{key}: {value}")
                 
         return results
         
-    
+    def plot_classification_results(self):
+        self._setup_results_path()
+
+        if self.verbose:
+            print(f"[ utils/roa ] Plotting classification results")
+
+        if self.predicted_labels is None:
+            raise ValueError("No predicted labels available")
+
+        if self.tp_mask is None or self.tn_mask is None or self.fp_mask is None or self.fn_mask is None:
+            raise ValueError("Classification results not computed. Call compute_prediction_metrics first.")
         
+        if self.start_points.shape[1] > 2:
+            raise ValueError("Cannot plot classification results for more than 2D start points")
+
+        # Plot true positives
+        plt.figure(figsize=(10, 8))
+        plt.scatter(self.start_points[self.tp_mask, 0], self.start_points[self.tp_mask, 1], 
+                   c=self.predicted_labels[self.tp_mask], s=0.1, cmap=self.SUCCESS_COLOR_MAP)
+        plt.title('True Positives')
+        plt.xlim(self.start_points[:, 0].min(), self.start_points[:, 0].max())
+        plt.ylim(self.start_points[:, 1].min(), self.start_points[:, 1].max())
+        plt.savefig(path.join(self.results_path, "true_positives.png"))
+        plt.close()
         
+        # Plot true negatives
+        plt.figure(figsize=(10, 8))
+        plt.scatter(self.start_points[self.tn_mask, 0], self.start_points[self.tn_mask, 1], 
+                   c=self.predicted_labels[self.tn_mask], s=0.1, cmap=self.FAILURE_COLOR_MAP)
+        plt.title('True Negatives')
+        plt.xlim(self.start_points[:, 0].min(), self.start_points[:, 0].max())
+        plt.ylim(self.start_points[:, 1].min(), self.start_points[:, 1].max())
+        plt.savefig(path.join(self.results_path, "true_negatives.png"))
+        plt.close()
         
+        # Plot false positives
+        plt.figure(figsize=(10, 8))
+        plt.scatter(self.start_points[self.fp_mask, 0], self.start_points[self.fp_mask, 1], 
+                   c=self.predicted_labels[self.fp_mask], s=0.1, cmap=self.FP_COLOR_MAP)
+        plt.title('False Positives')
+        plt.xlim(self.start_points[:, 0].min(), self.start_points[:, 0].max())
+        plt.ylim(self.start_points[:, 1].min(), self.start_points[:, 1].max())
+        plt.savefig(path.join(self.results_path, "false_positives.png"))
+        plt.close()
         
+        # Plot false negatives
+        plt.figure(figsize=(10, 8))
+        plt.scatter(self.start_points[self.fn_mask, 0], self.start_points[self.fn_mask, 1], 
+                   c=self.predicted_labels[self.fn_mask], s=0.1, cmap=self.FN_COLOR_MAP)
+        plt.title('False Negatives')
+        plt.xlim(self.start_points[:, 0].min(), self.start_points[:, 0].max())
+        plt.ylim(self.start_points[:, 1].min(), self.start_points[:, 1].max())
+        plt.savefig(path.join(self.results_path, "false_negatives.png"))
+        plt.close()
+
+        # Combined plots with all incorrect classifications
+        plt.figure(figsize=(10, 8))
+        plt.scatter(self.start_points[self.fp_mask, 0], self.start_points[self.fp_mask, 1], 
+                   c=self.predicted_labels[self.fp_mask], s=0.1, cmap=self.FP_COLOR_MAP, label='False Positives')
+        plt.scatter(self.start_points[self.fn_mask, 0], self.start_points[self.fn_mask, 1], 
+                   c=self.predicted_labels[self.fn_mask], s=0.1, cmap=self.FN_COLOR_MAP, label='False Negatives')
+        plt.title('Incorrect Classifications')
+        plt.xlim(self.start_points[:, 0].min(), self.start_points[:, 0].max())
+        plt.ylim(self.start_points[:, 1].min(), self.start_points[:, 1].max())
+        plt.savefig(path.join(self.results_path, "incorrect_classifications.png"))
+        plt.close()
         
+        # Combined plot with all classifications
+        plt.figure(figsize=(10, 8))
+        plt.scatter(self.start_points[self.tp_mask, 0], self.start_points[self.tp_mask, 1], 
+                   c=self.predicted_labels[self.tp_mask], s=0.1, cmap=self.SUCCESS_COLOR_MAP, label='True Positives')
+        plt.scatter(self.start_points[self.tn_mask, 0], self.start_points[self.tn_mask, 1], 
+                   c=self.predicted_labels[self.tn_mask], s=0.1, cmap=self.FAILURE_COLOR_MAP, label='True Negatives')
+        plt.scatter(self.start_points[self.fp_mask, 0], self.start_points[self.fp_mask, 1], 
+                   c=self.predicted_labels[self.fp_mask], s=0.1, cmap=self.FP_COLOR_MAP, label='False Positives')
+        plt.scatter(self.start_points[self.fn_mask, 0], self.start_points[self.fn_mask, 1], 
+                   c=self.predicted_labels[self.fn_mask], s=0.1, cmap=self.FN_COLOR_MAP, label='False Negatives')
+        plt.scatter(self.start_points[self.separatrix_indices, 0], self.start_points[self.separatrix_indices, 1], 
+                   c=self.predicted_labels[self.separatrix_indices], s=0.1, cmap=self.SEPARATRIX_COLOR_MAP, label='Separatrix')
+        plt.title('Classification Results')
+        plt.xlim(self.start_points[:, 0].min(), self.start_points[:, 0].max())
+        plt.ylim(self.start_points[:, 1].min(), self.start_points[:, 1].max())
+        plt.savefig(path.join(self.results_path, "classification_results.png"))
+        plt.close()
+
+        if self.verbose:
+            print(f"[ utils/roa ] Classification result plots saved in {self.results_path}")

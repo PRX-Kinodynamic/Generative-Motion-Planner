@@ -13,7 +13,7 @@ from flow_matching.path.scheduler import *
 from flow_matching.path import *
 from flow_matching.solver import *
 
-from .abs_gen_model import GenerativeModel, Sample
+from .base import GenerativeModel, Sample
 
 
 class FlowMatching(GenerativeModel):
@@ -32,7 +32,7 @@ class FlowMatching(GenerativeModel):
         has_query=False,
         # Flow matching specific parameters
         scheduler="CondOTScheduler",
-        path="CondOTProbPath",
+        path="AffineProbPath",
         solver="ODESolver",
         **kwargs,
     ):
@@ -56,19 +56,25 @@ class FlowMatching(GenerativeModel):
         
         # ------------------------------ Setup flow matching components ------------------------------#
 
-        path_args = []
-        if scheduler is not None:
-            if type(scheduler) == str:
-                scheduler = eval(scheduler)
-            path_args.append(scheduler())
+        if type(scheduler) == str:
+            scheduler = eval(scheduler)
+
+        scheduler = scheduler()
 
         if type(path) == str:
             path = eval(path)
-        self.path = path(*path_args)
+        self.path = path(scheduler)
 
         if type(solver) == str:
             solver = eval(solver)
-        self.solver = solver(self.vector_field)
+
+        self.transformed_model = ScheduleTransformedModel(
+            velocity_model=self.vector_field,
+            original_scheduler = scheduler,
+            new_scheduler = CondOTScheduler(),
+        )
+
+        self.solver = solver(self.transformed_model)
 
     # --------------------------------------- vector field ----------------------------------------#
 
@@ -105,7 +111,7 @@ class FlowMatching(GenerativeModel):
     # ------------------------------------------ inference ------------------------------------------#
 
     @torch.no_grad()
-    def conditional_sample(self, cond, shape, query=None, step_size=0.05,  integration_method="midpoint", return_chain=False, n_intermediate_steps=0, **kwargs):
+    def conditional_sample(self, cond, shape, query=None, n_timesteps=10, integration_method="midpoint", return_chain=False, n_intermediate_steps=0, **kwargs):
         """
         Generate samples by running the flow matching ODE solver from noise to target.
         
@@ -113,7 +119,7 @@ class FlowMatching(GenerativeModel):
             cond: Conditioning information that will be applied to the samples
             shape: Shape of the output samples
             query: Optional query tensor for conditional generation
-            step_size: Step size for the ODE solver
+            n_time  steps: Number of timesteps to use for the ODE solver
             integration_method: Integration method to use ("midpoint", "euler", etc.)
             return_chain: Whether to return intermediate states in the sampling chain
             n_intermediate_steps: Number of intermediate steps to save (if return_chain=True)
@@ -142,7 +148,7 @@ class FlowMatching(GenerativeModel):
 
         sol = self.solver.sample(
             x_init=x_noisy, 
-            step_size=step_size, 
+            step_size=1.0/n_timesteps, 
             time_grid=T, 
             method=integration_method, 
             return_intermediates=return_chain,

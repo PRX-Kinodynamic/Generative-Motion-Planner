@@ -3,8 +3,9 @@ import torch.nn as nn
 import math
 
 from genMoPlan.models.helpers import SinusoidalPosEmb
+from genMoPlan.models.temporal.base import TemporalModel
 
-class TemporalTransformer(nn.Module):
+class TemporalTransformer(TemporalModel):
     def __init__(
         self,
         prediction_length,
@@ -21,16 +22,24 @@ class TemporalTransformer(nn.Module):
         time_embed_dim=None,
         use_relative_pos=False,
         recency_decay_rate=0.0,
+        verbose=True,
         **kwargs,
     ):
-        super().__init__()
+        super().__init__(
+            prediction_length,
+            input_dim,
+            output_dim,
+            query_dim,
+            query_length,
+        )
 
         if time_embed_dim is None:
             time_embed_dim = hidden_dim
         
         self.use_relative_pos = use_relative_pos
-        
-        print(f"[ models/transformer ] Initializing TemporalTransformer with hidden_dim: {hidden_dim}, depth: {depth}, heads: {heads}, time_embed_dim: {time_embed_dim}")
+
+        if verbose:
+            print(f"[ models/transformer ] Initializing TemporalTransformer with hidden_dim: {hidden_dim}, Feed-forward dimension: {hidden_dim * hidden_dim_mult}, depth: {depth}, heads: {heads}, time_embed_dim: {time_embed_dim}")
         
         # Time embedding
         self.time_mlp = nn.Sequential(
