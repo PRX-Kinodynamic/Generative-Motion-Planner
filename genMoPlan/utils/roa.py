@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 
 from tqdm import tqdm
 
+from genMoPlan.utils.json_args import JSONArgs
 from genMoPlan.utils.trajectory import plot_trajectories
 
 def _load_attractor_labels(file_path):
@@ -42,11 +43,11 @@ def _load_attractor_labels(file_path):
         print(f"[ utils/roa ] Error loading attractor labels from {file_path}: {e}")
         return None, None
 
-def _get_latest_timestamp(exp_path):
-    if not os.path.exists(exp_path) or len(os.listdir(exp_path)) == 0:
+def _get_latest_timestamp(model_path):
+    if not os.path.exists(model_path) or len(os.listdir(model_path)) == 0:
         return None
     
-    timestamps = [path.basename(d) for d in glob.glob(path.join(exp_path, "generated_trajectories", "*"))]
+    timestamps = [path.basename(d) for d in glob.glob(path.join(model_path, "generated_trajectories", "*"))]
     return max(timestamps)
 
 class ROAEstimator:
@@ -57,7 +58,7 @@ class ROAEstimator:
     SEPARATRIX_COLOR_MAP = "autumn_r"
 
     model_state_name: str = "best.pt"
-    exp_path: str = None
+    model_path: str = None
     gen_traj_path: str = None
     results_path: str = None
     traj_plot_path: str = None
@@ -66,7 +67,7 @@ class ROAEstimator:
     
     dataset: str = None
     model: torch.nn.Module = None
-    model_args: dict = None
+    model_args: JSONArgs = None
     batch_size: int = None
     max_path_length: int = None
     conditional_sample_kwargs: dict = None
@@ -97,29 +98,32 @@ class ROAEstimator:
     fp_mask: np.ndarray = None
     fn_mask: np.ndarray = None
     
-    def __init__(self, dataset:str, model_state_name: str = "best.pt", exp_path: str = None, n_runs: int = None, batch_size: int = None, verbose: bool = True, num_batches: int = None):
+    def __init__(self, dataset:str, model_state_name: str = "best.pt", model_path: str = None, n_runs: int = None, batch_size: int = None, verbose: bool = True, num_batches: int = None):
         self.dataset = dataset
-        self.exp_path = exp_path
+        self.model_path = model_path
         self.verbose = verbose
         self.num_batches = num_batches
 
+        self._orig_n_runs = n_runs
+        self._orig_batch_size = batch_size
+
         self._load_model(model_state_name)
-        self._load_params(n_runs, batch_size)
+        self._load_params()
 
        
     def _load_model(self, model_state_name: str):
         from genMoPlan.utils import load_model
 
-        self.model, self.model_args = load_model(self.exp_path, model_state_name, verbose=self.verbose, strict=False)
+        self.model, self.model_args = load_model(self.model_path, model_state_name, verbose=self.verbose, strict=False)
     
-    def _load_params(self, n_runs: int, batch_size: int):
+    def _load_params(self):
         from genMoPlan.utils import load_roa_estimation_params, get_method_name
 
         self.roa_estimation_params = load_roa_estimation_params(self.dataset)
 
-        self.n_runs = n_runs if n_runs is not None else self.roa_estimation_params["n_runs"]
+        self.n_runs = self._orig_n_runs if self._orig_n_runs is not None else self.roa_estimation_params["n_runs"]
         self._expected_n_runs = self.n_runs
-        self.batch_size = batch_size if batch_size is not None else self.roa_estimation_params["batch_size"]
+        self.batch_size = self._orig_batch_size if self._orig_batch_size is not None else self.roa_estimation_params["batch_size"]
 
         self.attractor_dist_threshold = self.roa_estimation_params["attractor_dist_threshold"]
         self.attractor_prob_threshold = self.roa_estimation_params["attractor_prob_threshold"]
@@ -145,14 +149,29 @@ class ROAEstimator:
         self.batch_size = batch_size
         self.roa_estimation_params["batch_size"] = batch_size
 
+    def reset_for_analysis(self):
+        self.results_path = None
+        self.traj_plot_path = None
+        self._load_params()
+
+        self.attractor_labels = None
+        self.predicted_labels = None
+        self.uncertain_indices = None
+        self.separatrix_indices = None
+        self.label_probabilities = None
+        self.tp_mask = None
+        self.tn_mask = None
+        self.fp_mask = None
+        self.fn_mask = None
+
     def _setup_results_path(self):
         if self.results_path is not None:
             return
         
         if callable(self.roa_estimation_params["results_name"]):
-            self.results_path = path.join(self.exp_path, "results", self.roa_estimation_params["results_name"](self.roa_estimation_params, self.method_name))
+            self.results_path = path.join(self.model_path, "results", self.roa_estimation_params["results_name"](self.roa_estimation_params, self.method_name))
         else:
-            self.results_path = path.join(self.exp_path, "results", self.roa_estimation_params["results_name"])
+            self.results_path = path.join(self.model_path, "results", self.roa_estimation_params["results_name"])
 
         if not os.path.exists(self.results_path):
             os.makedirs(self.results_path)
@@ -164,9 +183,9 @@ class ROAEstimator:
             return
         
         if callable(self.roa_estimation_params["results_name"]):
-            self.traj_plot_path = path.join(self.exp_path, "viz_trajs", self.roa_estimation_params["results_name"](self.roa_estimation_params, self.method_name))
+            self.traj_plot_path = path.join(self.model_path, "viz_trajs", self.roa_estimation_params["results_name"](self.roa_estimation_params, self.method_name))
         else:
-            self.traj_plot_path = path.join(self.exp_path, "viz_trajs", self.roa_estimation_params["results_name"])
+            self.traj_plot_path = path.join(self.model_path, "viz_trajs", self.roa_estimation_params["results_name"])
 
         if not os.path.exists(self.traj_plot_path):
             os.makedirs(self.traj_plot_path)
@@ -233,7 +252,7 @@ class ROAEstimator:
     @timestamp.setter
     def timestamp(self, value):
         self._timestamp = value
-        self.gen_traj_path = path.join(self.exp_path, "generated_trajectories", self._timestamp)
+        self.gen_traj_path = path.join(self.model_path, "generated_trajectories", self._timestamp)
 
         if not os.path.exists(self.gen_traj_path):
             os.makedirs(self.gen_traj_path)
@@ -426,7 +445,7 @@ class ROAEstimator:
     
     def load_final_states(self, timestamp: str = None, parallel=True):
         if timestamp is None:
-            self.timestamp = _get_latest_timestamp(self.exp_path)
+            self.timestamp = _get_latest_timestamp(self.model_path)
 
         all_predicted_labels = []
         all_final_states = []
@@ -754,10 +773,10 @@ class ROAEstimator:
         self.tp_mask = (self.predicted_labels == self.labels_array[1]) & (self.expected_labels == self.labels_array[1])
         self.tn_mask = (self.predicted_labels == self.labels_array[0]) & (self.expected_labels == self.labels_array[0])
 
-        tp_rate = tp / (tp + fn)
-        tn_rate = tn / (tn + fp)
-        fp_rate = fp / (fp + tn)
-        fn_rate = fn / (fn + tp)
+        tp_rate = tp / (tp + fn) if (tp + fn) > 0 else np.nan
+        tn_rate = tn / (tn + fp) if (tn + fp) > 0 else np.nan
+        fp_rate = fp / (fp + tn) if (fp + tn) > 0 else np.nan
+        fn_rate = fn / (fn + tp) if (fn + tp) > 0 else np.nan
 
         accuracy = (tp + tn) / len(self.expected_labels)
         precision = tp / (tp + fp) if (tp + fp) > 0 else np.nan
@@ -792,7 +811,7 @@ class ROAEstimator:
                 print(f"[ utils/roa ] Classification results saved to {results_fpath}")
 
         if self.verbose:
-            print(f"\n[ utils/roa ] Classification results for {self.exp_path} | {self.n_runs} runs:\n")
+            print(f"\n[ utils/roa ] Classification results for {self.model_path} | {self.n_runs} runs:\n")
             for key, value in results.items():
                 if key == "confusion_matrix":
                     print(f"{key}:")
