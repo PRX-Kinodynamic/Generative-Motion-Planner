@@ -234,13 +234,13 @@ def plot_trajectories(trajectories, image_path=None, verbose=False, comparison_t
 
     if image_path is not None:
         plt.savefig(image_path)
-        plt.close()
-
         if verbose:
             print(f"[ utils/trajectory ] Trajectories saved at {image_path}")
 
     if return_plot:
         return plt
+    
+    plt.close()
 
 
 

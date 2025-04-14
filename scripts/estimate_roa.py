@@ -23,7 +23,7 @@ def estimate_roa(
     roa_estimator = ROAEstimator(
         dataset=dataset,
         model_state_name=model_state_name, 
-        exp_path=model_path, 
+        model_path=model_path, 
         n_runs=n_runs, 
         batch_size=batch_size, 
         num_batches=num_batches, 
