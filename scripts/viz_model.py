@@ -7,8 +7,6 @@ from genMoPlan.utils import ROAEstimator, load_trajectories, plot_trajectories
 def visualize_generated_trajectories(
         dataset, 
         num_trajs, 
-        compare, 
-        show_traj_ends, 
         model_paths,
         model_state_name, 
         batch_size=None,

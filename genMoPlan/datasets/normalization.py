@@ -1,33 +1,4 @@
 import numpy as np
-import scipy.interpolate as interpolate
-
-#-----------------------------------------------------------------------------#
-#--------------------------- multi-field normalizer --------------------------#
-#-----------------------------------------------------------------------------#
-
-class DatasetNormalizer:
-
-    def __init__(self, dataset, normalizer):
-
-        if type(normalizer) == str:
-            normalizer = eval(normalizer)
-
-        self.normalizer = normalizer(dataset)
-
-    def __repr__(self):
-        return str(self.normalizer)
-
-    def __call__(self, *args, **kwargs):
-        return self.normalize(*args, **kwargs)
-
-    def normalize(self, x, key):
-        return self.normalizers[key].normalize(x)
-
-    def unnormalize(self, x, key):
-        return self.normalizers[key].unnormalize(x)
-
-    def get_field_normalizers(self):
-        return self.normalizers
 
 #-----------------------------------------------------------------------------#
 #-------------------------- single-field normalizers -------------------------#
@@ -43,8 +14,10 @@ class Normalizer:
             raise ValueError('params must be provided')
 
         self.params = params
-        self.mins = np.array(params['mins'], np.float32)
-        self.maxs = np.array(params['maxs'], np.float32)
+
+        for key, value in params.items():
+            setattr(self, key, value)
+
         self.X = None
 
     def __repr__(self):
@@ -79,45 +52,83 @@ class GaussianNormalizer(Normalizer):
     '''
         normalizes to zero mean and unit variance
     '''
+    means = None
+    stds = None
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+        self._indices_to_normalize = []
+
         # Check if params in kwargs
-        if 'params' in kwargs:
-            self.means = np.array(kwargs['params']['means'], np.float32)
-            self.stds = np.array(kwargs['params']['stds'], np.float32)
-        else:
+        if self.means is None or self.stds is None:
+            print(" [datasets/normalization] Means and stds not provided, computing from data")
+        
             self.means = self.X.mean(axis=(0, 1))
             self.stds = self.X.std(axis=(0, 1))
 
-        self.params['means'] = list(self.means)
-        self.params['stds'] = list(self.stds)
+            self.params['means'] = list(self.means)
+            self.params['stds'] = list(self.stds)
+
+            self._indices_to_normalize = list(range(len(self.means)))
+        else:
+            means = []
+            stds = []
+            for i in range(len(self.params['means'])):
+                if self.params['means'][i] is not None:
+                    means.append(self.params['means'][i])
+                    stds.append(self.params['stds'][i])
+                    self._indices_to_normalize.append(i)
+
+            self.means = np.array(means)
+            self.stds = np.array(stds)
 
     def __repr__(self):
         return (
-            f'''[ Normalizer ] dim: {self.mins.size}\n    '''
-            f'''means: {np.round(self.means, 2)}\n    '''
-            f'''stds: {np.round(self.z * self.stds, 2)}\n'''
+            f'''[ Normalizer ] dim: {self.means.size}\n    '''
+            f'''means: {np.round(self.params['means'], 2)}\n    '''
+            f'''stds: {np.round(self.params['stds'], 2)}\n'''
         )
 
     def normalize(self, x):
-        return (x - self.means) / self.stds
+        x[..., self._indices_to_normalize] = (x[..., self._indices_to_normalize] - self.means) / self.stds
+        return x
 
     def unnormalize(self, x):
-        return x * self.stds + self.means
+        x[..., self._indices_to_normalize] = x[..., self._indices_to_normalize] * self.stds + self.means
+        return x
 
 
 class LimitsNormalizer(Normalizer):
     '''
         maps [ xmin, xmax ] to [ -1, 1 ]
     '''
+    mins = None
+    maxs = None
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self._indices_to_normalize = []
+        
+        if self.mins is None or self.maxs is None:
+            raise ValueError('mins and maxs must be provided')
+        else:
+            mins = []
+            maxs = []
+            for i in range(len(self.params['mins'])):
+                if self.params['mins'][i] is not None:
+                    mins.append(self.params['mins'][i])
+                    maxs.append(self.params['maxs'][i])
+                    self._indices_to_normalize.append(i)
+            self.mins = np.array(mins)
+            self.maxs = np.array(maxs)
 
     def normalize(self, x):
         ## [ 0, 1 ]
-        x = (x - self.mins) / (self.maxs - self.mins)
+        x[..., self._indices_to_normalize] = (x[..., self._indices_to_normalize] - self.mins) / (self.maxs - self.mins)
         ## [ -1, 1 ]
-        x = 2 * x - 1
+        x[..., self._indices_to_normalize] = 2 * x[..., self._indices_to_normalize] - 1
         return x
 
     def unnormalize(self, x, eps=1e-4):
@@ -129,133 +140,8 @@ class LimitsNormalizer(Normalizer):
             x = np.clip(x, -1, 1)
 
         ## [ -1, 1 ] --> [ 0, 1 ]
-        x = (x + 1) / 2.
+        x[..., self._indices_to_normalize] = (x[..., self._indices_to_normalize] + 1) / 2.
 
-        return x * (self.maxs - self.mins) + self.mins
+        x[..., self._indices_to_normalize] = x[..., self._indices_to_normalize] * (self.maxs - self.mins) + self.mins
 
-class SafeLimitsNormalizer(LimitsNormalizer):
-    '''
-        functions like LimitsNormalizer, but can handle data for which a dimension is constant
-    '''
-
-    def __init__(self, *args, eps=1, **kwargs):
-        super().__init__(*args, **kwargs)
-        if 'params' in kwargs:
-            self.mins = np.array(kwargs['params']['mins'], np.float32)
-            self.maxs = np.array(kwargs['params']['maxs'], np.float32)
-        else:
-            for i in range(len(self.mins)):
-                if self.mins[i] == self.maxs[i]:
-                    print(f'''
-                        [ utils/normalization ] Constant data in dimension {i} | '''
-                        f'''max = min = {self.maxs[i]}'''
-                    )
-                    self.mins -= eps
-                    self.maxs += eps
-
-        self.params['mins'] = list(self.mins)
-        self.params['maxs'] = list(self.maxs)
-
-#-----------------------------------------------------------------------------#
-#------------------------------- CDF normalizer ------------------------------#
-#-----------------------------------------------------------------------------#
-
-class CDFNormalizer(Normalizer):
-    '''
-        makes training data uniform (over each dimension) by transforming it with marginal CDFs
-    '''
-
-    def __init__(self, X=None, params=None):
-        super().__init__(atleast_2d(X))
-        self.dim = self.X.shape[1]
-        self.cdfs = [
-            CDFNormalizer1d(self.X[:, i])
-            for i in range(self.dim)
-        ]
-
-    def __repr__(self):
-        return f'[ CDFNormalizer ] dim: {self.mins.size}\n' + '    |    '.join(
-            f'{i:3d}: {cdf}' for i, cdf in enumerate(self.cdfs)
-        )
-
-    def wrap(self, fn_name, x):
-        shape = x.shape
-        ## reshape to 2d
-        x = x.reshape(-1, self.dim)
-        out = np.zeros_like(x)
-        for i, cdf in enumerate(self.cdfs):
-            fn = getattr(cdf, fn_name)
-            out[:, i] = fn(x[:, i])
-        return out.reshape(shape)
-
-    def normalize(self, x):
-        return self.wrap('normalize', x)
-
-    def unnormalize(self, x):
-        return self.wrap('unnormalize', x)
-
-class CDFNormalizer1d:
-    '''
-        CDF normalizer for a single dimension
-    '''
-
-    def __init__(self, X=None, params=None):
-        assert X.ndim == 1
-        self.X = X.astype(np.float32)
-        quantiles, cumprob = empirical_cdf(self.X)
-        self.fn = interpolate.interp1d(quantiles, cumprob)
-        self.inv = interpolate.interp1d(cumprob, quantiles)
-
-        self.xmin, self.xmax = quantiles.min(), quantiles.max()
-        self.ymin, self.ymax = cumprob.min(), cumprob.max()
-
-    def __repr__(self):
-        return (
-            f'[{np.round(self.xmin, 2):.4f}, {np.round(self.xmax, 2):.4f}'
-        )
-
-    def normalize(self, x):
-        x = np.clip(x, self.xmin, self.xmax)
-        ## [ 0, 1 ]
-        y = self.fn(x)
-        ## [ -1, 1 ]
-        y = 2 * y - 1
-        return y
-
-    def unnormalize(self, x, eps=1e-4):
-        '''
-            X : [ -1, 1 ]
-        '''
-        ## [ -1, 1 ] --> [ 0, 1 ]
-        x = (x + 1) / 2.
-
-        if (x < self.ymin - eps).any() or (x > self.ymax + eps).any():
-            print(
-                f'''[ dataset/normalization ] Warning: out of range in unnormalize: '''
-                f'''[{x.min()}, {x.max()}] | '''
-                f'''x : [{self.xmin}, {self.xmax}] | '''
-                f'''y: [{self.ymin}, {self.ymax}]'''
-            )
-
-        x = np.clip(x, self.ymin, self.ymax)
-
-        y = self.inv(x)
-        return y
-
-def empirical_cdf(sample):
-    ## https://stackoverflow.com/a/33346366
-
-    # find the unique values and their corresponding counts
-    quantiles, counts = np.unique(sample, return_counts=True)
-
-    # take the cumulative sum of the counts and divide by the sample size to
-    # get the cumulative probabilities between 0 and 1
-    cumprob = np.cumsum(counts).astype(np.double) / sample.size
-
-    return quantiles, cumprob
-
-def atleast_2d(x):
-    if x.ndim < 2:
-        x = x[:,None]
-    return x
-
+        return x

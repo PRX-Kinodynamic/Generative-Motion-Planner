@@ -5,13 +5,12 @@ from torch import nn
 import torch
 import numpy as np
 
-from genMoPlan.models.helpers import (
-    apply_conditioning,
-)
-
 from flow_matching.path.scheduler import *
 from flow_matching.path import *
 from flow_matching.solver import *
+
+from genMoPlan.models.manifold import ProjectToTangent
+from genMoPlan.models.helpers import apply_conditioning
 
 from .base import GenerativeModel, Sample
 
@@ -34,6 +33,7 @@ class FlowMatching(GenerativeModel):
         scheduler="CondOTScheduler",
         path="AffineProbPath",
         solver="ODESolver",
+        n_fourier_features=1,
         **kwargs,
     ):
         super().__init__(
@@ -53,6 +53,13 @@ class FlowMatching(GenerativeModel):
         
         self.n_timesteps = 1
         self.history_length = history_length
+
+        if self.manifold is not None:
+            if path != "GeodesicProbPath":
+                raise ValueError("Manifold is not supported for non-geodesic paths")
+            
+            if solver != "RiemannianODESolver":
+                raise ValueError("Riemannian solver is required for geodesic paths")
         
         # ------------------------------ Setup flow matching components ------------------------------#
 
@@ -61,9 +68,23 @@ class FlowMatching(GenerativeModel):
 
         scheduler = scheduler()
 
+        path_args = [scheduler]
+
+        if self.manifold is not None:
+            path_args.append(self.manifold)
+            solver_args = [self.manifold]
+            self.model = ProjectToTangent(
+                model,
+                manifold=self.manifold,
+                input_dim=self.input_dim,
+                n_fourier_features=n_fourier_features,
+            )
+        else:
+            solver_args = []
+
         if type(path) == str:
             path = eval(path)
-        self.path = path(scheduler)
+        self.path = path(*path_args)
 
         if type(solver) == str:
             solver = eval(solver)
@@ -74,7 +95,9 @@ class FlowMatching(GenerativeModel):
             new_scheduler = CondOTScheduler(),
         )
 
-        self.solver = solver(self.transformed_model)
+        solver_args.append(self.transformed_model)
+
+        self.solver = solver(*solver_args)
 
     # --------------------------------------- vector field ----------------------------------------#
 
@@ -87,8 +110,14 @@ class FlowMatching(GenerativeModel):
             t = t.unsqueeze(0).repeat(batch_size)
 
         # The model expects parameters in the order: (x, query, t)
-        return self.model(x, query, t)
-    
+        vector_field = self.model(x, query, t)
+
+        # Zero out the vector field for the history portion
+        if self.history_length > 0:
+            vector_field[:, :self.history_length, :] = 0.0
+            
+        return vector_field
+
     # ------------------------------------------ training ------------------------------------------#
 
     def compute_loss(self, x_target, cond, query=None):
@@ -100,6 +129,10 @@ class FlowMatching(GenerativeModel):
 
         x_noisy = torch.randn_like(x_target)
         x_noisy = apply_conditioning(x_noisy, cond)
+
+        if self.manifold is not None:
+            x_target = self.manifold.wrap(x_target)
+            x_noisy = self.manifold.wrap(x_noisy)
 
         path_sample = self.path.sample(t=t, x_0=x_noisy, x_1=x_target)
 
@@ -140,6 +173,9 @@ class FlowMatching(GenerativeModel):
 
         x_noisy = torch.randn(shape, device=device)
         x_noisy = apply_conditioning(x_noisy, cond)
+
+        if self.manifold is not None:
+            x_noisy = self.manifold.wrap(x_noisy)
 
         # Make query explicit in model_extras
         model_extras = {}

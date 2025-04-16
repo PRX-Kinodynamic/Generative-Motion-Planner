@@ -1,8 +1,10 @@
 from collections import namedtuple
 from abc import ABC, abstractmethod
-
+from typing import Union
 from torch import nn
 import torch
+
+from genMoPlan.utils import ManifoldWrapper
 
 from ..helpers import (
     get_loss_weights,
@@ -25,6 +27,7 @@ class GenerativeModel(nn.Module, ABC):
         loss_discount=1.0,
         action_indices=None,
         has_query=False,
+        manifold=None,
         **kwargs,
     ):
         super().__init__()
@@ -38,7 +41,7 @@ class GenerativeModel(nn.Module, ABC):
         self.action_indices = action_indices
         self.has_query = has_query
         self.register_buffer("loss_weights", get_loss_weights(output_dim, prediction_length, loss_discount, loss_weights))
-
+        self.manifold = manifold
         self.loss_fn = Losses[loss_type](history_length, action_indices)
 
     @abstractmethod

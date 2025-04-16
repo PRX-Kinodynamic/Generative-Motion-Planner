@@ -1,3 +1,4 @@
+from flow_matching.utils.manifolds import FlatTorus, Euclidean, Product
 import numpy as np
 from genMoPlan.utils import watch, handle_angle_wraparound, augment_unwrapped_state_data, watch_dict
 
@@ -40,6 +41,7 @@ base = {
             "n_timesteps": 5,
             "integration_method": "euler",
         },
+        "manifold": None,
     },
 
     "base": {
@@ -145,6 +147,7 @@ base = {
             "scheduler": "CondOTScheduler",
             "path": "AffineProbPath",
             "solver": "ODESolver",
+            "n_fourier_features": 1,
         },
         "prefix": "flow_matching/",
         "min_delta": 1e-3,
@@ -207,5 +210,25 @@ data_lim_25 = {
 
 data_lim_50 = {
     "train_dataset_size": 50
+}
+
+manifold = {
+    "manifold": Product(
+        input_dim=2,
+        manifolds=[
+            (FlatTorus(), 1),
+            (Euclidean(), 1),
+        ],
+    ),
+    "trajectory_preprocess_fns": [],
+    "preprocess_kwargs": {},
+    "trajectory_normalizer": None,
+    "method_kwargs": {
+        "path": "GeodesicProbPath",
+        "scheduler": "CondOTScheduler",
+        "solver": "RiemannianODESolver",
+        "n_fourier_features": 1,
+    },
+    "min_delta": 5,
 }
 
