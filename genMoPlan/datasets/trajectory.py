@@ -5,6 +5,7 @@ import numpy as np
 
 from genMoPlan.datasets.normalization import *
 from genMoPlan.datasets.utils import apply_padding, make_indices
+from genMoPlan.utils.arrays import to_torch
 from genMoPlan.utils.plan import apply_preprocess_fns, combine_plan_trajectory, load_plans
 
 
@@ -95,32 +96,38 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         Then, split the normalized array back into individual trajectories and plans. 
         If use_plan is True, then combine the plans and trajectories into a single trajectory.
         """
-        print(f"[ datasets/trajectory ] Normalizing trajectories")
-
-        if type(trajectory_normalizer) == str:
-            trajectory_normalizer = eval(trajectory_normalizer)
-        trajectory_normalizer = trajectory_normalizer(X=trajectories, params=normalizer_params["trajectory"])
-
-        traj_lengths = [len(traj) for traj in trajectories]
         all_trajectories = np.concatenate(trajectories, axis=0)
-        normed_all_trajectories = trajectory_normalizer(all_trajectories)
+
+        if trajectory_normalizer is not None:
+            print(f"[ datasets/trajectory ] Normalizing trajectories")
+            if type(trajectory_normalizer) == str:
+                trajectory_normalizer = eval(trajectory_normalizer)
+            trajectory_normalizer = trajectory_normalizer(X=trajectories, params=normalizer_params["trajectory"])
+            normed_all_trajectories = trajectory_normalizer(all_trajectories)
+        else:
+            normed_all_trajectories = all_trajectories
 
         if self.use_plan:
             assert plans is not None, "Plans are required when use_plan is True"
 
-            if type(plan_normalizer) == str:
-                plan_normalizer = eval(plan_normalizer)
-            plan_normalizer = plan_normalizer(X=plans, params=normalizer_params["plan"])
+            print(f"[ datasets/trajectory ] Normalizing plans")
 
             plan_lengths = [len(plan) for plan in plans]
             all_plans = np.concatenate(plans, axis=0)
-            normed_all_plans = self.plan_normalizer(all_plans)
+
+            if plan_normalizer is not None:
+                if type(plan_normalizer) == str:
+                    plan_normalizer = eval(plan_normalizer)
+                plan_normalizer = plan_normalizer(X=plans, params=normalizer_params["plan"])
+                normed_all_plans = plan_normalizer(all_plans)
+            else:
+                normed_all_plans = all_plans
 
         # Split all trajectories and plans into individual trajectories and plans
-
         normed_trajectories = []
         traj_start_idx = 0
         plan_start_idx = 0
+        traj_lengths = [len(traj) for traj in trajectories]
         
         for i, traj_length in enumerate(traj_lengths):
             traj_end_idx = traj_start_idx + traj_length

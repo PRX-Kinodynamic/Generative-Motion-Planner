@@ -8,6 +8,7 @@ import numpy as np
 
 from genMoPlan.datasets.normalization import *
 from genMoPlan.models.generative.base import GenerativeModel
+from genMoPlan.utils.arrays import to_torch
 
 def _get_normalizer_params(model_args):
     normalizer_params = None
@@ -24,9 +25,8 @@ def _get_normalizer_params(model_args):
 def _generate_trajectory_batch(start_states: np.ndarray, model: GenerativeModel, model_args: dict, max_path_length: int, only_execute_next_step: bool = False, conditional_sample_kwargs: dict = {}, only_return_final_states: bool = False, verbose: bool = True):
     batch_size = len(start_states)
 
-    current_states = torch.tensor(start_states, dtype=torch.float32).to(
-        model_args.device
-    )
+    current_states = to_torch(start_states, dtype=torch.float32, device=model_args.device)
+
     current_idx = model_args.history_length
     prediction_length = model_args.horizon_length if not only_execute_next_step else 1
 

@@ -22,7 +22,7 @@ class TemporalUnet(TemporalModel):
     Args:
         prediction_length (int): Length of the prediction sequence.
         input_dim (int): Dimension of the input state space.
-        output_dim (int): Dimension of the output state space. Has to be the same as the input dimension.
+        output_dim (int): Dimension of the output state space.
         query_dim (int): Dimension of the state space of the query.
         base_channels (int, optional): Base number of channels for hidden layers. Defaults to 32.
         channel_multipliers (tuple, optional): Multipliers for the base channels to determine dimensions of hidden layers.
@@ -54,8 +54,6 @@ class TemporalUnet(TemporalModel):
             query_dim,
             query_length,
         )
-
-        assert input_dim == output_dim, "Input and output dimensions must be the same"
 
         num_channels = [input_dim, *map(lambda m: base_hidden_dim * m, hidden_dim_mult)]
         in_out = list(zip(num_channels[:-1], num_channels[1:]))
@@ -141,7 +139,7 @@ class TemporalUnet(TemporalModel):
 
         self.final_conv = nn.Sequential(
             Conv1dBlock(base_hidden_dim, base_hidden_dim, kernel_size=conv_kernel_size),
-            nn.Conv1d(base_hidden_dim, input_dim, 1),
+            nn.Conv1d(base_hidden_dim, output_dim, 1),
         )
 
     def forward(self, x, query, time):

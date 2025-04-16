@@ -1,6 +1,8 @@
 from torch import nn
 import numpy as np
 import torch
+
+from genMoPlan.utils.arrays import to_torch
 from .losses import *
 from .nn_helpers import *
 

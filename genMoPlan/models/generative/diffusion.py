@@ -76,6 +76,9 @@ class Diffusion(GenerativeModel):
         
         self.predict_epsilon = predict_epsilon
         self.n_timesteps = int(n_timesteps)
+
+        if self.manifold is not None:
+            raise NotImplementedError("Manifold is not implemented yet for diffusion model")
         
         # ----- calculations for diffusion noising and denoising parameters ------
 
