@@ -82,11 +82,15 @@ def generate_trajectories(
         batch_size: The batch size to use for generating the trajectories.
         only_return_final_states: If True, only return the final states of the trajectories.
     """
-    normalizer_class = eval(model_args.trajectory_normalizer)
+    if model_args.trajectory_normalizer is not None:
+        normalizer_class = eval(model_args.trajectory_normalizer)
 
-    normalizer: Normalizer = normalizer_class(params=_get_normalizer_params(model_args))
+        normalizer: Normalizer = normalizer_class(params=_get_normalizer_params(model_args))
 
-    start_states = normalizer.normalize(unnormalized_start_states)
+        start_states = normalizer.normalize(unnormalized_start_states)
+    else:
+        start_states = unnormalized_start_states
+        normalizer = None
 
     if only_return_final_states:
         final_states = np.zeros_like(start_states)
@@ -132,7 +136,8 @@ def process_states(states, normalizer, verbose=False):
     - Un-normalize the states
     - Move the states from [-2pi, 2pi] to [-pi, pi]
     """
-    states = normalizer.unnormalize(states)
+    if normalizer is not None:
+        states = normalizer.unnormalize(states)
 
     states[states[:, 0] > np.pi, 0] -= 2 * np.pi
     states[states[:, 0] < -np.pi, 0] += 2 * np.pi
@@ -151,7 +156,9 @@ def process_trajectories(trajectories, normalizer, verbose=False):
     itr = tqdm(trajectories, desc="[ utils/trajectory ] Processing trajectories") if verbose else trajectories
 
     for trajectory in itr:
-        trajectory = normalizer.unnormalize(trajectory)
+        if normalizer is not None:
+            trajectory = normalizer.unnormalize(trajectory)
+
         # If value of trajectory[0] is greater than pi, then subtract 2pi from the trajectory
         trajectory[trajectory[:, 0] > np.pi, 0] -= 2 * np.pi
         trajectory[trajectory[:, 0] < -np.pi, 0] += 2 * np.pi

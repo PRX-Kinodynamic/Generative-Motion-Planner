@@ -41,7 +41,6 @@ base = {
             "n_timesteps": 5,
             "integration_method": "euler",
         },
-        "manifold": None,
     },
 
     "base": {
@@ -128,11 +127,13 @@ base = {
         "prefix": "diffusion/",
         "min_delta": 1e-3,
         "validation_kwargs": {},
+        "manifold": None,
     },
 
     "flow_matching": {
         "method_name": "flow_matching",
         "method": "models.generative.FlowMatching",
+        "manifold": None,
         "horizon_length": 31,
         "history_length": 1,
         "stride": 1,

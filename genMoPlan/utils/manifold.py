@@ -31,7 +31,85 @@ class ManifoldWrapper:
             self.manifold_types = manifold_types
 
         self.print_manifold_type()
-
+    
+    def __reduce__(self):
+        """Implementation for pickling support."""
+        if self.manifold_type == ManifoldType.PRODUCT:
+            # For product manifolds, we need to capture each sub-manifold
+            manifold_info = []
+            for m, d in zip(self.manifold_types, self._manifold.dimensions):
+                if m == ManifoldType.SPHERE:
+                    manifold_info.append(('Sphere', d))
+                elif m == ManifoldType.FLAT_TORUS:
+                    manifold_info.append(('FlatTorus', d))
+                elif m == ManifoldType.EUCLIDEAN:
+                    manifold_info.append(('Euclidean', d))
+                else:
+                    raise ValueError(f"Unsupported manifold type for pickling: {m}")
+            
+            # Include all other attributes except _manifold
+            state = {k: v for k, v in self.__dict__.items() if k != '_manifold'}
+            
+            # Return constructor and args
+            return (self._reconstruct_wrapper, 
+                    ('Product', manifold_info),  # What we need to reconstruct the manifold
+                    state)                       # Other instance state
+        else:
+            # For non-product manifolds, just store their type and dimension
+            if self.manifold_type == ManifoldType.SPHERE:
+                manifold_info = ('Sphere', None)
+            elif self.manifold_type == ManifoldType.FLAT_TORUS:
+                manifold_info = ('FlatTorus', None)
+            elif self.manifold_type == ManifoldType.EUCLIDEAN:
+                manifold_info = ('Euclidean', None)
+            else:
+                raise ValueError(f"Unsupported manifold type for pickling: {self.manifold_type}")
+            
+            # Include all other attributes except _manifold
+            state = {k: v for k, v in self.__dict__.items() if k != '_manifold'}
+            
+            # Return constructor and args
+            return (self._reconstruct_wrapper, 
+                    manifold_info,    # What we need to reconstruct the manifold
+                    state)            # Other instance state
+    
+    @staticmethod
+    def _reconstruct_wrapper(manifold_info, state):
+        """Static method to reconstruct a ManifoldWrapper from pickle data."""
+        # Product manifold case
+        if manifold_info == 'Product':
+            sub_manifolds = []
+            total_dim = 0
+            for sub_info in state:
+                sub_type, sub_dim = sub_info
+                if sub_type == 'Sphere':
+                    sub_manifolds.append((Sphere(), sub_dim))
+                elif sub_type == 'FlatTorus':
+                    sub_manifolds.append((FlatTorus(), sub_dim))
+                elif sub_type == 'Euclidean':
+                    sub_manifolds.append((Euclidean(), sub_dim))
+                else:
+                    raise ValueError(f"Unknown manifold type: {sub_type}")
+                total_dim += sub_dim
+            manifold = Product(input_dim=total_dim, manifolds=sub_manifolds)
+        # Single manifold case
+        elif manifold_info == 'Sphere':
+            manifold = Sphere()
+        elif manifold_info == 'FlatTorus':
+            manifold = FlatTorus()
+        elif manifold_info == 'Euclidean':
+            manifold = Euclidean()
+        else:
+            raise ValueError(f"Invalid manifold info: {manifold_info}")
+        
+        # Create the wrapper
+        wrapper = ManifoldWrapper(manifold)
+        
+        # Restore the saved state
+        wrapper.__dict__.update(state)
+        
+        return wrapper
+    
     def compute_feature_dim(self, input_dim: int, n_fourier_features: int = None, manifold: Manifold = None):
         if manifold is None:
             manifold = self._manifold

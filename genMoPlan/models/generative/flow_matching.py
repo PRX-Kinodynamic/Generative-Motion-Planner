@@ -200,6 +200,9 @@ class FlowMatching(GenerativeModel):
         if self.clip_denoised:
             sol = torch.clamp(sol, -1.0, 1.0)
 
+        if self.manifold is not None:
+            sol = self.manifold.wrap(sol)
+
         return Sample(trajectories=sol, values=None, chains=chains)
     
     # ------------------------------------------ validation ------------------------------------------#
