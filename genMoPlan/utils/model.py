@@ -38,9 +38,14 @@ def load_model(experiments_path: str, model_state_name: str, strict: bool = True
     ml_model_class = import_class(model_args.model, verbose)
     method_class = import_class(model_args.method, verbose)
 
+    if model_args.manifold is not None:
+        ml_model_input_dim = model_args.manifold.compute_feature_dim(model_args.observation_dim, n_fourier_features=model_args.model_kwargs.get("n_fourier_features", 1))
+    else:
+        ml_model_input_dim = model_args.observation_dim
+
     ml_model = ml_model_class(
         prediction_length=model_args.horizon_length + model_args.history_length,
-        input_dim=model_args.observation_dim,
+        input_dim=ml_model_input_dim,
         output_dim=model_args.observation_dim,
         query_dim=0 if model_args.is_history_conditioned else model_args.observation_dim,
         verbose=verbose,
@@ -59,6 +64,7 @@ def load_model(experiments_path: str, model_state_name: str, strict: bool = True
         loss_discount=model_args.loss_discount,
         action_indices=model_args.action_indices,
         has_query=model_args.has_query,
+        manifold=model_args.manifold,
         verbose=verbose,
         **model_args.method_kwargs,
     ).to(model_args.device)

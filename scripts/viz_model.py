@@ -69,11 +69,9 @@ if __name__ == "__main__":
         raise ValueError("Either model_path or model_paths must be provided")
     
     visualize_generated_trajectories(
-        args.dataset,
-        args.num_trajs,
-        args.compare,
-        args.show_traj_ends,
-        args.model_paths if args.model_paths is not None else args.model_path,
-        args.model_state_name,
-        args.batch_size,
+        dataset=args.dataset,
+        num_trajs=args.num_trajs,
+        model_paths=args.model_paths if args.model_paths is not None else args.model_path,
+        model_state_name=args.model_state_name,
+        batch_size=args.batch_size,
     )
