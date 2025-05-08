@@ -84,7 +84,7 @@ class ROAEstimator:
     separatrix_indices: np.ndarray = None
 
     # Classification
-    roa_estimation_params: dict = None
+    inference_params: dict = None
     attractor_labels: np.ndarray = None
     label_probabilities: np.ndarray = None
     invalid_label: int = None
@@ -117,37 +117,37 @@ class ROAEstimator:
         self.model, self.model_args = load_model(self.model_path, model_state_name, verbose=self.verbose, strict=False)
     
     def _load_params(self):
-        from genMoPlan.utils import load_roa_estimation_params, get_method_name
+        from genMoPlan.utils import load_inference_params, get_method_name
 
-        self.roa_estimation_params = load_roa_estimation_params(self.dataset)
+        self.inference_params = load_inference_params(self.dataset)
 
-        self.n_runs = self._orig_n_runs if self._orig_n_runs is not None else self.roa_estimation_params["n_runs"]
+        self.n_runs = self._orig_n_runs if self._orig_n_runs is not None else self.inference_params["n_runs"]
         self._expected_n_runs = self.n_runs
-        self.batch_size = self._orig_batch_size if self._orig_batch_size is not None else self.roa_estimation_params["batch_size"]
+        self.batch_size = self._orig_batch_size if self._orig_batch_size is not None else self.inference_params["batch_size"]
 
-        self.attractor_dist_threshold = self.roa_estimation_params["attractor_dist_threshold"]
-        self.attractor_prob_threshold = self.roa_estimation_params["attractor_prob_threshold"]
-        self.attractors = self.roa_estimation_params["attractors"]
-        self.invalid_label = self.roa_estimation_params["invalid_label"]
-        self.max_path_length = self.roa_estimation_params["max_path_length"]
+        self.attractor_dist_threshold = self.inference_params["attractor_dist_threshold"]
+        self.attractor_prob_threshold = self.inference_params["attractor_prob_threshold"]
+        self.attractors = self.inference_params["attractors"]
+        self.invalid_label = self.inference_params["invalid_label"]
+        self.max_path_length = self.inference_params["max_path_length"]
 
         self.labels_set = set(list(self.attractors.values()))
         self.labels_array = np.array([*self.labels_set, self.invalid_label])    
 
         self.method_name = get_method_name(self.model_args)
-        self.conditional_sample_kwargs = self.roa_estimation_params[self.method_name] if self.method_name in self.roa_estimation_params else {}
+        self.conditional_sample_kwargs = self.inference_params[self.method_name] if self.method_name in self.inference_params else {}
 
     def set_attractor_dist_threshold(self, attractor_dist_threshold: float):
         self.attractor_dist_threshold = attractor_dist_threshold
-        self.roa_estimation_params["attractor_dist_threshold"] = attractor_dist_threshold
+        self.inference_params["attractor_dist_threshold"] = attractor_dist_threshold
 
     def set_attractor_prob_threshold(self, attractor_prob_threshold: float):
         self.attractor_prob_threshold = attractor_prob_threshold
-        self.roa_estimation_params["attractor_prob_threshold"] = attractor_prob_threshold
+        self.inference_params["attractor_prob_threshold"] = attractor_prob_threshold
 
     def set_batch_size(self, batch_size: int):
         self.batch_size = batch_size
-        self.roa_estimation_params["batch_size"] = batch_size
+        self.inference_params["batch_size"] = batch_size
 
     def reset_for_analysis(self):
         self.results_path = None
@@ -168,29 +168,29 @@ class ROAEstimator:
         if self.results_path is not None:
             return
         
-        if callable(self.roa_estimation_params["results_name"]):
-            self.results_path = path.join(self.model_path, "results", self.roa_estimation_params["results_name"](self.roa_estimation_params, self.method_name))
+        if callable(self.inference_params["results_name"]):
+            self.results_path = path.join(self.model_path, "results", self.inference_params["results_name"](self.inference_params, self.method_name))
         else:
-            self.results_path = path.join(self.model_path, "results", self.roa_estimation_params["results_name"])
+            self.results_path = path.join(self.model_path, "results", self.inference_params["results_name"])
 
         if not os.path.exists(self.results_path):
             os.makedirs(self.results_path)
 
-        self._save_roa_estimation_params()
+        self._save_inference_params()
 
     def _setup_traj_plot_path(self):
         if self.traj_plot_path is not None:
             return
         
-        if callable(self.roa_estimation_params["results_name"]):
-            self.traj_plot_path = path.join(self.model_path, "viz_trajs", self.roa_estimation_params["results_name"](self.roa_estimation_params, self.method_name))
+        if callable(self.inference_params["results_name"]):
+            self.traj_plot_path = path.join(self.model_path, "viz_trajs", self.inference_params["results_name"](self.inference_params, self.method_name))
         else:
-            self.traj_plot_path = path.join(self.model_path, "viz_trajs", self.roa_estimation_params["results_name"])
+            self.traj_plot_path = path.join(self.model_path, "viz_trajs", self.inference_params["results_name"])
 
         if not os.path.exists(self.traj_plot_path):
             os.makedirs(self.traj_plot_path)
 
-        self._save_roa_estimation_params(self.traj_plot_path)
+        self._save_inference_params(self.traj_plot_path)
 
     def load_ground_truth(self):
         if self.verbose:
@@ -218,7 +218,7 @@ class ROAEstimator:
         if self.verbose:
             print(f"[ utils/roa ] Loaded {self.start_points.shape[0]} ground truth data points")
      
-    def _save_roa_estimation_params(self, save_path: str = None):
+    def _save_inference_params(self, save_path: str = None):
         if save_path is None:
             save_path = self.results_path
 
@@ -232,18 +232,18 @@ class ROAEstimator:
             else:
                 return obj
         
-        json_safe_params = convert_keys(self.roa_estimation_params)
+        json_safe_params = convert_keys(self.inference_params)
 
         json_safe_params["n_runs"] = self.n_runs
         json_safe_params["batch_size"] = self.batch_size
 
-        json_fpath = path.join(save_path, "roa_estimation_params.json")
+        json_fpath = path.join(save_path, "inference_params.json")
         
         with open(json_fpath, "w") as f:
             json.dump(json_safe_params, f, indent=4)
 
         if self.verbose:
-            print(f"[ utils/roa ] ROA estimation params saved in {json_fpath}")
+            print(f"[ utils/roa ] Inference params saved in {json_fpath}")
     
     @property
     def timestamp(self):
@@ -257,7 +257,7 @@ class ROAEstimator:
         if not os.path.exists(self.gen_traj_path):
             os.makedirs(self.gen_traj_path)
 
-        self._save_roa_estimation_params(self.gen_traj_path)
+        self._save_inference_params(self.gen_traj_path)
         
     
     def _generate_single_run_trajs(self, run_idx, compute_labels, discard_trajectories, save):
@@ -268,7 +268,9 @@ class ROAEstimator:
             max_path_length=self.max_path_length,
             only_execute_next_step=False, verbose=self.verbose, batch_size=self.batch_size, 
             only_return_final_states=discard_trajectories,
-            conditional_sample_kwargs=self.conditional_sample_kwargs
+            conditional_sample_kwargs=self.conditional_sample_kwargs,
+            post_process_fns=self.inference_params["post_process_fns"],
+            post_process_fn_kwargs=self.inference_params["post_process_fn_kwargs"],
         )
         
         if discard_trajectories:

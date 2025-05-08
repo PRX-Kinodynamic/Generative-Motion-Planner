@@ -144,7 +144,7 @@ class FlowMatching(GenerativeModel):
     # ------------------------------------------ inference ------------------------------------------#
 
     @torch.no_grad()
-    def conditional_sample(self, cond, shape, query=None, n_timesteps=10, integration_method="midpoint", return_chain=False, n_intermediate_steps=0, **kwargs):
+    def conditional_sample(self, cond, shape, query=None, n_timesteps=5, integration_method="euler", return_chain=False, n_intermediate_steps=0, **kwargs):
         """
         Generate samples by running the flow matching ODE solver from noise to target.
         
@@ -212,6 +212,9 @@ class FlowMatching(GenerativeModel):
             query = None
 
         sol = self.conditional_sample(cond, x.shape, query=query, verbose=False, return_chain=False, **sample_kwargs)
+
+        if self.manifold is not None:
+            x = self.manifold.wrap(x)
 
         loss, info = self.loss_fn(sol.trajectories, x, loss_weights=self.loss_weights)
 

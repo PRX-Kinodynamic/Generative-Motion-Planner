@@ -25,7 +25,7 @@ def load_model_args(experiments_path):
     return JSONArgs(model_args_path)
 
 
-def load_model(experiments_path: str, model_state_name: str, strict: bool = True, verbose: bool = False) -> Tuple[GenerativeModel, JSONArgs]:
+def load_model(experiments_path: str, model_state_name: str = 'best.pt', strict: bool = True, verbose: bool = False) -> Tuple[GenerativeModel, JSONArgs]:
     model_args = load_model_args(experiments_path)
     model_path = path.join(experiments_path, model_state_name)
 
@@ -73,4 +73,17 @@ def load_model(experiments_path: str, model_state_name: str, strict: bool = True
     method_model.load_state_dict(diff_model_state, strict=False)
 
     return method_model, model_args
+
+
+def get_normalizer_params(model_args, normalizer_type: str = "trajectory"):
+    normalizer_params = None
+
+    if hasattr(model_args, "normalizer_params"):
+        normalizer_params = model_args.normalizer_params[normalizer_type]
+    elif hasattr(model_args, "normalization_params"):
+        normalizer_params = model_args.normalization_params
+    else:
+        raise ValueError("Normalizer params not found in model_args")
+
+    return normalizer_params
 

@@ -42,7 +42,7 @@ class GenerativeModel(nn.Module, ABC):
         self.has_query = has_query
         self.register_buffer("loss_weights", get_loss_weights(output_dim, prediction_length, loss_discount, loss_weights))
         self.manifold = manifold
-        self.loss_fn = Losses[loss_type](history_length, action_indices)
+        self.loss_fn = Losses[loss_type](history_length, action_indices, manifold=manifold)
 
     @abstractmethod
     def compute_loss(self, x, *args):
@@ -67,7 +67,7 @@ class GenerativeModel(nn.Module, ABC):
 
         return self.compute_loss(x, cond, query)
 
-
+    @torch.no_grad()
     def forward(self, cond, query=None, verbose=True, return_chain=False, **kwargs):
         batch_size = len(cond[0])
         shape = (batch_size, self.prediction_length, self.output_dim)

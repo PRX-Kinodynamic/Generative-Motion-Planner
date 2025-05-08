@@ -1,5 +1,7 @@
-from typing import List
+import timeit
 from math import ceil
+
+import torch
 import genMoPlan.utils as utils
 from genMoPlan.models import GenerativeModel, TemporalModel
 from scripts.estimate_roa import estimate_roa
@@ -12,13 +14,14 @@ args = parser.parse_args()
 # ---------------------------------- dataset ----------------------------------#
 # -----------------------------------------------------------------------------#
 
-dataset_config = utils.Config(
+train_dataset_config = utils.Config(
     args.loader,
     savepath=(args.savepath, "dataset_config.pkl"),
     dataset=args.dataset,
     horizon_length=args.horizon_length,
     history_length=args.history_length,
     stride=args.stride,
+    observation_dim=args.observation_dim,
     trajectory_normalizer=args.trajectory_normalizer,
     plan_normalizer=args.plan_normalizer,
     normalizer_params=args.normalizer_params,
@@ -30,7 +33,7 @@ dataset_config = utils.Config(
     use_horizon_padding=args.use_horizon_padding,
     use_plan=args.use_plan,
     is_history_conditioned=args.is_history_conditioned,
-    dt=args.dt if hasattr(args, 'dt') else None,
+    **args.safe_get("dataset_kwargs", {}),
 )
 
 args.val_dataset_size = None if not hasattr(args, 'val_dataset_size') else args.val_dataset_size
@@ -43,6 +46,7 @@ if args.val_dataset_size is not None:
         horizon_length=args.horizon_length,
         history_length=args.history_length,
         stride=args.stride,
+        observation_dim=args.observation_dim,
         trajectory_normalizer=args.trajectory_normalizer,
         plan_normalizer=args.plan_normalizer,
         normalizer_params=args.normalizer_params,
@@ -54,20 +58,20 @@ if args.val_dataset_size is not None:
         use_horizon_padding=args.use_horizon_padding,
         use_plan=args.use_plan,
         is_history_conditioned=args.is_history_conditioned,
-        dt=args.dt if hasattr(args, 'dt') else None,
         is_validation=True,
+        **args.safe_get("dataset_kwargs", {}),
     )
 
 print(f"[ scripts/train_trajectory ] Loading dataset")
-dataset = dataset_config()
-print(f"[ scripts/train_trajectory ] Training Data Size: {len(dataset)}")
+train_dataset = train_dataset_config()
+print(f"[ scripts/train_trajectory ] Training Data Size: {len(train_dataset)}")
 
 if args.val_dataset_size is not None:
     print(f"[ scripts/train_trajectory ] Loading validation dataset")
     val_dataset = val_dataset_config()
     print(f"[ scripts/train_trajectory ] Validation Data Size: {len(val_dataset)}")
 
-observation_dim = dataset.observation_dim
+observation_dim = args.observation_dim
 
 
 # -----------------------------------------------------------------------------#
@@ -123,7 +127,7 @@ trainer_config = utils.Config(
     train_lr=args.learning_rate,
     gradient_accumulate_every=args.gradient_accumulate_every,
     validation_kwargs=args.validation_kwargs,
-    val_num_batches=args.val_num_batches,
+    val_batch_size=args.val_batch_size,
     num_epochs=args.num_epochs,
     patience=args.patience,
     min_delta=args.min_delta,
@@ -137,6 +141,7 @@ trainer_config = utils.Config(
     n_reference=args.n_reference,
     method=args.method,
     exp_name=args.exp_name,
+    num_workers=args.num_workers,
 )
 
 # # -----------------------------------------------------------------------------#
@@ -147,14 +152,14 @@ ml_model: TemporalModel = ml_model_config()
 
 gen_model: GenerativeModel = gen_model_config(ml_model)
 
-trainer: utils.Trainer = trainer_config(gen_model, dataset, val_dataset)
+trainer: utils.Trainer = trainer_config(gen_model, train_dataset, val_dataset)
 
 # # -----------------------------------------------------------------------------#
 # # ---------------------------- update and save args ---------------------------#
 # # -----------------------------------------------------------------------------#
 
 args.observation_dim = observation_dim
-args.dataset_size = len(dataset)
+args.dataset_size = len(train_dataset)
 args.num_batches_per_epoch = trainer.num_batches_per_epoch
 args.num_steps_per_epoch = ceil(trainer.num_batches_per_epoch / trainer.gradient_accumulate_every)
 
@@ -165,17 +170,29 @@ args.num_steps_per_epoch = ceil(trainer.num_batches_per_epoch / trainer.gradient
 utils.report_parameters(ml_model)
 
 print("Testing forward...", end=" ", flush=True)
-batch = utils.batchify(dataset[0])
+batch = utils.batchify(train_dataset[0])
 loss, _ = gen_model.loss(*batch)
 loss.backward()
 print("✓")
 
 # -----------------------------------------------------------------------------#
-# ------------------------------ save configs --------------------------------#
+# ------------------------------ profile model --------------------------------#
+# -----------------------------------------------------------------------------#
+
+
+gen_model.eval()
+_, cond, query = train_dataset[0]
+if args.is_history_conditioned:
+    query = None
+print(f"[ scripts/train_trajectory ] Forward pass time: {timeit.timeit(lambda: gen_model.forward(cond, query), number=10) / 10} seconds")
+gen_model.train()
+
+# -----------------------------------------------------------------------------#
+# ------------------------------ save configs ---------------------------------#
 # -----------------------------------------------------------------------------#
 
 parser.save(args)
-dataset_config.save()
+train_dataset_config.save()
 ml_model_config.save()
 gen_model_config.save()
 trainer_config.save()
@@ -184,8 +201,11 @@ trainer_config.save()
 # # -----------------------------------------------------------------------------#
 # # --------------------------------- main loop ---------------------------------#
 # # -----------------------------------------------------------------------------#
-
+torch.set_num_threads(args.num_workers)
 trainer.train()
+
+if args.no_inference:
+    exit()
 
 # -----------------------------------------------------------------------------#
 # ------------------------------visualize trajectories-------------------------#
@@ -200,6 +220,10 @@ try:
     )
 except Exception as e:
     print(f"Error visualizing trajectories: {e}")
+    print(f"Error type: {type(e).__name__}")
+    print(f"Error traceback:")
+    import traceback
+    traceback.print_exc()
 
 
 # -----------------------------------------------------------------------------#
@@ -208,9 +232,13 @@ except Exception as e:
 
 try:
     estimate_roa(
-        dataset,
+        dataset=args.dataset,
         model_state_name="best.pt",
         model_path=args.savepath,
     )
 except Exception as e:
     print(f"Error estimating ROA: {e}")
+    print(f"Error type: {type(e).__name__}")
+    print(f"Error traceback:")
+    import traceback
+    traceback.print_exc()

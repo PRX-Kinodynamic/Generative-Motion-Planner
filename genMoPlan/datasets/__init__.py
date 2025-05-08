@@ -1,2 +1,2 @@
 from .trajectory import *
-from .plan import *
+from .acrobot import *

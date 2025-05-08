@@ -1,6 +1,8 @@
+from collections import defaultdict
 from math import ceil
 import os
 import copy
+from typing import List
 import numpy as np
 import torch
 import multiprocessing
@@ -17,17 +19,49 @@ def cycle(dl):
             yield data
 
 # --- Plotting Function ---
-def plot_losses(losses, filepath, title):
-    """Plots losses and saves the figure."""
+def plot_losses(losses: dict, filepath: str, title: str):
+    """Plots losses in both linear and log scale and saves the figure."""
     try:
-        plt.figure()
-        plt.plot(losses)
-        plt.title(title)
-        plt.xlabel('Step' if 'Training' in title else 'Epoch')
-        plt.ylabel('Loss')
-        plt.grid(True)
+        # Check if there are any losses to plot
+        if not losses or not any(losses.values()):
+            print(f"No data provided for plotting {title}. Skipping plot generation.")
+            return
+
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
+        
+        # Determine x-axis label based on title
+        xlabel = 'Step' if 'Training' in title else 'Epoch'
+        
+        # Linear scale plot
+        for key, loss_list in losses.items():
+            if loss_list:  # Check if the list is not empty
+                steps = range(len(loss_list))
+                ax1.plot(steps, loss_list, label=key)  # Plot each loss type
+        ax1.set_title(f"{title} (Linear Scale)")
+        ax1.set_xlabel(xlabel)
+        ax1.set_ylabel('Loss')
+        ax1.legend()  # Add legend to identify lines
+        ax1.grid(True)
+        
+        # Log scale plot
+        for key, loss_list in losses.items():
+            if loss_list:  # Check if the list is not empty
+                steps = range(len(loss_list))
+                # Filter out non-positive values for log scale if necessary
+                positive_steps = [s for s, l in zip(steps, loss_list) if l > 0]
+                positive_losses = [l for l in loss_list if l > 0]
+                if positive_losses:
+                    ax2.plot(positive_steps, positive_losses, label=key)  # Plot each loss type
+        ax2.set_yscale('log')
+        ax2.set_title(f"{title} (Log Scale)")
+        ax2.set_xlabel(xlabel)
+        ax2.set_ylabel('Loss (log)')
+        ax2.legend()  # Add legend to identify lines
+        ax2.grid(True)
+        
+        plt.tight_layout()  # Adjust layout to prevent overlap
         plt.savefig(filepath)
-        plt.close() # Close the plot to free memory
+        plt.close()  # Close the plot to free memory
     except Exception as e:
         print(f"Error plotting {title}: {e}")
 
@@ -54,7 +88,7 @@ class Trainer(object):
     def __init__(
         self,
         model: GenerativeModel,
-        dataset: torch.utils.data.Dataset,
+        train_dataset: torch.utils.data.Dataset,
         val_dataset: torch.utils.data.Dataset = None,
         validation_kwargs: dict = {},
         ema_decay: float = 0.995,
@@ -70,13 +104,14 @@ class Trainer(object):
         results_folder: str = './results',
         n_reference: int = 8,
         bucket: str = None,
-        val_num_batches: int = 10,
+        val_batch_size: int = 32,
         num_epochs: int = 100,
         patience: int = 10,
         min_delta: float = 1e-4,
         early_stopping: bool = False,
         method: str = "",
         exp_name: str = "",
+        num_workers: int = 4,
     ):
         super().__init__()
         self.model = model
@@ -94,8 +129,7 @@ class Trainer(object):
         self.validation_kwargs = validation_kwargs
         self.batch_size = batch_size
         self.gradient_accumulate_every = gradient_accumulate_every
-        self.val_num_batches = val_num_batches
-        self.dataset = dataset
+        self.train_dataset = train_dataset
         self.val_dataset = val_dataset
         self.logdir = results_folder
         self.bucket = bucket
@@ -104,17 +138,21 @@ class Trainer(object):
         self.exp_name = exp_name
 
 
-        self.num_batches_per_epoch = max(ceil(len(dataset) / (batch_size * gradient_accumulate_every)), 
+        self.num_batches_per_epoch = max(ceil(len(train_dataset) / (batch_size * gradient_accumulate_every)), 
         min_num_batches_per_epoch)
 
         print(f"[ utils/training ] Number of batches per epoch: {self.num_batches_per_epoch}")
 
+        self.val_num_batches = ceil(len(val_dataset) / (val_batch_size))
+
+        print(f"[ utils/training ] Number of validation batches: {self.val_num_batches}")
+
         self.dataloader_train = cycle(torch.utils.data.DataLoader(
-            self.dataset, batch_size=batch_size, num_workers=1, shuffle=True, pin_memory=True
+            self.train_dataset, batch_size=batch_size, num_workers=num_workers, shuffle=True, pin_memory=True
         ))
         if val_dataset is not None:
             self.dataloader_val = cycle(torch.utils.data.DataLoader(
-                self.val_dataset, batch_size=batch_size, num_workers=0, shuffle=True, pin_memory=True
+                self.val_dataset, batch_size=batch_size, num_workers=num_workers, shuffle=True, pin_memory=True
             ))
         else:
             self.dataloader_val = None
@@ -124,8 +162,8 @@ class Trainer(object):
         self.reset_parameters()
         self.step = 0
 
-        self.train_losses = []
-        self.val_losses = []
+        self.train_losses = defaultdict(lambda : [])
+        self.val_losses = defaultdict(lambda : [])
 
         os.makedirs(self.logdir, exist_ok=True)
 
@@ -142,34 +180,21 @@ class Trainer(object):
     #------------------------------------ api ------------------------------------#
     #-----------------------------------------------------------------------------#
 
-    def _plot_in_background(self, losses, filepath, title):
+    def _plot_in_background(self, losses: dict, filepath: str, title: str):
         """Helper to launch plotting in a background process."""
         # Pass a copy of the losses to avoid potential shared state issues
-        losses_copy = list(losses) 
+        losses_copy = {k: list(v) for k, v in losses.items()}  # Ensure lists are copied
         process = multiprocessing.Process(target=plot_losses, args=(losses_copy, filepath, title))
         process.start()
         # We don't join, let it run in the background
 
-    def add_train_loss(self, loss):
-        self.train_losses.append(loss)
-
-        if self.step % self.log_freq == 0:
-            filepath = os.path.join(self.logdir, 'train_loss_plot.png')
-            self._plot_in_background(self.train_losses, filepath, 'Training Loss')
-
-    def add_val_loss(self, loss):
-        self.val_losses.append(loss)
-        filepath = os.path.join(self.logdir, 'val_loss_plot.png')
-        self._plot_in_background(self.val_losses, filepath, 'Validation Loss')
-
-    def train_one_epoch(self):
+    def train_one_epoch(self, store_losses: bool = True):
         timer = Timer()
-        total_loss = 0.0
         batch_count = 0
 
         self.model.train()
-
         while batch_count < self.num_batches_per_epoch:
+            train_losses = defaultdict(lambda : 0)
             for _ in range(self.gradient_accumulate_every):
                 batch = next(self.dataloader_train)
                 batch = batch_to_device(batch)
@@ -178,12 +203,15 @@ class Trainer(object):
                 loss = loss / self.gradient_accumulate_every
                 loss.backward()
 
-                total_loss += loss.item()
+                train_losses['train_loss'] += loss.item()
+
+                for key, val in infos.items():
+                    train_losses[key] += val
+
                 batch_count += 1
 
-            actual_loss = loss.item() * self.gradient_accumulate_every
-
-            self.add_train_loss(actual_loss)
+            if store_losses:
+                self.add_train_losses(train_losses)
 
             self.optimizer.step()
             self.optimizer.zero_grad()
@@ -197,7 +225,7 @@ class Trainer(object):
                     infos_str = ' | ' + ' | '.join([f'{key}: {val:8.4f}' for key, val in info_items])
                 else:
                     infos_str = ''
-                print(f'{batch_count}: {actual_loss:8.6f}{infos_str} | t: {timer():8.4f}', flush=True)
+                print(f'{self.step}: {train_losses["train_loss"]:8.6f}{infos_str} | t: {timer():8.4f}', flush=True)
 
             self.step += 1
 
@@ -218,61 +246,65 @@ class Trainer(object):
         if self.bucket is not None:
             sync_logs(self.logdir, bucket=self.bucket, background=self.save_parallel)
 
+    def add_train_losses(self, losses):
+        for key, loss in losses.items():
+            # Ensure loss is a scalar float or int before appending
+            if isinstance(loss, (float, int)):
+                self.train_losses[key].append(loss)
+            elif hasattr(loss, 'item'):  # Handle tensors
+                self.train_losses[key].append(loss.item())
+            else:
+                print(f"Warning: Skipping non-scalar loss value for key '{key}' in train_losses: {loss}")
+
+        if self.step % self.log_freq == 0 and self.step > 0:  # Avoid plotting at step 0 if empty
+            filepath = os.path.join(self.logdir, 'train_loss_plot.png')
+            self._plot_in_background(self.train_losses, filepath, 'Training Loss')
+
+    def add_val_losses(self, losses):
+        for key, loss in losses.items():
+            # Ensure loss is a scalar float or int before appending
+            if isinstance(loss, (float, int)):
+                self.val_losses[key].append(loss)
+            elif hasattr(loss, 'item'):  # Handle tensors
+                self.val_losses[key].append(loss.item())
+            else:
+                print(f"Warning: Skipping non-scalar loss value for key '{key}' in val_losses: {loss}")
+
+        filepath = os.path.join(self.logdir, 'val_loss_plot.png')
+        self._plot_in_background(self.val_losses, filepath, 'Validation Loss')
+
     def save_losses(self):
         '''
-            saves train and val losses to disk
+            saves train and validation losses to disk
         '''
-        train_losses = np.array(self.train_losses)
-        val_losses = np.array(self.val_losses)
+        for key in self.train_losses.keys():
+            train_losses = np.array(self.train_losses[key])
+            savepath = os.path.join(self.logdir, f'train_losses_{key}.txt')
+            with open(savepath, 'w') as f:
+                f.write(f'Step\tLoss\n')
+                for i, loss in enumerate(train_losses):
+                    f.write(f'{i}\t{loss:8.8f}\n')
 
-        train_savepath = os.path.join(self.logdir, 'train_losses.txt')
-        val_savepath = os.path.join(self.logdir, 'val_losses.txt')
+        for key in self.val_losses.keys():
+            val_losses = np.array(self.val_losses[key])
+            savepath = os.path.join(self.logdir, f'val_losses_{key}.txt')
+            with open(savepath, 'w') as f:
+                f.write(f'Epoch\tLoss\n')
+                for i, loss in enumerate(val_losses):
+                    f.write(f'{i}\t{loss:8.8f}\n')
 
-        with open(train_savepath, 'w') as f:
-            f.write(f'Step\tLoss\n')
-            for i, loss in enumerate(train_losses):
-                f.write(f'{i}\t{loss:8.8f}\n')
+        print(f'[ utils/training ] Saved losses to {self.logdir}', flush=True)
 
-        with open(val_savepath, 'w') as f:
-            f.write(f'Epoch\tLoss\n')
-            for i, loss in enumerate(val_losses):
-                f.write(f'{i}\t{loss:8.8f}\n')
-
-        print(f'[ utils/training ] Saved losses to {train_savepath} and {val_savepath}', flush=True)
-
-    def load(self, epoch):
+    def load(self, model_state_name: str = 'best.pt'):
         '''
             loads model and ema from disk
         '''
-        loadpath = os.path.join(self.logdir, f'state_{epoch}.pt')
+        loadpath = os.path.join(self.logdir, model_state_name)
         data = torch.load(loadpath)
 
         self.step = data['step']
         self.model.load_state_dict(data['model'])
         self.ema_model.load_state_dict(data['ema'])
-
-    def validate(self):
-        '''
-            runs validation on the model
-        '''
-        if self.dataloader_val is None:
-            return None
-        
-        total_loss = 0.0
-
-        self.model.eval()
-        with torch.no_grad():
-            for i in range(self.val_num_batches):
-                batch = next(self.dataloader_val)
-                batch = batch_to_device(batch)
-        
-                loss, infos = self.model.validation_loss(*batch, **self.validation_kwargs)
-                total_loss += loss.item()
-
-        avg_val_loss = total_loss / self.val_num_batches
-        self.add_val_loss(avg_val_loss)
-
-        return avg_val_loss
 
     def train(self):
         best_val_loss = float('inf')
@@ -282,7 +314,7 @@ class Trainer(object):
 
         try:
             for i in range(self.num_epochs):
-                print(f"Epoch {i} / {self.num_epochs} | {self.dataset} | {self.method} | {self.exp_name}")
+                print(f"Epoch {i} / {self.num_epochs} | {self.train_dataset} | {self.method} | {self.exp_name}")
                 self.train_one_epoch()  
 
                 val_loss = self.validate()
@@ -316,5 +348,43 @@ class Trainer(object):
 
         print(f"\nTraining complete. Best validation loss: {best_val_loss:.6f}")
 
+    def validate(self, store_losses: bool = True):
+        if self.dataloader_val is None:
+            return None
+        val_losses = defaultdict(lambda : 0.0)  # Initialize with float 0.0
+        self.model.eval()
+        with torch.no_grad():
+            for i in range(self.val_num_batches):
+                try:
+                    batch = next(self.dataloader_val)
+                    batch = batch_to_device(batch)
+            
+                    loss, infos = self.model.validation_loss(*batch, **self.validation_kwargs)
+                    
+                    # Check if loss is valid
+                    if torch.isnan(loss) or torch.isinf(loss):
+                        print(f"Warning: Invalid validation loss detected (NaN/Inf) at batch {i}. Skipping.")
+                        continue
+
+                    val_losses['val_loss'] += loss.item() / self.val_num_batches
+
+                    for key, val in infos.items():
+                        # Handle potential tensor values in infos
+                        value_item = val.item() if hasattr(val, 'item') else val
+                        if isinstance(value_item, (float, int)):
+                            val_losses[key] += value_item / self.val_num_batches
+                        else:
+                            print(f"Warning: Skipping non-scalar info value for key '{key}' in validation: {value_item}")
+                            
+                except StopIteration:
+                    print("Warning: Validation dataloader exhausted before reaching val_num_batches.")
+                    # Adjust val_num_batches if it happened early, to normalize correctly
+                    if i == 0: return float('inf')  # Avoid division by zero if no batches ran
+                    break  # Exit loop
+
+        if store_losses:
+            self.add_val_losses(val_losses)
+
+        return val_losses.get('val_loss', float('inf'))  # Use .get for safety
 
             
