@@ -17,7 +17,7 @@ args_to_watch = [
 logbase = "experiments"
 
 base = {
-    "roa_estimation": {
+    "inference": {
         "attractors": {
             (-2.1, 0): 0,
             (2.1, 0): 0,

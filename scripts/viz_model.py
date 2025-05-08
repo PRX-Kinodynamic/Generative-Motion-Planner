@@ -8,10 +8,11 @@ def visualize_generated_trajectories(
         dataset, 
         num_trajs, 
         model_paths,
-        model_state_name, 
+        model_state_name,
+        observation_dim,
         batch_size=None,
     ):
-    test_trajs = load_trajectories(dataset, num_trajs)
+    test_trajs = load_trajectories(dataset, observation_dim, num_trajs)
     start_points = test_trajs[:, 0]
 
     if isinstance(model_paths, str):
@@ -54,6 +55,13 @@ if __name__ == "__main__":
         nargs="+", 
         help="Multiple experiment paths. If provided, will override --model_path"
     )
+
+    parser.add_argument(
+        "--observation_dim", 
+        type=int, 
+        required=True,
+        help="Observation dimension"
+    )
     
     parser.add_argument(
         "--model_state_name", type=str, default="best.pt", help="Model state file name"
@@ -74,4 +82,5 @@ if __name__ == "__main__":
         model_paths=args.model_paths if args.model_paths is not None else args.model_path,
         model_state_name=args.model_state_name,
         batch_size=args.batch_size,
+        observation_dim=args.observation_dim,
     )

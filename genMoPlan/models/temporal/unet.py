@@ -64,10 +64,10 @@ class TemporalUnet(TemporalModel):
             print(f"[ models/unet ] Channel dimensions: {in_out}, time_embed_dim: {time_embed_dim}")
 
         self.time_mlp = nn.Sequential(
-            SinusoidalPosEmb(base_hidden_dim),
-            nn.Linear(base_hidden_dim, base_hidden_dim * 4),
+            SinusoidalPosEmb(time_embed_dim),
+            nn.Linear(time_embed_dim, time_embed_dim * 4),
             nn.Mish(),
-            nn.Linear(base_hidden_dim * 4, base_hidden_dim),
+            nn.Linear(time_embed_dim * 4, time_embed_dim),
         )
 
         self.downs = nn.ModuleList([])
