@@ -15,7 +15,7 @@ def estimate_roa(
     analyze=False, 
     verbose=True, 
     attractor_dist_threshold=None,
-    attractor_prob_threshold=None
+    attractor_prob_threshold=None,
 ):
     if batch_size is not None:
         batch_size = int(batch_size)

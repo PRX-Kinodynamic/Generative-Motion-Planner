@@ -33,9 +33,9 @@ base = {
         "clip_denoised": False,
         "observation_dim": 6,
         "has_query": False,
-        "horizon_length": 13,
-        "history_length": 3,
-        "stride": 10,
+        "history_length": 5,
+        "horizon_length": 3,
+        "stride": 30,
 
         #-------------------------------- dataset --------------------------------#
         "loader": "datasets.AcrobotDataset",
@@ -57,7 +57,7 @@ base = {
         "train_dataset_size": None,
         "is_history_conditioned": True,
         "dataset_kwargs": {
-            "use_original_data": True,
+            "use_original_data": False,
             "only_optimal": True,
             "velocity_limit": 20.0,
         },
