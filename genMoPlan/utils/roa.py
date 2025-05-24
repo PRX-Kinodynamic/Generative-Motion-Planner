@@ -8,6 +8,7 @@ import numpy as np
 import torch
 import warnings
 import matplotlib.pyplot as plt
+from typing import Optional
 
 from tqdm import tqdm
 
@@ -43,11 +44,11 @@ def _load_attractor_labels(file_path):
         print(f"[ utils/roa ] Error loading attractor labels from {file_path}: {e}")
         return None, None
 
-def _get_latest_timestamp(model_path):
+def _get_latest_timestamp(model_path, final_state_directory):
     if not os.path.exists(model_path) or len(os.listdir(model_path)) == 0:
         return None
     
-    timestamps = [path.basename(d) for d in glob.glob(path.join(model_path, "generated_trajectories", "*"))]
+    timestamps = [path.basename(d) for d in glob.glob(path.join(model_path, final_state_directory, "*"))]
     return max(timestamps)
 
 class ROAEstimator:
@@ -69,6 +70,7 @@ class ROAEstimator:
     model: torch.nn.Module = None
     model_args: JSONArgs = None
     batch_size: int = None
+    horizon_length: int = None
     max_path_length: int = None
     conditional_sample_kwargs: dict = None
 
@@ -98,14 +100,22 @@ class ROAEstimator:
     fp_mask: np.ndarray = None
     fn_mask: np.ndarray = None
     
-    def __init__(self, dataset:str, model_state_name: str = "best.pt", model_path: str = None, n_runs: int = None, batch_size: int = None, verbose: bool = True, num_batches: int = None):
+    def __init__(self, 
+        dataset:str, 
+        model_state_name: str = "best.pt", 
+        model_path: str = None, 
+        n_runs: int = None, 
+        batch_size: int = None, 
+        verbose: bool = True, 
+        num_batches: int = None,
+    ):
         self.dataset = dataset
         self.model_path = model_path
         self.verbose = verbose
         self.num_batches = num_batches
+        self.batch_size = batch_size
 
         self._orig_n_runs = n_runs
-        self._orig_batch_size = batch_size
 
         self._load_model(model_state_name)
         self._load_params()
@@ -123,19 +133,21 @@ class ROAEstimator:
 
         self.n_runs = self._orig_n_runs if self._orig_n_runs is not None else self.inference_params["n_runs"]
         self._expected_n_runs = self.n_runs
-        self.batch_size = self._orig_batch_size if self._orig_batch_size is not None else self.inference_params["batch_size"]
+        self.batch_size = self.batch_size if self.batch_size is not None else self.inference_params["batch_size"]
 
         self.attractor_dist_threshold = self.inference_params["attractor_dist_threshold"]
         self.attractor_prob_threshold = self.inference_params["attractor_prob_threshold"]
         self.attractors = self.inference_params["attractors"]
         self.invalid_label = self.inference_params["invalid_label"]
         self.max_path_length = self.inference_params["max_path_length"]
-
+        self.final_state_directory = self.inference_params["final_state_directory"]
         self.labels_set = set(list(self.attractors.values()))
         self.labels_array = np.array([*self.labels_set, self.invalid_label])    
 
         self.method_name = get_method_name(self.model_args)
         self.conditional_sample_kwargs = self.inference_params[self.method_name] if self.method_name in self.inference_params else {}
+
+        self.horizon_length = self.model_args["horizon_length"]
 
     def set_attractor_dist_threshold(self, attractor_dist_threshold: float):
         self.attractor_dist_threshold = attractor_dist_threshold
@@ -149,7 +161,31 @@ class ROAEstimator:
         self.batch_size = batch_size
         self.inference_params["batch_size"] = batch_size
 
-    def reset_for_analysis(self):
+    def set_horizon_and_max_path_lengths(self, horizon_length: Optional[int] = None, max_path_length: Optional[int] = None, num_inference_steps: Optional[int] = None):
+        if horizon_length is not None:
+            self.horizon_length = horizon_length
+            self.inference_params["horizon_length"] = horizon_length
+
+        if max_path_length is None and num_inference_steps is None:
+            return
+        
+        if max_path_length is not None and num_inference_steps is not None:
+            raise ValueError("Cannot set both max_path_length and num_inference_steps")
+        
+        if max_path_length is not None:
+            self.max_path_length = max_path_length
+            self.inference_params["max_path_length"] = max_path_length
+        else:
+            self.max_path_length = num_inference_steps * self.horizon_length
+            self.inference_params["max_path_length"] = self.max_path_length
+
+    def reset(self, for_analysis: bool = False):
+        """
+        Resets the ROAEstimator for new runs while retaining the ground truth data
+
+        Args:
+            for_analysis: If True, only the analysis results will be reset but the run data will be retained.
+        """
         self.results_path = None
         self.traj_plot_path = None
         self._load_params()
@@ -164,6 +200,15 @@ class ROAEstimator:
         self.fp_mask = None
         self.fn_mask = None
 
+        if for_analysis:
+            return
+        
+        self.final_states = None
+        self.trajectories = None
+        self.start_points = None
+        self.expected_labels = None
+        self.n_runs = self._orig_n_runs
+        
     def _setup_results_path(self):
         if self.results_path is not None:
             return
@@ -252,7 +297,7 @@ class ROAEstimator:
     @timestamp.setter
     def timestamp(self, value):
         self._timestamp = value
-        self.gen_traj_path = path.join(self.model_path, "generated_trajectories", self._timestamp)
+        self.gen_traj_path = path.join(self.model_path, self.final_state_directory, self._timestamp)
 
         if not os.path.exists(self.gen_traj_path):
             os.makedirs(self.gen_traj_path)
@@ -260,13 +305,23 @@ class ROAEstimator:
         self._save_inference_params(self.gen_traj_path)
         
     
-    def _generate_single_run_trajs(self, run_idx, compute_labels, discard_trajectories, save):
+    def _generate_single_run_trajs(
+            self,
+            run_idx,
+            compute_labels,
+            discard_trajectories,
+            save,
+        ):
         from genMoPlan.utils import generate_trajectories
 
         results = generate_trajectories(
-            self.model, self.model_args, self.start_points, 
-            max_path_length=self.max_path_length,
-            only_execute_next_step=False, verbose=self.verbose, batch_size=self.batch_size, 
+            self.model, 
+            self.model_args, 
+            self.start_points, 
+            max_path_length=self.max_path_length, 
+            horizon_length=self.horizon_length,
+            verbose=self.verbose, 
+            batch_size=self.batch_size, 
             only_return_final_states=discard_trajectories,
             conditional_sample_kwargs=self.conditional_sample_kwargs,
             post_process_fns=self.inference_params["post_process_fns"],
@@ -288,8 +343,8 @@ class ROAEstimator:
             attractor_labels = get_trajectory_attractor_labels(final_states, self.attractors, self.attractor_dist_threshold, self.invalid_label, verbose=self.verbose)
             self.attractor_labels.append(attractor_labels)
 
-            if save:
-                self._save_single_run_data(run_idx, final_states, attractor_labels)
+        if save:
+            self._save_single_run_data(run_idx, final_states)
                 
         if not discard_trajectories:
             self.trajectories.append(generated_trajs)
@@ -307,13 +362,12 @@ class ROAEstimator:
 
         self.final_states.append(final_states)
     
-    def _save_single_run_data(self, run_idx, final_states, attractor_labels):
+    def _save_single_run_data(self, run_idx, final_states):
         file_path = path.join(self.gen_traj_path, f"attractor_labels_{run_idx}.txt")
         with open(file_path, "w") as f:
             f.write("# ")
             for i in range(self.start_points.shape[1]):
                 f.write(f"start_{i} ")
-            f.write("label ")
             for i in range(final_states.shape[1]):
                 f.write(f"final_{i} ")
             f.write("\n")
@@ -322,8 +376,6 @@ class ROAEstimator:
                 for i in range(self.start_points.shape[1]):
                     f.write(f"{self.start_points[start_point_idx, i]} ")
                     
-                f.write(f"{attractor_labels[start_point_idx]} ")
-                
                 for i in range(final_states.shape[1]):
                     f.write(f"{final_states[start_point_idx, i]} ")
                 
@@ -338,10 +390,6 @@ class ROAEstimator:
             save: bool = False,
         ):
         from genMoPlan.utils.progress import ETAIterator
-
-        if save and not compute_labels:
-            warnings.warn("Cannot save final states without computing attractor labels")
-            compute_labels = True
 
         if self._timestamp is None:
             from genMoPlan.utils import generate_timestamp
@@ -444,10 +492,18 @@ class ROAEstimator:
             self._save_single_run_data(run_idx, final_states, attractor_labels)
         
         print(f"[ utils/roa ] Attractor labels saved in {self.gen_traj_path}")
+
+    def save_generated_trajectories(self):
+        if self.verbose:
+            print(f"[ utils/roa ] Saving generated trajectories")
+        if self.trajectories is None:
+            raise ValueError("No generated trajectories available")
+        
+        
     
     def load_final_states(self, timestamp: str = None, parallel=True):
         if timestamp is None:
-            self.timestamp = _get_latest_timestamp(self.model_path)
+            self.timestamp = _get_latest_timestamp(self.model_path, self.final_state_directory)
 
         all_predicted_labels = []
         all_final_states = []

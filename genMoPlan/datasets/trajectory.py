@@ -89,12 +89,8 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         if type(trajectory_normalizer) == str:
             trajectory_normalizer = eval(trajectory_normalizer)
 
-        breakpoint()
-
         trajectory_normalizer = trajectory_normalizer(X=trajectories, params=normalizer_params["trajectory"])
         normed_all_trajectories = trajectory_normalizer(all_trajectories)
-
-        breakpoint()
 
         # Split all trajectories into individual trajectories
         normed_trajectories = []

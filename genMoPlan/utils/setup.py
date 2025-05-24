@@ -6,6 +6,7 @@ import random
 import sys
 import time
 from typing import List
+import warnings
 
 import numpy as np
 import torch
@@ -98,7 +99,11 @@ class Args:
         object.__setattr__(self, '_args', args)
 
     def __getattr__(self, key):
-        return getattr(self._args, key)
+        if hasattr(self._args, key):
+            return getattr(self._args, key)
+        else:
+            warnings.warn(f"'Args' object has no attribute '{key}'")
+            return None
         
     def __setattr__(self, key, value):
         if key == '_args':

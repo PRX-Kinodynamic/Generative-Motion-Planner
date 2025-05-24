@@ -39,7 +39,7 @@ base = {
         "attractor_prob_threshold": 0.98,
         "max_path_length": 502,
         "flow_matching": {
-            "n_timesteps": 100,
+            "n_timesteps": 5,
             "integration_method": "euler",
         },
         "post_process_fns": [
@@ -48,6 +48,8 @@ base = {
         "post_process_fn_kwargs": {
             "angle_indices": [0],
         },
+        "final_state_directory": "final_states",
+        "generated_trajectory_directory": "generated_trajectories",
     },
 
     "base": {
