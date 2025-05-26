@@ -14,22 +14,22 @@ roa_estimator = ROAEstimator(
 
 roa_estimator.load_ground_truth()
 
-start_points = roa_estimator.start_points
+start_states = roa_estimator.start_states
 
 # Compute indices of start points with absolute values above (2.5, 3)
 import numpy as np
 
 # Get absolute values of start points
-abs_start_points = np.abs(start_points)
+abs_start_states = np.abs(start_states)
 
 # Find indices where absolute values exceed the thresholds (2.5, 3)
 # Using AND condition instead of OR
 edge_indices = np.where(
-    (abs_start_points[:, 0] > 2.5) & 
-    (abs_start_points[:, 1] > 3)
+    (abs_start_states[:, 0] > 2.5) & 
+    (abs_start_states[:, 1] > 3)
 )[0]
 
-roa_estimator.start_points = start_points[edge_indices]
+roa_estimator.start_states = start_states[edge_indices]
 roa_estimator.expected_labels = roa_estimator.expected_labels[edge_indices]
 
 roa_estimator.timestamp = "limited_trajectories"

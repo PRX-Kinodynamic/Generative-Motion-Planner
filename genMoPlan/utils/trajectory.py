@@ -115,7 +115,7 @@ def generate_trajectories(
     if model_args.trajectory_normalizer is not None:
         normalizer: Normalizer = get_normalizer(model_args.trajectory_normalizer, get_normalizer_params(model_args))
 
-        start_states = normalizer.normalize(unnormalized_start_states)
+        start_states = normalizer(unnormalized_start_states)
     else:
         start_states = unnormalized_start_states
         normalizer = None
