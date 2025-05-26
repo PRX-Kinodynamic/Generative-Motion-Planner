@@ -10,6 +10,9 @@ from scripts.viz_model import visualize_generated_trajectories
 parser = utils.TrainingParser()
 args = parser.parse_args()
 
+utils.set_device(args.device)
+print(f"Using device: {utils.DEVICE}\n")
+
 # -----------------------------------------------------------------------------#
 # ---------------------------------- dataset ----------------------------------#
 # -----------------------------------------------------------------------------#
