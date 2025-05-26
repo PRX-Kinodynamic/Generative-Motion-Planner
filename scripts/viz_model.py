@@ -13,14 +13,14 @@ def visualize_generated_trajectories(
         batch_size=None,
     ):
     test_trajs = load_trajectories(dataset, observation_dim, num_trajs)
-    start_points = test_trajs[:, 0]
+    start_states = test_trajs[:, 0]
 
     if isinstance(model_paths, str):
         model_paths = [model_paths]
 
     for model_path in model_paths:
         roa_estimator = ROAEstimator(dataset, model_state_name, model_path, n_runs=1, batch_size=batch_size, verbose=True)
-        roa_estimator.start_points = start_points
+        roa_estimator.start_states = start_states
         roa_estimator.generate_trajectories(compute_labels=False, discard_trajectories=False, save=False)
         roa_estimator.plot_trajectories()
 
