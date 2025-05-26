@@ -114,6 +114,7 @@ class ROAEstimator:
         self.verbose = verbose
         self.num_batches = num_batches
         self.batch_size = batch_size
+        self.device = device
 
         self._orig_n_runs = n_runs
 
@@ -124,7 +125,7 @@ class ROAEstimator:
     def _load_model(self, model_state_name: str):
         from genMoPlan.utils import load_model
 
-        self.model, self.model_args = load_model(self.model_path, model_state_name, verbose=self.verbose, strict=False)
+        self.model, self.model_args = load_model(self.model_path, self.device, model_state_name, verbose=self.verbose, strict=False)
     
     def _load_params(self):
         from genMoPlan.utils import load_inference_params, get_method_name
@@ -319,6 +320,7 @@ class ROAEstimator:
             self.model_args, 
             self.start_points, 
             max_path_length=self.max_path_length, 
+            device=self.device,
             horizon_length=self.horizon_length,
             verbose=self.verbose, 
             batch_size=self.batch_size, 

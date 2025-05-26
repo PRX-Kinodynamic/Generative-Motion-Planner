@@ -25,14 +25,21 @@ def load_model_args(experiments_path):
     return JSONArgs(model_args_path)
 
 
-def load_model(experiments_path: str, model_state_name: str = 'best.pt', strict: bool = True, verbose: bool = False) -> Tuple[GenerativeModel, JSONArgs]:
+def load_model(
+        experiments_path: str,
+        device: str,
+        model_state_name: str = 'best.pt',
+        strict: bool = True,
+        verbose: bool = False
+        
+    ) -> Tuple[GenerativeModel, JSONArgs]:
     model_args = load_model_args(experiments_path)
     model_path = path.join(experiments_path, model_state_name)
 
     if verbose:
         print(f"[ utils/model ] Loading model from {model_path}")
 
-    model_state_dict = torch.load(model_path, weights_only=False)
+    model_state_dict = torch.load(model_path, weights_only=False, map_location=torch.device(device))
     diff_model_state = model_state_dict["model"]
 
     ml_model_class = import_class(model_args.model, verbose)
@@ -50,7 +57,7 @@ def load_model(experiments_path: str, model_state_name: str = 'best.pt', strict:
         query_dim=0 if model_args.is_history_conditioned else model_args.observation_dim,
         verbose=verbose,
         **model_args.model_kwargs,
-    ).to(model_args.device)
+    ).to(device)
 
     method_model: GenerativeModel = method_class(
         model=ml_model,
@@ -67,7 +74,7 @@ def load_model(experiments_path: str, model_state_name: str = 'best.pt', strict:
         manifold=model_args.manifold,
         verbose=verbose,
         **model_args.method_kwargs,
-    ).to(model_args.device)
+    ).to(device)
 
     # Load model state dict
     method_model.load_state_dict(diff_model_state, strict=False)
