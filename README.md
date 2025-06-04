@@ -17,7 +17,7 @@ GenMoPlan is a research framework for training diffusion-based and flow-matching
 ## Project Structure
 
 ```
-genMoPlan/
+Generative-Motion-Planner/
 ├── genMoPlan/         # Main package
 │   ├── models/         # Model implementations
 │   ├── datasets/       # Dataset implementations
@@ -47,13 +47,20 @@ Each trajectory file (`sequence_<n>.txt`) contains comma-separated state variabl
 ```bash
 # Clone the repository
 git clone https://github.com/PRX-Kinodynamic/Generative-Motion-Planner.git
-cd genMoPlan
+cd Generative-Motion-Planner
 
 # Create conda environment and install packages
 conda env create -f environment.yml
 
 # Activate the environment
 conda activate genMoPlan
+
+# Install flow_matching dependency
+git clone https://github.com/Ewerton-Vieira/flow_matching.git
+cd flow_matching
+conda env update --name genMoPlan --file environment.yml
+pip install -e .
+cd ../Generative-Motion-Planner
 
 # Install genMoPlan as an editable package
 pip install -e .
