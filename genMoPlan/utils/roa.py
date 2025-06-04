@@ -71,6 +71,7 @@ class ROAEstimator:
     model_args: JSONArgs = None
     batch_size: int = None
     horizon_length: int = None
+    history_length: int = None
     max_path_length: int = None
     conditional_sample_kwargs: dict = None
 
@@ -126,7 +127,7 @@ class ROAEstimator:
     def _load_model(self, model_state_name: str):
         from genMoPlan.utils import load_model
 
-        self.model, self.model_args = load_model(self.model_path, self.device, model_state_name, verbose=self.verbose, strict=False)
+        self.model, self.model_args = load_model(self.model_path, self.device, model_state_name, verbose=self.verbose)
     
     def _load_params(self):
         from genMoPlan.utils import load_inference_params, get_method_name
@@ -150,6 +151,7 @@ class ROAEstimator:
         self.conditional_sample_kwargs = self.inference_params[self.method_name] if self.method_name in self.inference_params else {}
 
         self.horizon_length = self.model_args["horizon_length"]
+        self.history_length = self.model_args["history_length"]
 
     def set_attractor_dist_threshold(self, attractor_dist_threshold: float):
         self.attractor_dist_threshold = attractor_dist_threshold
@@ -163,7 +165,7 @@ class ROAEstimator:
         self.batch_size = batch_size
         self.inference_params["batch_size"] = batch_size
 
-    def set_horizon_and_max_path_lengths(self, horizon_length: Optional[int] = None, max_path_length: Optional[int] = None, num_inference_steps: Optional[int] = None):
+    def set_horizon_and_max_path_lengths(self, horizon_length: Optional[int] = None, *, max_path_length: Optional[int] = None, num_inference_steps: Optional[int] = None):
         if horizon_length is not None:
             self.horizon_length = horizon_length
             self.inference_params["horizon_length"] = horizon_length
@@ -178,7 +180,7 @@ class ROAEstimator:
             self.max_path_length = max_path_length
             self.inference_params["max_path_length"] = max_path_length
         else:
-            self.max_path_length = num_inference_steps * self.horizon_length
+            self.max_path_length = (num_inference_steps * self.horizon_length) + self.history_length
             self.inference_params["max_path_length"] = self.max_path_length
 
     def reset(self, for_analysis: bool = False):
@@ -207,8 +209,6 @@ class ROAEstimator:
         
         self.final_states = None
         self.trajectories = None
-        self.start_states = None
-        self.expected_labels = None
         self.n_runs = self._orig_n_runs
         
     def _setup_results_path(self):
@@ -394,7 +394,7 @@ class ROAEstimator:
         ):
         from genMoPlan.utils.progress import ETAIterator
 
-        if self._timestamp is None:
+        if self._timestamp is None and save:
             from genMoPlan.utils import generate_timestamp
 
             self.timestamp = generate_timestamp()

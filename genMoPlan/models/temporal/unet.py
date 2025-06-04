@@ -174,7 +174,7 @@ class TemporalUnet(TemporalModel):
             h_val = h.pop()
             x = torch.cat((x, h_val), dim=1)
             x = resnet(x, t)
-            x = resnet2(x, t)
+            x = resnet2(x, t,)
             x = attn(x)
             x = upsample(x)
 

@@ -9,30 +9,22 @@ class Normalizer:
         parent class, subclass by defining the `normalize` and `unnormalize` methods
     '''
 
-    def __init__(self, params=None, **kwargs):
+    def __init__(self, params: dict = None, **kwargs) -> None: # type: ignore
         if params is None:
             raise ValueError('params must be provided')
-
+        
         self.params = params
 
         for key, value in params.items():
             setattr(self, key, value)
 
-        self.X = None
-
-    def __repr__(self):
-        return (
-            f'''[ Normalizer ] dim: {self.mins.size}\n    -: '''
-            f'''{np.round(self.mins, 2)}\n    +: {np.round(self.maxs, 2)}\n'''
-        )
-
-    def __call__(self, x):
+    def __call__(self, x) -> np.ndarray:
         return self.normalize(x)
 
-    def normalize(self, *args, **kwargs):
+    def normalize(self, *args, **kwargs) -> np.ndarray:
         raise NotImplementedError()
 
-    def unnormalize(self, *args, **kwargs):
+    def unnormalize(self, *args, **kwargs) -> np.ndarray:
         raise NotImplementedError()
 
 
@@ -41,10 +33,12 @@ class DebugNormalizer(Normalizer):
         identity function
     '''
 
-    def normalize(self, x, *args, **kwargs):
+    def normalize(self, *args, **kwargs) -> np.ndarray:
+        x: np.ndarray = args[0]
         return x
 
-    def unnormalize(self, x, *args, **kwargs):
+    def unnormalize(self, *args, **kwargs) -> np.ndarray:
+        x: np.ndarray = args[0]
         return x
 
 
@@ -52,11 +46,13 @@ class GaussianNormalizer(Normalizer):
     '''
         normalizes to zero mean and unit variance
     '''
-    means = None
-    stds = None
+    means: np.ndarray = None # type: ignore
+    stds: np.ndarray = None # type: ignore
+    X: np.ndarray = None # type: ignore
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.X = args[0]
 
         self._indices_to_normalize = []
 
@@ -90,11 +86,13 @@ class GaussianNormalizer(Normalizer):
             f'''stds: {np.round(self.params['stds'], 2)}\n'''
         )
 
-    def normalize(self, x):
+    def normalize(self, *args, **kwargs) -> np.ndarray:
+        x: np.ndarray = args[0].copy()
         x[..., self._indices_to_normalize] = (x[..., self._indices_to_normalize] - self.means) / self.stds
         return x
 
-    def unnormalize(self, x):
+    def unnormalize(self, *args, **kwargs) -> np.ndarray:
+        x: np.ndarray = args[0].copy()
         x[..., self._indices_to_normalize] = x[..., self._indices_to_normalize] * self.stds + self.means
         return x
 
@@ -103,8 +101,8 @@ class LimitsNormalizer(Normalizer):
     '''
         maps [ xmin, xmax ] to [ -1, 1 ]
     '''
-    mins = None
-    maxs = None
+    mins: np.ndarray = None # type: ignore
+    maxs: np.ndarray = None # type: ignore
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -124,14 +122,32 @@ class LimitsNormalizer(Normalizer):
             self.mins = np.array(mins)
             self.maxs = np.array(maxs)
 
-    def normalize(self, x):
+    def __repr__(self) -> str:
+        return (
+            f'''[ Normalizer ] dim: {self.mins.size}\n    -: '''
+            f'''{np.round(self.mins, 2)}\n    +: {np.round(self.maxs, 2)}\n'''
+        )
+
+    def normalize(self, *args, **kwargs) -> np.ndarray:
+        x: np.ndarray = args[0]
+        x = x.copy()
+
+        assert np.all(x[..., self._indices_to_normalize].min(axis=0) >= self.mins), f'Min value {x[..., self._indices_to_normalize].min(axis=0)} < Limit Min Value {self.mins}'
+        assert np.all(x[..., self._indices_to_normalize].max(axis=0) <= self.maxs), f'Max value {x[..., self._indices_to_normalize].max(axis=0)} > Limit Max Value {self.maxs}'
+
         ## [ 0, 1 ]
         x[..., self._indices_to_normalize] = (x[..., self._indices_to_normalize] - self.mins) / (self.maxs - self.mins)
         ## [ -1, 1 ]
         x[..., self._indices_to_normalize] = 2 * x[..., self._indices_to_normalize] - 1
+
+        assert np.all(x[..., self._indices_to_normalize].min(axis=0) >= -1), f'Normalized Min value {x[..., self._indices_to_normalize].min(axis=0)} < -1'
+        assert np.all(x[..., self._indices_to_normalize].max(axis=0) <= 1), f'Normalized Max value {x[..., self._indices_to_normalize].max(axis=0)} > 1'
+
         return x
 
-    def unnormalize(self, x, eps=1e-4):
+    def unnormalize(self, *args, **kwargs) -> np.ndarray:
+        x: np.ndarray = args[0].copy()
+        eps: float = kwargs.get('eps', 1e-4)
         '''
             x : [ -1, 1 ]
         '''
@@ -146,6 +162,6 @@ class LimitsNormalizer(Normalizer):
 
         return x
     
-def get_normalizer(normalizer_name, params):
+def get_normalizer(normalizer_name: str, params: dict) -> Normalizer:
     normalizer_class = eval(normalizer_name)
     return normalizer_class(params=params)

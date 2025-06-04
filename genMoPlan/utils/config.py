@@ -67,7 +67,10 @@ class Config:
             raise AttributeError(attr)
 
     def __call__(self, *args, **kwargs):
-        instance = self._class(*args, **kwargs, **self._dict)
+        instance = self._class(*args, **kwargs, **self._dict, device=self._device)
         if self._device:
-            instance = instance.to(self._device)
+            try:
+                instance = instance.to(self._device)
+            except:
+                pass
         return instance

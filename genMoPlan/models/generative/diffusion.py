@@ -159,7 +159,8 @@ class Diffusion(GenerativeModel):
         noise = torch.randn_like(x_target)
 
         x_noisy = self.q_sample(x_target=x_target, t=t, noise=noise)
-        x_noisy = apply_conditioning(x_noisy, cond)
+        
+        apply_conditioning(x_noisy, cond)
 
         x_recon = self.model(x_noisy, query, t)
 
@@ -168,7 +169,7 @@ class Diffusion(GenerativeModel):
         if self.predict_epsilon:
             loss, info = self.loss_fn(x_recon, noise, self.loss_weights)
         else:
-            x_recon = apply_conditioning(x_recon, cond)
+            apply_conditioning(x_recon, cond)
             loss, info = self.loss_fn(x_recon, x_target, self.loss_weights)
 
         return loss, info
@@ -253,7 +254,7 @@ class Diffusion(GenerativeModel):
 
         batch_size = shape[0]
         x = torch.randn(shape, device=device)
-        x = apply_conditioning(x, cond)
+        apply_conditioning(x, cond)
 
         chain = [x] if return_chain else None
 
@@ -261,7 +262,7 @@ class Diffusion(GenerativeModel):
         for i in reversed(range(0, self.n_timesteps)):
             t = make_timesteps(batch_size, i, device)
             x, values = sample_fn(self, x, query, t, **sample_kwargs)
-            x = apply_conditioning(x, cond)
+            apply_conditioning(x, cond)
 
             progress.update(
                 {"t": i, "vmin": values.min().item(), "vmax": values.max().item()}

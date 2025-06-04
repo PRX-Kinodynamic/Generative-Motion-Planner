@@ -54,6 +54,7 @@ base = {
 
     "base": {
         "action_indices": None,
+        "angle_indices": [0],
         "loss_type": "l2",
         "loss_weights": None,
         "loss_discount": 1,

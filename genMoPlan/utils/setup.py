@@ -23,7 +23,8 @@ def set_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 def watch_dict(args_to_watch):
@@ -167,7 +168,11 @@ class Parser(Tap):
 
         for k, v in kwargs.items():
             self._args.append(f"--{str(k)}")
-            self._args.append(str(v))
+            if isinstance(v, list):
+                for item in v:
+                    self._args.append(str(item))
+            else:
+                self._args.append(str(v))
         
 
     def save(self, args):

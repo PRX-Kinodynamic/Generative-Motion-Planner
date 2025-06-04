@@ -29,7 +29,6 @@ def load_model(
         experiments_path: str,
         device: str,
         model_state_name: str = 'best.pt',
-        strict: bool = True,
         verbose: bool = False
         
     ) -> Tuple[GenerativeModel, JSONArgs]:
