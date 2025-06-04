@@ -8,6 +8,7 @@ import numpy as np
 import torch
 import warnings
 import matplotlib.pyplot as plt
+from typing import Optional
 
 from tqdm import tqdm
 
@@ -17,7 +18,7 @@ from genMoPlan.utils.trajectory import plot_trajectories
 def _load_attractor_labels(file_path):
     labels = []
     final_states = []
-    start_points = []
+    start_states = []
     start_dim = 0
     final_dim = 0
 
@@ -34,7 +35,7 @@ def _load_attractor_labels(file_path):
                     
                     continue
 
-                start_points.append([np.float32(value) for value in line_data[0:start_dim]])
+                start_states.append([np.float32(value) for value in line_data[0:start_dim]])
                 labels.append(int(float(line_data[start_dim])))
                 final_states.append([np.float32(value) for value in line_data[start_dim + 1:start_dim + final_dim + 1]])
 
@@ -43,11 +44,11 @@ def _load_attractor_labels(file_path):
         print(f"[ utils/roa ] Error loading attractor labels from {file_path}: {e}")
         return None, None
 
-def _get_latest_timestamp(model_path):
+def _get_latest_timestamp(model_path, final_state_directory):
     if not os.path.exists(model_path) or len(os.listdir(model_path)) == 0:
         return None
     
-    timestamps = [path.basename(d) for d in glob.glob(path.join(model_path, "generated_trajectories", "*"))]
+    timestamps = [path.basename(d) for d in glob.glob(path.join(model_path, final_state_directory, "*"))]
     return max(timestamps)
 
 class ROAEstimator:
@@ -69,11 +70,13 @@ class ROAEstimator:
     model: torch.nn.Module = None
     model_args: JSONArgs = None
     batch_size: int = None
+    horizon_length: int = None
+    history_length: int = None
     max_path_length: int = None
     conditional_sample_kwargs: dict = None
 
 
-    start_points: np.ndarray = None
+    start_states: np.ndarray = None
     expected_labels: np.ndarray = None
     n_runs: int = None
     _expected_n_runs: int = None
@@ -84,7 +87,7 @@ class ROAEstimator:
     separatrix_indices: np.ndarray = None
 
     # Classification
-    roa_estimation_params: dict = None
+    inference_params: dict = None
     attractor_labels: np.ndarray = None
     label_probabilities: np.ndarray = None
     invalid_label: int = None
@@ -98,14 +101,24 @@ class ROAEstimator:
     fp_mask: np.ndarray = None
     fn_mask: np.ndarray = None
     
-    def __init__(self, dataset:str, model_state_name: str = "best.pt", model_path: str = None, n_runs: int = None, batch_size: int = None, verbose: bool = True, num_batches: int = None):
+    def __init__(self, 
+        dataset:str, 
+        model_state_name: str = "best.pt", 
+        model_path: str = None, 
+        n_runs: int = None, 
+        batch_size: int = None, 
+        verbose: bool = True, 
+        num_batches: int = None,
+        device: str ='cuda',
+    ):
         self.dataset = dataset
         self.model_path = model_path
         self.verbose = verbose
         self.num_batches = num_batches
+        self.batch_size = batch_size
+        self.device = device
 
         self._orig_n_runs = n_runs
-        self._orig_batch_size = batch_size
 
         self._load_model(model_state_name)
         self._load_params()
@@ -114,42 +127,69 @@ class ROAEstimator:
     def _load_model(self, model_state_name: str):
         from genMoPlan.utils import load_model
 
-        self.model, self.model_args = load_model(self.model_path, model_state_name, verbose=self.verbose, strict=False)
+        self.model, self.model_args = load_model(self.model_path, self.device, model_state_name, verbose=self.verbose)
     
     def _load_params(self):
-        from genMoPlan.utils import load_roa_estimation_params, get_method_name
+        from genMoPlan.utils import load_inference_params, get_method_name
 
-        self.roa_estimation_params = load_roa_estimation_params(self.dataset)
+        self.inference_params = load_inference_params(self.dataset)
 
-        self.n_runs = self._orig_n_runs if self._orig_n_runs is not None else self.roa_estimation_params["n_runs"]
+        self.n_runs = self._orig_n_runs if self._orig_n_runs is not None else self.inference_params["n_runs"]
         self._expected_n_runs = self.n_runs
-        self.batch_size = self._orig_batch_size if self._orig_batch_size is not None else self.roa_estimation_params["batch_size"]
+        self.batch_size = self.batch_size if self.batch_size is not None else self.inference_params["batch_size"]
 
-        self.attractor_dist_threshold = self.roa_estimation_params["attractor_dist_threshold"]
-        self.attractor_prob_threshold = self.roa_estimation_params["attractor_prob_threshold"]
-        self.attractors = self.roa_estimation_params["attractors"]
-        self.invalid_label = self.roa_estimation_params["invalid_label"]
-        self.max_path_length = self.roa_estimation_params["max_path_length"]
-
+        self.attractor_dist_threshold = self.inference_params["attractor_dist_threshold"]
+        self.attractor_prob_threshold = self.inference_params["attractor_prob_threshold"]
+        self.attractors = self.inference_params["attractors"]
+        self.invalid_label = self.inference_params["invalid_label"]
+        self.max_path_length = self.inference_params["max_path_length"]
+        self.final_state_directory = self.inference_params["final_state_directory"]
         self.labels_set = set(list(self.attractors.values()))
         self.labels_array = np.array([*self.labels_set, self.invalid_label])    
 
         self.method_name = get_method_name(self.model_args)
-        self.conditional_sample_kwargs = self.roa_estimation_params[self.method_name] if self.method_name in self.roa_estimation_params else {}
+        self.conditional_sample_kwargs = self.inference_params[self.method_name] if self.method_name in self.inference_params else {}
+
+        self.horizon_length = self.model_args["horizon_length"]
+        self.history_length = self.model_args["history_length"]
 
     def set_attractor_dist_threshold(self, attractor_dist_threshold: float):
         self.attractor_dist_threshold = attractor_dist_threshold
-        self.roa_estimation_params["attractor_dist_threshold"] = attractor_dist_threshold
+        self.inference_params["attractor_dist_threshold"] = attractor_dist_threshold
 
     def set_attractor_prob_threshold(self, attractor_prob_threshold: float):
         self.attractor_prob_threshold = attractor_prob_threshold
-        self.roa_estimation_params["attractor_prob_threshold"] = attractor_prob_threshold
+        self.inference_params["attractor_prob_threshold"] = attractor_prob_threshold
 
     def set_batch_size(self, batch_size: int):
         self.batch_size = batch_size
-        self.roa_estimation_params["batch_size"] = batch_size
+        self.inference_params["batch_size"] = batch_size
 
-    def reset_for_analysis(self):
+    def set_horizon_and_max_path_lengths(self, horizon_length: Optional[int] = None, *, max_path_length: Optional[int] = None, num_inference_steps: Optional[int] = None):
+        if horizon_length is not None:
+            self.horizon_length = horizon_length
+            self.inference_params["horizon_length"] = horizon_length
+
+        if max_path_length is None and num_inference_steps is None:
+            return
+        
+        if max_path_length is not None and num_inference_steps is not None:
+            raise ValueError("Cannot set both max_path_length and num_inference_steps")
+        
+        if max_path_length is not None:
+            self.max_path_length = max_path_length
+            self.inference_params["max_path_length"] = max_path_length
+        else:
+            self.max_path_length = (num_inference_steps * self.horizon_length) + self.history_length
+            self.inference_params["max_path_length"] = self.max_path_length
+
+    def reset(self, for_analysis: bool = False):
+        """
+        Resets the ROAEstimator for new runs while retaining the ground truth data
+
+        Args:
+            for_analysis: If True, only the analysis results will be reset but the run data will be retained.
+        """
         self.results_path = None
         self.traj_plot_path = None
         self._load_params()
@@ -164,61 +204,68 @@ class ROAEstimator:
         self.fp_mask = None
         self.fn_mask = None
 
+        if for_analysis:
+            return
+        
+        self.final_states = None
+        self.trajectories = None
+        self.n_runs = self._orig_n_runs
+        
     def _setup_results_path(self):
         if self.results_path is not None:
             return
         
-        if callable(self.roa_estimation_params["results_name"]):
-            self.results_path = path.join(self.model_path, "results", self.roa_estimation_params["results_name"](self.roa_estimation_params, self.method_name))
+        if callable(self.inference_params["results_name"]):
+            self.results_path = path.join(self.model_path, "results", self.inference_params["results_name"](self.inference_params, self.method_name))
         else:
-            self.results_path = path.join(self.model_path, "results", self.roa_estimation_params["results_name"])
+            self.results_path = path.join(self.model_path, "results", self.inference_params["results_name"])
 
         if not os.path.exists(self.results_path):
             os.makedirs(self.results_path)
 
-        self._save_roa_estimation_params()
+        self._save_inference_params()
 
     def _setup_traj_plot_path(self):
         if self.traj_plot_path is not None:
             return
         
-        if callable(self.roa_estimation_params["results_name"]):
-            self.traj_plot_path = path.join(self.model_path, "viz_trajs", self.roa_estimation_params["results_name"](self.roa_estimation_params, self.method_name))
+        if callable(self.inference_params["results_name"]):
+            self.traj_plot_path = path.join(self.model_path, "viz_trajs", self.inference_params["results_name"](self.inference_params, self.method_name))
         else:
-            self.traj_plot_path = path.join(self.model_path, "viz_trajs", self.roa_estimation_params["results_name"])
+            self.traj_plot_path = path.join(self.model_path, "viz_trajs", self.inference_params["results_name"])
 
         if not os.path.exists(self.traj_plot_path):
             os.makedirs(self.traj_plot_path)
 
-        self._save_roa_estimation_params(self.traj_plot_path)
+        self._save_inference_params(self.traj_plot_path)
 
     def load_ground_truth(self):
         if self.verbose:
             print('[ scripts/estimate_roa ] Loading ground truth')
         roa_labels_fpath = path.join("data_trajectories", self.dataset, "roa_labels.txt")
 
-        start_points = []
+        start_states = []
         expected_labels = []
         
         if os.path.exists(roa_labels_fpath):
             with open(roa_labels_fpath, "r") as f:
                 for line in f:
                     line_data = line.strip().split(' ')[1:]
-                    start_points.append([np.float32(line_data[0]), np.float32(line_data[1])])
+                    start_states.append([np.float32(line_data[0]), np.float32(line_data[1])])
                     expected_labels.append(int(line_data[2]))
         else:
             raise FileNotFoundError(f"File {roa_labels_fpath} not found")
         
-        self.start_points = np.array(start_points, dtype=np.float32)
+        self.start_states = np.array(start_states, dtype=np.float32)
         self.expected_labels = np.array(expected_labels, dtype=np.int32)
 
         if self.num_batches is not None:
-            self.set_batch_size(self.start_points.shape[0] // self.num_batches)
+            self.set_batch_size(self.start_states.shape[0] // self.num_batches)
 
         if self.verbose:
-            print(f"[ utils/roa ] Loaded {self.start_points.shape[0]} ground truth data points")
+            print(f"[ utils/roa ] Loaded {self.start_states.shape[0]} ground truth data points")
      
-    def _save_roa_estimation_params(self, save_path: str = None):
+    def _save_inference_params(self, save_path: str = None):
         if save_path is None:
             save_path = self.results_path
 
@@ -232,18 +279,18 @@ class ROAEstimator:
             else:
                 return obj
         
-        json_safe_params = convert_keys(self.roa_estimation_params)
+        json_safe_params = convert_keys(self.inference_params)
 
         json_safe_params["n_runs"] = self.n_runs
         json_safe_params["batch_size"] = self.batch_size
 
-        json_fpath = path.join(save_path, "roa_estimation_params.json")
+        json_fpath = path.join(save_path, "inference_params.json")
         
         with open(json_fpath, "w") as f:
             json.dump(json_safe_params, f, indent=4)
 
         if self.verbose:
-            print(f"[ utils/roa ] ROA estimation params saved in {json_fpath}")
+            print(f"[ utils/roa ] Inference params saved in {json_fpath}")
     
     @property
     def timestamp(self):
@@ -252,23 +299,36 @@ class ROAEstimator:
     @timestamp.setter
     def timestamp(self, value):
         self._timestamp = value
-        self.gen_traj_path = path.join(self.model_path, "generated_trajectories", self._timestamp)
+        self.gen_traj_path = path.join(self.model_path, self.final_state_directory, self._timestamp)
 
         if not os.path.exists(self.gen_traj_path):
             os.makedirs(self.gen_traj_path)
 
-        self._save_roa_estimation_params(self.gen_traj_path)
+        self._save_inference_params(self.gen_traj_path)
         
     
-    def _generate_single_run_trajs(self, run_idx, compute_labels, discard_trajectories, save):
+    def _generate_single_run_trajs(
+            self,
+            run_idx,
+            compute_labels,
+            discard_trajectories,
+            save,
+        ):
         from genMoPlan.utils import generate_trajectories
 
         results = generate_trajectories(
-            self.model, self.model_args, self.start_points, 
-            max_path_length=self.max_path_length,
-            only_execute_next_step=False, verbose=self.verbose, batch_size=self.batch_size, 
+            self.model, 
+            self.model_args, 
+            self.start_states, 
+            max_path_length=self.max_path_length, 
+            device=self.device,
+            horizon_length=self.horizon_length,
+            verbose=self.verbose, 
+            batch_size=self.batch_size, 
             only_return_final_states=discard_trajectories,
-            conditional_sample_kwargs=self.conditional_sample_kwargs
+            conditional_sample_kwargs=self.conditional_sample_kwargs,
+            post_process_fns=self.inference_params["post_process_fns"],
+            post_process_fn_kwargs=self.inference_params["post_process_fn_kwargs"],
         )
         
         if discard_trajectories:
@@ -278,7 +338,7 @@ class ROAEstimator:
             final_states = results[:, -1].copy()
             generated_trajs = results
 
-        assert final_states.shape == self.start_points.shape
+        assert final_states.shape == self.start_states.shape
 
         if compute_labels:
             from genMoPlan.utils import get_trajectory_attractor_labels
@@ -286,8 +346,8 @@ class ROAEstimator:
             attractor_labels = get_trajectory_attractor_labels(final_states, self.attractors, self.attractor_dist_threshold, self.invalid_label, verbose=self.verbose)
             self.attractor_labels.append(attractor_labels)
 
-            if save:
-                self._save_single_run_data(run_idx, final_states, attractor_labels)
+        if save:
+            self._save_single_run_data(run_idx, final_states)
                 
         if not discard_trajectories:
             self.trajectories.append(generated_trajs)
@@ -305,23 +365,20 @@ class ROAEstimator:
 
         self.final_states.append(final_states)
     
-    def _save_single_run_data(self, run_idx, final_states, attractor_labels):
+    def _save_single_run_data(self, run_idx, final_states):
         file_path = path.join(self.gen_traj_path, f"attractor_labels_{run_idx}.txt")
         with open(file_path, "w") as f:
             f.write("# ")
-            for i in range(self.start_points.shape[1]):
+            for i in range(self.start_states.shape[1]):
                 f.write(f"start_{i} ")
-            f.write("label ")
             for i in range(final_states.shape[1]):
                 f.write(f"final_{i} ")
             f.write("\n")
             
-            for start_point_idx in range(self.start_points.shape[0]):
-                for i in range(self.start_points.shape[1]):
-                    f.write(f"{self.start_points[start_point_idx, i]} ")
+            for start_point_idx in range(self.start_states.shape[0]):
+                for i in range(self.start_states.shape[1]):
+                    f.write(f"{self.start_states[start_point_idx, i]} ")
                     
-                f.write(f"{attractor_labels[start_point_idx]} ")
-                
                 for i in range(final_states.shape[1]):
                     f.write(f"{final_states[start_point_idx, i]} ")
                 
@@ -337,11 +394,7 @@ class ROAEstimator:
         ):
         from genMoPlan.utils.progress import ETAIterator
 
-        if save and not compute_labels:
-            warnings.warn("Cannot save final states without computing attractor labels")
-            compute_labels = True
-
-        if self._timestamp is None:
+        if self._timestamp is None and save:
             from genMoPlan.utils import generate_timestamp
 
             self.timestamp = generate_timestamp()
@@ -363,7 +416,7 @@ class ROAEstimator:
             if not discard_trajectories:
                 warnings.warn("Continuing from previous data, cannot load previous trajectories. Stored trajectories will only contain new data.")
 
-        total_trajectories = self.start_points.shape[0] * n_runs_to_generate
+        total_trajectories = self.start_states.shape[0] * n_runs_to_generate
         
         if total_trajectories > 1e4 and not discard_trajectories:
             warnings.warn(f"Generating and storing {total_trajectories} trajectories may consume a lot of memory.")
@@ -442,10 +495,18 @@ class ROAEstimator:
             self._save_single_run_data(run_idx, final_states, attractor_labels)
         
         print(f"[ utils/roa ] Attractor labels saved in {self.gen_traj_path}")
+
+    def save_generated_trajectories(self):
+        if self.verbose:
+            print(f"[ utils/roa ] Saving generated trajectories")
+        if self.trajectories is None:
+            raise ValueError("No generated trajectories available")
+        
+        
     
     def load_final_states(self, timestamp: str = None, parallel=True):
         if timestamp is None:
-            self.timestamp = _get_latest_timestamp(self.model_path)
+            self.timestamp = _get_latest_timestamp(self.model_path, self.final_state_directory)
 
         all_predicted_labels = []
         all_final_states = []
@@ -507,7 +568,7 @@ class ROAEstimator:
         if self.labels_set is None or self.labels_array is None:
             raise ValueError("Labels set not computed. Run set_labels first.")
             
-        n_points = len(self.start_points)
+        n_points = len(self.start_states)
         
         self.label_probabilities = np.zeros((n_points, len(self.labels_set) + 1))
         
@@ -538,13 +599,13 @@ class ROAEstimator:
 
         with open(file_path, "w") as f:
             f.write("# ")
-            for i in range(self.start_points.shape[1]):
+            for i in range(self.start_states.shape[1]):
                 f.write(f"start_{i} ")
             f.write("label\n")
 
-            for start_point_idx in range(self.start_points.shape[0]):
-                for i in range(self.start_points.shape[1]):
-                    f.write(f"{self.start_points[start_point_idx, i]} ")
+            for start_point_idx in range(self.start_states.shape[0]):
+                for i in range(self.start_states.shape[1]):
+                    f.write(f"{self.start_states[start_point_idx, i]} ")
                 
                 f.write(f"{self.predicted_labels[start_point_idx]} ")
                 
@@ -568,7 +629,7 @@ class ROAEstimator:
                 if line.startswith("#"):
                     continue
                 data = line.split()
-                start_points = np.array(data[1:-1], dtype=np.float32)
+                start_states = np.array(data[1:-1], dtype=np.float32)
                 predicted_label = int(data[-1])
                 self.predicted_labels.append(predicted_label)
         
@@ -589,7 +650,7 @@ class ROAEstimator:
         if self.labels_array is None:
             raise ValueError("Labels array not computed. Call compute_attractor_labels first.")
         
-        predicted_labels = np.full(len(self.start_points), invalid_label, dtype=np.int32)
+        predicted_labels = np.full(len(self.start_states), invalid_label, dtype=np.int32)
         
         # Assign label with highest probability exceeding threshold
         for i in range(len(self.labels_array[:-1])):
@@ -625,12 +686,12 @@ class ROAEstimator:
         if self.trajectories is None:
             raise ValueError("No trajectories available")
         
-        if self.start_points.shape[1] > 2:
+        if self.start_states.shape[1] > 2:
             raise ValueError("Cannot plot trajectories for more than 2D start points")
         
         trajectories = np.concatenate(self.trajectories, axis=0)
 
-        image_name = f"trajectories_{len(self.start_points)}_{self.n_runs}.png"
+        image_name = f"trajectories_{len(self.start_states)}_{self.n_runs}.png"
         image_path = path.join(self.traj_plot_path, image_name)
         
         plot_trajectories(trajectories, image_path, self.verbose)
@@ -647,14 +708,14 @@ class ROAEstimator:
         if self.label_probabilities is None:
             raise ValueError("No attractor probabilities available")
         
-        if self.start_points.shape[1] > 2:
+        if self.start_states.shape[1] > 2:
             raise ValueError("Cannot plot probabilities for more than 2D start points")
         
         os.makedirs(self.results_path, exist_ok=True)
         
         for i, label in enumerate(self.labels_set):
             plt.figure(figsize=(10, 8))
-            plt.scatter(self.start_points[:, 0], self.start_points[:, 1], 
+            plt.scatter(self.start_states[:, 0], self.start_states[:, 1], 
                     c=self.label_probabilities[:, i], s=0.1, cmap='RdBu')
             plt.colorbar()
             plt.title(f'Probability of label {label}')
@@ -662,7 +723,7 @@ class ROAEstimator:
             plt.close()
 
         plt.figure(figsize=(10, 8))
-        plt.scatter(self.start_points[:, 0], self.start_points[:, 1], 
+        plt.scatter(self.start_states[:, 0], self.start_states[:, 1], 
                 c=self.label_probabilities[:, -1], s=0.1, cmap='RdBu')
         plt.colorbar()
         plt.title('Probability of invalid label')
@@ -678,7 +739,7 @@ class ROAEstimator:
         if self.predicted_labels is None:
             raise ValueError("No predicted labels available")
         
-        if self.start_points.shape[1] > 2:
+        if self.start_states.shape[1] > 2:
             raise ValueError("Cannot plot probabilities for more than 2D start points")
         
         invalid_label = self.labels_array[-1]
@@ -687,14 +748,14 @@ class ROAEstimator:
         
         for label in self.labels_set:
             plt.figure(figsize=(10, 8))
-            plt.scatter(self.start_points[:, 0], self.start_points[:, 1], 
+            plt.scatter(self.start_states[:, 0], self.start_states[:, 1], 
                        c=self.predicted_labels == label, s=0.1, cmap='viridis')
             plt.title(f'{label} Label Predictions')
             plt.savefig(path.join(self.results_path, f"predicted_{label}.png"))
             plt.close()
 
         plt.figure(figsize=(10, 8))
-        plt.scatter(self.start_points[:, 0], self.start_points[:, 1], 
+        plt.scatter(self.start_states[:, 0], self.start_states[:, 1], 
                    c=self.predicted_labels == invalid_label, s=0.1, cmap='viridis')
         plt.title('Invalid Label Predictions')
         plt.savefig(path.join(self.results_path, f"predicted_invalid_label.png"))
@@ -702,7 +763,7 @@ class ROAEstimator:
 
         if self.uncertain_indices is not None:
             plt.figure(figsize=(10, 8))
-            plt.scatter(self.start_points[self.uncertain_indices, 0], self.start_points[self.uncertain_indices, 1], 
+            plt.scatter(self.start_states[self.uncertain_indices, 0], self.start_states[self.uncertain_indices, 1], 
                        c='red', s=0.1)
             plt.title('Uncertain points')
             plt.savefig(path.join(self.results_path, f"uncertain_points.png"))
@@ -722,7 +783,7 @@ class ROAEstimator:
         if self.predicted_labels is None:
             raise ValueError("No predicted labels available")
         
-        if self.start_points.shape[1] > 2:
+        if self.start_states.shape[1] > 2:
             raise ValueError("Cannot plot ROAs for more than 2D start points")
         
         labels_to_plot = self.predicted_labels.copy()
@@ -734,11 +795,11 @@ class ROAEstimator:
         
         plt.figure(figsize=(10, 8))
         
-        plt.scatter(self.start_points[success_mask, 0], self.start_points[success_mask, 1], 
+        plt.scatter(self.start_states[success_mask, 0], self.start_states[success_mask, 1], 
                    c=labels_to_plot[success_mask], s=0.1, cmap=self.SUCCESS_COLOR_MAP)
-        plt.scatter(self.start_points[failure_mask, 0], self.start_points[failure_mask, 1], 
+        plt.scatter(self.start_states[failure_mask, 0], self.start_states[failure_mask, 1], 
                    c=labels_to_plot[failure_mask], s=0.1, cmap=self.FAILURE_COLOR_MAP)
-        plt.scatter(self.start_points[separatrix_mask, 0], self.start_points[separatrix_mask, 1], 
+        plt.scatter(self.start_states[separatrix_mask, 0], self.start_states[separatrix_mask, 1], 
                    c=labels_to_plot[separatrix_mask], s=0.1, cmap=self.SEPARATRIX_COLOR_MAP)
 
         plt.title('RoAs')
@@ -747,7 +808,7 @@ class ROAEstimator:
 
         if plot_separatrix:
             plt.figure(figsize=(10, 8))
-            plt.scatter(self.start_points[self.separatrix_indices, 0], self.start_points[self.separatrix_indices, 1], 
+            plt.scatter(self.start_states[self.separatrix_indices, 0], self.start_states[self.separatrix_indices, 1], 
                        c='red', s=0.1)
             plt.title('Separatrix')
             plt.savefig(path.join(self.results_path, f"separatrix.png"))
@@ -855,76 +916,76 @@ class ROAEstimator:
         if self.tp_mask is None or self.tn_mask is None or self.fp_mask is None or self.fn_mask is None:
             raise ValueError("Classification results not computed. Call compute_prediction_metrics first.")
         
-        if self.start_points.shape[1] > 2:
+        if self.start_states.shape[1] > 2:
             raise ValueError("Cannot plot classification results for more than 2D start points")
 
         # Plot true positives
         plt.figure(figsize=(10, 8))
-        plt.scatter(self.start_points[self.tp_mask, 0], self.start_points[self.tp_mask, 1], 
+        plt.scatter(self.start_states[self.tp_mask, 0], self.start_states[self.tp_mask, 1], 
                    c=self.predicted_labels[self.tp_mask], s=0.1, cmap=self.SUCCESS_COLOR_MAP)
         plt.title('True Positives')
-        plt.xlim(self.start_points[:, 0].min(), self.start_points[:, 0].max())
-        plt.ylim(self.start_points[:, 1].min(), self.start_points[:, 1].max())
+        plt.xlim(self.start_states[:, 0].min(), self.start_states[:, 0].max())
+        plt.ylim(self.start_states[:, 1].min(), self.start_states[:, 1].max())
         plt.savefig(path.join(self.results_path, "true_positives.png"))
         plt.close()
         
         # Plot true negatives
         plt.figure(figsize=(10, 8))
-        plt.scatter(self.start_points[self.tn_mask, 0], self.start_points[self.tn_mask, 1], 
+        plt.scatter(self.start_states[self.tn_mask, 0], self.start_states[self.tn_mask, 1], 
                    c=self.predicted_labels[self.tn_mask], s=0.1, cmap=self.FAILURE_COLOR_MAP)
         plt.title('True Negatives')
-        plt.xlim(self.start_points[:, 0].min(), self.start_points[:, 0].max())
-        plt.ylim(self.start_points[:, 1].min(), self.start_points[:, 1].max())
+        plt.xlim(self.start_states[:, 0].min(), self.start_states[:, 0].max())
+        plt.ylim(self.start_states[:, 1].min(), self.start_states[:, 1].max())
         plt.savefig(path.join(self.results_path, "true_negatives.png"))
         plt.close()
         
         # Plot false positives
         plt.figure(figsize=(10, 8))
-        plt.scatter(self.start_points[self.fp_mask, 0], self.start_points[self.fp_mask, 1], 
+        plt.scatter(self.start_states[self.fp_mask, 0], self.start_states[self.fp_mask, 1], 
                    c=self.predicted_labels[self.fp_mask], s=0.1, cmap=self.FP_COLOR_MAP)
         plt.title('False Positives')
-        plt.xlim(self.start_points[:, 0].min(), self.start_points[:, 0].max())
-        plt.ylim(self.start_points[:, 1].min(), self.start_points[:, 1].max())
+        plt.xlim(self.start_states[:, 0].min(), self.start_states[:, 0].max())
+        plt.ylim(self.start_states[:, 1].min(), self.start_states[:, 1].max())
         plt.savefig(path.join(self.results_path, "false_positives.png"))
         plt.close()
         
         # Plot false negatives
         plt.figure(figsize=(10, 8))
-        plt.scatter(self.start_points[self.fn_mask, 0], self.start_points[self.fn_mask, 1], 
+        plt.scatter(self.start_states[self.fn_mask, 0], self.start_states[self.fn_mask, 1], 
                    c=self.predicted_labels[self.fn_mask], s=0.1, cmap=self.FN_COLOR_MAP)
         plt.title('False Negatives')
-        plt.xlim(self.start_points[:, 0].min(), self.start_points[:, 0].max())
-        plt.ylim(self.start_points[:, 1].min(), self.start_points[:, 1].max())
+        plt.xlim(self.start_states[:, 0].min(), self.start_states[:, 0].max())
+        plt.ylim(self.start_states[:, 1].min(), self.start_states[:, 1].max())
         plt.savefig(path.join(self.results_path, "false_negatives.png"))
         plt.close()
 
         # Combined plots with all incorrect classifications
         plt.figure(figsize=(10, 8))
-        plt.scatter(self.start_points[self.fp_mask, 0], self.start_points[self.fp_mask, 1], 
+        plt.scatter(self.start_states[self.fp_mask, 0], self.start_states[self.fp_mask, 1], 
                    c=self.predicted_labels[self.fp_mask], s=0.1, cmap=self.FP_COLOR_MAP, label='False Positives')
-        plt.scatter(self.start_points[self.fn_mask, 0], self.start_points[self.fn_mask, 1], 
+        plt.scatter(self.start_states[self.fn_mask, 0], self.start_states[self.fn_mask, 1], 
                    c=self.predicted_labels[self.fn_mask], s=0.1, cmap=self.FN_COLOR_MAP, label='False Negatives')
         plt.title('Incorrect Classifications')
-        plt.xlim(self.start_points[:, 0].min(), self.start_points[:, 0].max())
-        plt.ylim(self.start_points[:, 1].min(), self.start_points[:, 1].max())
+        plt.xlim(self.start_states[:, 0].min(), self.start_states[:, 0].max())
+        plt.ylim(self.start_states[:, 1].min(), self.start_states[:, 1].max())
         plt.savefig(path.join(self.results_path, "incorrect_classifications.png"))
         plt.close()
         
         # Combined plot with all classifications
         plt.figure(figsize=(10, 8))
-        plt.scatter(self.start_points[self.tp_mask, 0], self.start_points[self.tp_mask, 1], 
+        plt.scatter(self.start_states[self.tp_mask, 0], self.start_states[self.tp_mask, 1], 
                    c=self.predicted_labels[self.tp_mask], s=0.1, cmap=self.SUCCESS_COLOR_MAP, label='True Positives')
-        plt.scatter(self.start_points[self.tn_mask, 0], self.start_points[self.tn_mask, 1], 
+        plt.scatter(self.start_states[self.tn_mask, 0], self.start_states[self.tn_mask, 1], 
                    c=self.predicted_labels[self.tn_mask], s=0.1, cmap=self.FAILURE_COLOR_MAP, label='True Negatives')
-        plt.scatter(self.start_points[self.fp_mask, 0], self.start_points[self.fp_mask, 1], 
+        plt.scatter(self.start_states[self.fp_mask, 0], self.start_states[self.fp_mask, 1], 
                    c=self.predicted_labels[self.fp_mask], s=0.1, cmap=self.FP_COLOR_MAP, label='False Positives')
-        plt.scatter(self.start_points[self.fn_mask, 0], self.start_points[self.fn_mask, 1], 
+        plt.scatter(self.start_states[self.fn_mask, 0], self.start_states[self.fn_mask, 1], 
                    c=self.predicted_labels[self.fn_mask], s=0.1, cmap=self.FN_COLOR_MAP, label='False Negatives')
-        plt.scatter(self.start_points[self.separatrix_indices, 0], self.start_points[self.separatrix_indices, 1], 
+        plt.scatter(self.start_states[self.separatrix_indices, 0], self.start_states[self.separatrix_indices, 1], 
                    c=self.predicted_labels[self.separatrix_indices], s=0.1, cmap=self.SEPARATRIX_COLOR_MAP, label='Separatrix')
         plt.title('Classification Results')
-        plt.xlim(self.start_points[:, 0].min(), self.start_points[:, 0].max())
-        plt.ylim(self.start_points[:, 1].min(), self.start_points[:, 1].max())
+        plt.xlim(self.start_states[:, 0].min(), self.start_states[:, 0].max())
+        plt.ylim(self.start_states[:, 1].min(), self.start_states[:, 1].max())
         plt.savefig(path.join(self.results_path, "classification_results.png"))
         plt.close()
 

@@ -13,10 +13,11 @@ import genMoPlan.utils as utils
 
 class WeightedLoss(nn.Module):
 
-    def __init__(self, history_length=1, action_indices=None):
+    def __init__(self, history_length=1, action_indices=None, manifold=None):
         super().__init__()
         self.history_length = history_length
         self.action_indices = action_indices
+        self.manifold = manifold
 
     def forward(self, pred, targ, loss_weights):
         """
@@ -72,6 +73,9 @@ class WeightedL1(WeightedLoss):
 class WeightedL2(WeightedLoss):
 
     def _loss(self, pred, targ):
+        if self.manifold is not None:
+            return self.manifold.dist(pred, targ)
+
         return F.mse_loss(pred, targ, reduction="none")
 
 

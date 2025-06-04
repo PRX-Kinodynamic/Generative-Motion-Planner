@@ -1,5 +1,7 @@
+from os import cpu_count
+from flow_matching.utils.manifolds import FlatTorus, Euclidean, Product
 import numpy as np
-from genMoPlan.utils import watch, handle_angle_wraparound, augment_unwrapped_state_data, watch_dict
+from genMoPlan.utils import watch, handle_angle_wraparound, augment_unwrapped_state_data, watch_dict, process_angles
 
 # ------------------------ base ------------------------#
 
@@ -23,7 +25,7 @@ results_args_to_watch = [
 logbase = "experiments"
 
 base = {
-    "roa_estimation": {
+    "inference": {
         "results_name": watch_dict(results_args_to_watch),
         "attractors": {
             (-2.1, 0): 0,
@@ -40,10 +42,19 @@ base = {
             "n_timesteps": 5,
             "integration_method": "euler",
         },
+        "post_process_fns": [
+            process_angles,
+        ],
+        "post_process_fn_kwargs": {
+            "angle_indices": [0],
+        },
+        "final_state_directory": "final_states",
+        "generated_trajectory_directory": "generated_trajectories",
     },
 
     "base": {
         "action_indices": None,
+        "angle_indices": [0],
         "loss_type": "l2",
         "loss_weights": None,
         "loss_discount": 1,
@@ -83,14 +94,19 @@ base = {
         "logbase": logbase,
         "exp_name": watch(exp_args_to_watch),
 
+        "dataset_kwargs": {
+            "cost_mul_threshold": 1.0,
+        },
+
         #---------------------------- training ----------------------------#
         "num_epochs": 100,
         "min_num_batches_per_epoch": 1e4,
         "save_freq": 20, # epochs
         "log_freq": 1e3, # steps
-        "batch_size": 32,
+        "batch_size": 64,
+        "num_workers": cpu_count() - 10,
         "learning_rate": 2e-4,
-        "gradient_accumulate_every": 2,
+        "gradient_accumulate_every": 1,
         "ema_decay": 0.995,
         "save_parallel": False,
         "n_reference": 8,
@@ -99,8 +115,8 @@ base = {
         "seed": None,
 
         #---------------------------- validation ----------------------------#
-        "val_dataset_size": 100,
-        "val_num_batches": 10,
+        "val_dataset_size": 40,
+        "val_batch_size": 2048,
         "patience": 10,
         "early_stopping": True,
     },
@@ -126,11 +142,13 @@ base = {
         "prefix": "diffusion/",
         "min_delta": 1e-3,
         "validation_kwargs": {},
+        "manifold": None,
     },
 
     "flow_matching": {
         "method_name": "flow_matching",
         "method": "models.generative.FlowMatching",
+        "manifold": None,
         "horizon_length": 31,
         "history_length": 1,
         "stride": 1,
@@ -145,6 +163,7 @@ base = {
             "scheduler": "CondOTScheduler",
             "path": "AffineProbPath",
             "solver": "ODESolver",
+            "n_fourier_features": 1,
         },
         "prefix": "flow_matching/",
         "min_delta": 1e-3,
@@ -207,5 +226,33 @@ data_lim_25 = {
 
 data_lim_50 = {
     "train_dataset_size": 50
+}
+
+manifold = {
+    "manifold": Product(
+        input_dim=2,
+        manifolds=[
+            (FlatTorus(), 1),
+            (Euclidean(), 1),
+        ],
+    ),
+    "trajectory_preprocess_fns": [],
+    "preprocess_kwargs": {},
+    "trajectory_normalizer": "LimitsNormalizer",
+    "plan_normalizer": None,
+    "normalizer_params": {
+        "trajectory": {
+            "mins": [None, -2*np.pi],
+            "maxs": [None, 2*np.pi],
+        },
+        "plan": None,
+    },
+    "method_kwargs": {
+        "path": "GeodesicProbPath",
+        "scheduler": "CondOTScheduler",
+        "solver": "RiemannianODESolver",
+        "n_fourier_features": 1,
+    },
+    "min_delta": 5,
 }
 

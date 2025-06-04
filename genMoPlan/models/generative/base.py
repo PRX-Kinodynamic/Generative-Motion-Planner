@@ -1,8 +1,10 @@
 from collections import namedtuple
 from abc import ABC, abstractmethod
-
+from typing import Union
 from torch import nn
 import torch
+
+from genMoPlan.utils import ManifoldWrapper
 
 from ..helpers import (
     get_loss_weights,
@@ -25,6 +27,7 @@ class GenerativeModel(nn.Module, ABC):
         loss_discount=1.0,
         action_indices=None,
         has_query=False,
+        manifold=None,
         **kwargs,
     ):
         super().__init__()
@@ -38,8 +41,8 @@ class GenerativeModel(nn.Module, ABC):
         self.action_indices = action_indices
         self.has_query = has_query
         self.register_buffer("loss_weights", get_loss_weights(output_dim, prediction_length, loss_discount, loss_weights))
-
-        self.loss_fn = Losses[loss_type](history_length, action_indices)
+        self.manifold = manifold
+        self.loss_fn = Losses[loss_type](history_length, action_indices, manifold=manifold)
 
     @abstractmethod
     def compute_loss(self, x, *args):
@@ -64,7 +67,7 @@ class GenerativeModel(nn.Module, ABC):
 
         return self.compute_loss(x, cond, query)
 
-
+    @torch.no_grad()
     def forward(self, cond, query=None, verbose=True, return_chain=False, **kwargs):
         batch_size = len(cond[0])
         shape = (batch_size, self.prediction_length, self.output_dim)

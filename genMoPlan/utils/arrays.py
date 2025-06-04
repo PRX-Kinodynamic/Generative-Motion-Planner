@@ -1,7 +1,5 @@
-import collections
 import numpy as np
 import torch
-import pdb
 
 DTYPE = torch.float
 DEVICE = "cuda"
@@ -73,12 +71,14 @@ def to_img(x):
 
 
 def set_device(device):
+    global DEVICE  # pylint: disable=global-statement
     DEVICE = device
     if "cuda" in device:
-        torch.set_default_tensor_type(torch.cuda.FloatTensor)
+        torch.set_default_dtype(torch.float32)
+        torch.set_default_device(torch.device(device))
 
 
-def batch_to_device(batch, device="cuda"):
+def batch_to_device(batch, device=DEVICE):
     vals = [to_device(getattr(batch, field), device) for field in batch._fields]
     return type(batch)(*vals)
 
