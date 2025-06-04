@@ -145,6 +145,8 @@ trainer_config = utils.Config(
     method=args.method,
     exp_name=args.exp_name,
     num_workers=args.num_workers,
+    device=args.device,
+    seed=args.seed,
 )
 
 # # -----------------------------------------------------------------------------#
@@ -238,6 +240,7 @@ try:
         dataset=args.dataset,
         model_state_name="best.pt",
         model_path=args.savepath,
+        num_batches=3,
     )
 except Exception as e:
     print(f"Error estimating ROA: {e}")

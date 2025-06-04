@@ -112,6 +112,8 @@ class Trainer(object):
         method: str = "",
         exp_name: str = "",
         num_workers: int = 4,
+        device: str = 'cuda',
+        seed: int = None,
     ):
         super().__init__()
         self.model = model
@@ -136,6 +138,7 @@ class Trainer(object):
         self.n_reference = n_reference
         self.method = method
         self.exp_name = exp_name
+        self.device = device
 
 
         self.num_batches_per_epoch = max(ceil(len(train_dataset) / (batch_size * gradient_accumulate_every)), 
@@ -147,12 +150,27 @@ class Trainer(object):
 
         print(f"[ utils/training ] Number of validation batches: {self.val_num_batches}")
 
+        # Create CUDA generator for DataLoader
+        generator = torch.Generator(device=device)
+        if seed is not None:
+            generator.manual_seed(seed)
+
         self.dataloader_train = cycle(torch.utils.data.DataLoader(
-            self.train_dataset, batch_size=batch_size, num_workers=num_workers, shuffle=True, pin_memory=True
+            self.train_dataset, 
+            batch_size=batch_size, 
+            num_workers=num_workers, 
+            shuffle=True, 
+            pin_memory=True,
+            generator=generator
         ))
         if val_dataset is not None:
             self.dataloader_val = cycle(torch.utils.data.DataLoader(
-                self.val_dataset, batch_size=batch_size, num_workers=num_workers, shuffle=True, pin_memory=True
+                self.val_dataset, 
+                batch_size=batch_size, 
+                num_workers=num_workers, 
+                shuffle=True, 
+                pin_memory=True,
+                generator=generator
             ))
         else:
             self.dataloader_val = None
@@ -197,7 +215,7 @@ class Trainer(object):
             train_losses = defaultdict(lambda : 0)
             for _ in range(self.gradient_accumulate_every):
                 batch = next(self.dataloader_train)
-                batch = batch_to_device(batch)
+                batch = batch_to_device(batch, device=self.device)
 
                 loss, infos = self.model.loss(*batch)
                 loss = loss / self.gradient_accumulate_every
@@ -357,7 +375,7 @@ class Trainer(object):
             for i in range(self.val_num_batches):
                 try:
                     batch = next(self.dataloader_val)
-                    batch = batch_to_device(batch)
+                    batch = batch_to_device(batch, device=self.device)
             
                     loss, infos = self.model.validation_loss(*batch, **self.validation_kwargs)
                     

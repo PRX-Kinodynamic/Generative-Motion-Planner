@@ -128,7 +128,8 @@ class FlowMatching(GenerativeModel):
         t = torch.rand(batch_size, device=x_target.device)
 
         x_noisy = torch.randn_like(x_target)
-        x_noisy = apply_conditioning(x_noisy, cond)
+        
+        apply_conditioning(x_noisy, cond)
 
         if self.manifold is not None:
             x_target = self.manifold.wrap(x_target)
@@ -172,7 +173,8 @@ class FlowMatching(GenerativeModel):
         T = torch.linspace(0, 1, n_intermediate_steps + 2)
 
         x_noisy = torch.randn(shape, device=device)
-        x_noisy = apply_conditioning(x_noisy, cond)
+        
+        apply_conditioning(x_noisy, cond)
 
         if self.manifold is not None:
             x_noisy = self.manifold.wrap(x_noisy)

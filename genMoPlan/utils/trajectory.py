@@ -29,13 +29,15 @@ def _generate_trajectory_batch(
     current_idx = model_args.history_length
     prediction_length = horizon_length if horizon_length is not None else model_args.horizon_length
 
+    num_inference_steps = np.ceil((max_path_length - model_args.history_length) / prediction_length)
+
     if not only_return_final_states:
         trajectories = np.zeros((batch_size, max_path_length, model_args.observation_dim))
         trajectories[:, 0] = np.array(start_states)
     else:
         trajectories = None
     
-    with tqdm(total=max_path_length - model_args.history_length, disable=not verbose) as pbar:
+    with tqdm(total=num_inference_steps, disable=not verbose) as pbar:
         while current_idx < max_path_length:
             conditions = {0: current_states}
 
@@ -56,7 +58,7 @@ def _generate_trajectory_batch(
             if device == "cuda" and hasattr(torch, 'cuda') and torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
-            pbar.update(slice_path_length)
+            pbar.update(1)
 
     if only_return_final_states:
         return current_states.cpu().detach().numpy()
@@ -70,6 +72,8 @@ def process_angles(data, angle_indices = None):
     """
     if angle_indices is None:
         raise ValueError("angle_indices must be provided")
+    
+    data = data.copy()
 
     for idx in angle_indices:
         # First ensure angles are in [0, 2pi] range

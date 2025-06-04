@@ -101,7 +101,7 @@ class TrajectoryDataset(torch.utils.data.Dataset):
             traj_end_idx = traj_start_idx + traj_length
             normed_traj = normed_all_trajectories[traj_start_idx:traj_end_idx]
             
-            normed_trajectories.append(torch.FloatTensor(normed_traj))
+            normed_trajectories.append(torch.FloatTensor(normed_traj, device='cpu'))
             traj_start_idx = traj_end_idx
         
         return normed_trajectories
@@ -117,7 +117,7 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         query on current observation for planning
         """
         if self.is_history_conditioned:
-            return torch.zeros(0)
+            return torch.zeros(0, dtype=torch.float32, device='cpu')
         else:
             return history
         
