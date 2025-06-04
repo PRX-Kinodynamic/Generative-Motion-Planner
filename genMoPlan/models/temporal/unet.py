@@ -22,7 +22,7 @@ class TemporalUnet(TemporalModel):
     Args:
         prediction_length (int): Length of the prediction sequence.
         input_dim (int): Dimension of the input state space.
-        output_dim (int): Dimension of the output state space. Has to be the same as the input dimension.
+        output_dim (int): Dimension of the output state space.
         query_dim (int): Dimension of the state space of the query.
         base_channels (int, optional): Base number of channels for hidden layers. Defaults to 32.
         channel_multipliers (tuple, optional): Multipliers for the base channels to determine dimensions of hidden layers.
@@ -55,8 +55,6 @@ class TemporalUnet(TemporalModel):
             query_length,
         )
 
-        assert input_dim == output_dim, "Input and output dimensions must be the same"
-
         num_channels = [input_dim, *map(lambda m: base_hidden_dim * m, hidden_dim_mult)]
         in_out = list(zip(num_channels[:-1], num_channels[1:]))
         if time_embed_dim is None:
@@ -66,10 +64,10 @@ class TemporalUnet(TemporalModel):
             print(f"[ models/unet ] Channel dimensions: {in_out}, time_embed_dim: {time_embed_dim}")
 
         self.time_mlp = nn.Sequential(
-            SinusoidalPosEmb(base_hidden_dim),
-            nn.Linear(base_hidden_dim, base_hidden_dim * 4),
+            SinusoidalPosEmb(time_embed_dim),
+            nn.Linear(time_embed_dim, time_embed_dim * 4),
             nn.Mish(),
-            nn.Linear(base_hidden_dim * 4, base_hidden_dim),
+            nn.Linear(time_embed_dim * 4, time_embed_dim),
         )
 
         self.downs = nn.ModuleList([])
@@ -141,7 +139,7 @@ class TemporalUnet(TemporalModel):
 
         self.final_conv = nn.Sequential(
             Conv1dBlock(base_hidden_dim, base_hidden_dim, kernel_size=conv_kernel_size),
-            nn.Conv1d(base_hidden_dim, input_dim, 1),
+            nn.Conv1d(base_hidden_dim, output_dim, 1),
         )
 
     def forward(self, x, query, time):
@@ -176,7 +174,7 @@ class TemporalUnet(TemporalModel):
             h_val = h.pop()
             x = torch.cat((x, h_val), dim=1)
             x = resnet(x, t)
-            x = resnet2(x, t)
+            x = resnet2(x, t,)
             x = attn(x)
             x = upsample(x)
 

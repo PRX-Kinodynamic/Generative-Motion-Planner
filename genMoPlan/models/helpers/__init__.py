@@ -1,6 +1,9 @@
+from typing import Tuple
 from torch import nn
 import numpy as np
 import torch
+
+from genMoPlan.utils.arrays import to_torch
 from .losses import *
 from .nn_helpers import *
 
@@ -22,10 +25,18 @@ def extract(a, t, x_shape):
     return out.reshape(batch_size, *((1,) * (len(x_shape) - 1)))
 
 
-def cosine_beta_schedule(timesteps, s=0.008, dtype=torch.float32):
+def cosine_beta_schedule(timesteps: int, s: float = 0.008, dtype: torch.dtype = torch.float32) -> torch.Tensor:
     """
     cosine schedule
     as proposed in https://openreview.net/forum?id=-NEXDKk8gZ
+
+    Args:
+        timesteps: Number of timesteps
+        s: Parameter for the cosine schedule
+        dtype: Data type of the output tensor
+
+    Returns:
+        Tensor of shape (timesteps,) containing the beta schedule
     """
     steps = timesteps + 1
     x = np.linspace(0, steps, steps)
@@ -36,12 +47,25 @@ def cosine_beta_schedule(timesteps, s=0.008, dtype=torch.float32):
     return torch.tensor(betas_clipped, dtype=dtype)
 
 
-def apply_conditioning(x, conditions):
+def apply_conditioning(x: torch.Tensor, conditions: dict) -> None:
+    """
+    Apply conditioning to the tensor x
+
+    Args:
+        x: Tensor to apply conditioning to
+        conditions: Dictionary of conditions to apply
+
+    Returns:
+        Tensor with conditioning applied
+    """
+
+    if conditions is None:
+        return
+
     for t, val in conditions.items():
         x[:, t] = val.clone()
-    return x
 
-def sort_by_values(x, values):
+def sort_by_values(x: torch.Tensor, values: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
     inds = torch.argsort(values, descending=True)
     x = x[inds]
     values = values[inds]

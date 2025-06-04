@@ -17,7 +17,7 @@ args_to_watch = [
 logbase = "experiments"
 
 base = {
-    "roa_estimation": {
+    "inference": {
         "attractors": {
             (-2.1, 0): 0,
             (2.1, 0): 0,
@@ -26,8 +26,8 @@ base = {
         "invalid_label": -1,
         "n_runs": 100,
         "batch_size": int(1e6),
-        "attractor_dist_threshold": 0.05,
-        "attractor_prob_threshold": 0.95,
+        "attractor_dist_threshold": 0.025,
+        "attractor_prob_threshold": 0.98,
         "max_path_length": 502,
         "flow_matching": {
             "n_timesteps": 10,

@@ -1,6 +1,8 @@
-from collections import defaultdict
+from collections import defaultdict, namedtuple
 import numpy as np
 import torch
+
+Index = namedtuple("Index", "path_ind history_start history_end horizon_start horizon_end")
 
 def compute_actual_length(length, stride):
     return 1 + (length - 1) * stride
@@ -32,14 +34,25 @@ def make_indices(path_lengths, history_length, use_history_padding, horizon_leng
 
         max_history_end = traj_length - min_horizon_elements
         min_history_end = min_history_elements
+
+        unique_indices = set()
         
-        # TODO: Due to striding, there could be multiple of the same histories and horizons
         for history_end in range(min_history_end, max_history_end + 1):
             history_start = max(0, history_end - actual_history_length)
-            horizon_start = history_end
+            horizon_start = history_end + stride - 1
             horizon_end = min(horizon_start + actual_horizon_length, traj_length)
+
+            history_indices = tuple(range(history_start, history_end, stride))
+            horizon_indices = tuple(range(horizon_start, horizon_end, stride))
+
+            index_key = (history_indices, horizon_indices)
+
+            if index_key in unique_indices:
+                continue
+
+            unique_indices.add(index_key)
             
-            indices.append((i, history_start, history_end, horizon_start, horizon_end))
+            indices.append(Index(i, history_start, history_end, horizon_start, horizon_end))
             num_indices[i] += 1
 
     if len(indices) == 0:

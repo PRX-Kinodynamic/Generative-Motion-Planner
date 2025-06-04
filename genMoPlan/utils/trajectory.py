@@ -1,34 +1,35 @@
-from tqdm import tqdm
-import matplotlib.pyplot as plt
 from os import cpu_count, path, listdir
 from random import shuffle
-
+from typing import Callable, List
+import matplotlib.pyplot as plt
+from tqdm import tqdm
 import torch
 import numpy as np
 
-from genMoPlan.datasets.normalization import *
 from genMoPlan.models.generative.base import GenerativeModel
+from genMoPlan.utils.arrays import to_torch
+from genMoPlan.utils.model import get_normalizer_params
 
-def _get_normalizer_params(model_args):
-    normalizer_params = None
+def _generate_trajectory_batch(
+        start_states: np.ndarray,
+        model: GenerativeModel,
+        model_args: dict,
+        max_path_length: int,
+        device: str,
+        conditional_sample_kwargs: dict = {}, 
+        only_return_final_states: bool = False, 
+        verbose: bool = True, 
+        horizon_length: int = None,
+    ):
 
-    if hasattr(model_args, "normalizer_params"):
-        normalizer_params = model_args.normalizer_params["trajectory"]
-    elif hasattr(model_args, "normalization_params"):
-        normalizer_params = model_args.normalization_params
-    else:
-        raise ValueError("Normalizer params not found in model_args")
-
-    return normalizer_params
-
-def _generate_trajectory_batch(start_states: np.ndarray, model: GenerativeModel, model_args: dict, max_path_length: int, only_execute_next_step: bool = False, conditional_sample_kwargs: dict = {}, only_return_final_states: bool = False, verbose: bool = True):
     batch_size = len(start_states)
 
-    current_states = torch.tensor(start_states, dtype=torch.float32).to(
-        model_args.device
-    )
+    current_states = to_torch(start_states, dtype=torch.float32, device=device)
+
     current_idx = model_args.history_length
-    prediction_length = model_args.horizon_length if not only_execute_next_step else 1
+    prediction_length = horizon_length if horizon_length is not None else model_args.horizon_length
+
+    num_inference_steps = np.ceil((max_path_length - model_args.history_length) / prediction_length)
 
     if not only_return_final_states:
         trajectories = np.zeros((batch_size, max_path_length, model_args.observation_dim))
@@ -36,7 +37,7 @@ def _generate_trajectory_batch(start_states: np.ndarray, model: GenerativeModel,
     else:
         trajectories = None
     
-    with tqdm(total=max_path_length - model_args.history_length, disable=not verbose) as pbar:
+    with tqdm(total=num_inference_steps, disable=not verbose) as pbar:
         while current_idx < max_path_length:
             conditions = {0: current_states}
 
@@ -54,10 +55,10 @@ def _generate_trajectory_batch(start_states: np.ndarray, model: GenerativeModel,
 
             # Free memory
             del next_trajs
-            if next(model.parameters()).device.type == "cuda" and hasattr(torch, 'cuda') and torch.cuda.is_available():
+            if device == "cuda" and hasattr(torch, 'cuda') and torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
-            pbar.update(slice_path_length)
+            pbar.update(1)
 
     if only_return_final_states:
         return current_states.cpu().detach().numpy()
@@ -65,8 +66,36 @@ def _generate_trajectory_batch(start_states: np.ndarray, model: GenerativeModel,
     return trajectories
 
 
+def process_angles(data, angle_indices = None):
+    """
+    Process the angles of the data to normalize them to [-pi, pi] range
+    """
+    if angle_indices is None:
+        raise ValueError("angle_indices must be provided")
+    
+    data = data.copy()
+
+    for idx in angle_indices:
+        # First ensure angles are in [0, 2pi] range
+        data[..., idx] = np.mod(data[..., idx], 2 * np.pi)
+        # Then convert from [0, 2pi] to [-pi, pi]
+        data[..., idx][data[..., idx] > np.pi] -= 2 * np.pi
+
+    return data
+
 def generate_trajectories(
-    model, model_args, unnormalized_start_states, max_path_length, only_execute_next_step: bool = False, verbose: bool = True, batch_size: int = 5000, conditional_sample_kwargs: dict = {}, only_return_final_states: bool = False
+    model, 
+    model_args, 
+    unnormalized_start_states, 
+    max_path_length: int, 
+    device,
+    verbose: bool = True, 
+    batch_size: int = 5000, 
+    conditional_sample_kwargs: dict = {}, 
+    only_return_final_states: bool = False, 
+    post_process_fns: List[Callable] = [], 
+    post_process_fn_kwargs: dict = {},
+    horizon_length: int = None,
 ):
     """
     Generate a trajectory from the model given the start states.
@@ -77,16 +106,23 @@ def generate_trajectories(
         unnormalized_start_states: The initial states to start the trajectory from. These are un-normalized and will be normalized before passing to the model.
             batch_size x observation_dim
         max_path_length: The maximum length of the trajectory to generate.
-        only_execute_next_step: If True, only execute the next step of the trajectory. (like MPC)
         verbose: If True, print progress.
         batch_size: The batch size to use for generating the trajectories.
         only_return_final_states: If True, only return the final states of the trajectories.
+
+    Returns:
+        trajectories: The trajectories generated by the model.
+        final_states: The final states of the trajectories.
     """
-    normalizer_class = eval(model_args.trajectory_normalizer)
+    from genMoPlan.datasets.normalization import get_normalizer, Normalizer
 
-    normalizer: Normalizer = normalizer_class(params=_get_normalizer_params(model_args))
+    if model_args.trajectory_normalizer is not None:
+        normalizer: Normalizer = get_normalizer(model_args.trajectory_normalizer, get_normalizer_params(model_args))
 
-    start_states = normalizer.normalize(unnormalized_start_states)
+        start_states = normalizer(unnormalized_start_states)
+    else:
+        start_states = unnormalized_start_states
+        normalizer = None
 
     if only_return_final_states:
         final_states = np.zeros_like(start_states)
@@ -101,12 +137,20 @@ def generate_trajectories(
         if verbose:
             current_batch = math.ceil(idx / batch_size)
 
-            print(f"[ utils/trajectory ] Generating trajectories for batch {current_batch + 1}/{total_num_batches}" if total_num_batches > 1 else f"[ utils/trajectory ] Generating trajectories")
+            print(f"[ utils/trajectory ] Generating trajectories for batch {current_batch + 1}/{total_num_batches}" if total_num_batches > 1 else "[ utils/trajectory ] Generating trajectories")
 
         batch_start_states = start_states[idx: idx + batch_size]
 
         results = _generate_trajectory_batch(
-            batch_start_states, model, model_args, max_path_length, only_execute_next_step, conditional_sample_kwargs, only_return_final_states=only_return_final_states, verbose=verbose
+            batch_start_states, 
+            model, 
+            model_args, 
+            max_path_length, 
+            device,
+            conditional_sample_kwargs=conditional_sample_kwargs, 
+            only_return_final_states=only_return_final_states, 
+            verbose=verbose, 
+            horizon_length=horizon_length
         )
 
         if only_return_final_states:
@@ -115,51 +159,64 @@ def generate_trajectories(
             trajectories.append(results)
             
         # Free memory
-        if next(model.parameters()).device.type == "cuda" and hasattr(torch, 'cuda') and torch.cuda.is_available():
+        if device == "cuda" and hasattr(torch, 'cuda') and torch.cuda.is_available():
             torch.cuda.empty_cache()
 
     if not only_return_final_states:
         trajectories = np.concatenate(trajectories, axis=0)
     
     if only_return_final_states:
-        return process_states(final_states, normalizer, verbose)
+        return process_states(final_states, normalizer, post_process_fns, post_process_fn_kwargs, verbose)
 
-    return process_trajectories(trajectories, normalizer, verbose)
+    return process_trajectories(trajectories, normalizer, post_process_fns, post_process_fn_kwargs, verbose)
 
-def process_states(states, normalizer, verbose=False):
+
+def process_states(states, normalizer, post_process_fns, post_process_fn_kwargs, verbose=False):
     """
     Process the states
     - Un-normalize the states
     - Move the states from [-2pi, 2pi] to [-pi, pi]
     """
-    states = normalizer.unnormalize(states)
+    if normalizer is not None:
+        states = normalizer.unnormalize(states)
 
-    states[states[:, 0] > np.pi, 0] -= 2 * np.pi
-    states[states[:, 0] < -np.pi, 0] += 2 * np.pi
+    if post_process_fns is not None:
+        for post_process_fn in post_process_fns:
+            states = post_process_fn(states, **post_process_fn_kwargs)
 
     return states
 
 
-def process_trajectories(trajectories, normalizer, verbose=False):
+def process_trajectories(trajectories, normalizer, post_process_fns, post_process_fn_kwargs, verbose=False):
     """
     Process the trajectories
     - Un-normalize the trajectories
     - Move the trajectories from [-2pi, 2pi] to [-pi, pi]
     """
-    processed_trajectories = []
+    if verbose:
+        print("[ utils/trajectory ] Processing trajectories")
+    
+    if normalizer is not None:
+        # Apply unnormalization to all trajectories at once
+        all_trajectories = np.concatenate(trajectories, axis=0)
+        all_trajectories = normalizer.unnormalize(all_trajectories)
+    
+        processed_trajectories = []
 
-    itr = tqdm(trajectories, desc="[ utils/trajectory ] Processing trajectories") if verbose else trajectories
+        # Split the processed trajectories back into individual trajectories
+        traj_start_idx = 0
+        traj_lengths = [len(traj) for traj in trajectories]
 
-    for trajectory in itr:
-        trajectory = normalizer.unnormalize(trajectory)
-        # If value of trajectory[0] is greater than pi, then subtract 2pi from the trajectory
-        trajectory[trajectory[:, 0] > np.pi, 0] -= 2 * np.pi
-        trajectory[trajectory[:, 0] < -np.pi, 0] += 2 * np.pi
+        for i, traj_length in enumerate(traj_lengths):
+            traj_end_idx = traj_start_idx + traj_length
+            processed_trajectories.append(all_trajectories[traj_start_idx:traj_end_idx])
 
-        processed_trajectories.append(trajectory)
+        trajectories = np.array(processed_trajectories)
 
-    trajectories = np.array(processed_trajectories)
-
+    if post_process_fns is not None:
+        for post_process_fn in post_process_fns:
+            trajectories = post_process_fn(trajectories, **post_process_fn_kwargs)
+    
     return trajectories
 
 
@@ -271,22 +328,60 @@ def get_fnames_to_load(dataset_path, trajectories_path, num_trajs=None, load_rev
     return fnames
 
 
-def read_trajectory(sequence_path):
+def _read_trajectory(delimiter, observation_dim, sequence_path, ignore_empty_lines=False):
     with open(sequence_path, "r") as f:
         lines = f.readlines()
 
     trajectory = []
 
-    for line in lines:
-        state = line.split(",")
+    for i, line in enumerate(lines):
+        line = line.strip()
+        if line == "":
+            if i < len(lines) - 1 and not ignore_empty_lines:
+                raise ValueError(f"[ utils/trajectory ] Empty line found at {sequence_path} at line {i}")
+            elif ignore_empty_lines:
+                continue
+            else:
+                break
+
+        state = line.split(delimiter)
+
+        state = [s for s in state if s != ""]
+
+        if observation_dim is not None:
+            if len(state) < observation_dim:
+                raise ValueError(f"[ utils/trajectory ] Trajectory at {sequence_path} has less than {observation_dim} states at line {i}")
+
+            state = state[:observation_dim]
+
         state = [float(s) for s in state]
 
         trajectory.append(state)
 
-    return trajectory
+    return np.array(trajectory, dtype=np.float32)
 
 
-def load_trajectories(dataset, dataset_size=None, parallel=True, fnames=None, load_reverse=False):
+def read_trajectories_from_fpaths(trajectories_path, fnames, observation_dim: int, parallel=True, delimiter=",", ignore_empty_lines=False):
+    fpaths = [path.join(trajectories_path, fname) for fname in fnames]
+    if not parallel:
+        trajectories = []
+        for fpath in tqdm(fpaths):
+            if not fpath.endswith(".txt"):
+                continue
+            trajectories.append(_read_trajectory(delimiter, observation_dim, fpath, ignore_empty_lines))
+    else:
+        import multiprocessing as mp
+
+        args_list = [(delimiter, observation_dim, fpath, ignore_empty_lines) for fpath in fpaths]
+
+        with mp.Pool(cpu_count()) as pool:
+            trajectories = list(
+                tqdm(pool.starmap(_read_trajectory, args_list), total=len(args_list))
+            )
+
+    return trajectories
+
+def load_trajectories(dataset, observation_dim: int, dataset_size=None, parallel=True, fnames=None, load_reverse=False):
     """
     load dataset from directory
     """
@@ -300,22 +395,10 @@ def load_trajectories(dataset, dataset_size=None, parallel=True, fnames=None, lo
 
     print(f"[ datasets/sequence ] Loading trajectories from {trajectories_path}")
 
-    fpaths = [path.join(trajectories_path, fname) for fname in fnames]
+    trajectories = read_trajectories_from_fpaths(trajectories_path, fnames, observation_dim, parallel)
+    trajectories = np.array(trajectories, dtype=np.float32)
 
-    if not parallel:
-        for fpath in tqdm(fpaths):
-            if not fpath.endswith(".txt"):
-                continue
-            trajectories.append(read_trajectory(fpath))
-    else:
-        import multiprocessing as mp
-
-        with mp.Pool(cpu_count()) as pool:
-            trajectories = list(
-                tqdm(pool.imap(read_trajectory, fpaths), total=len(fpaths))
-            )
-
-    return np.array(trajectories, dtype=np.float32)
+    return trajectories
 
 
 def get_trajectory_attractor_labels(final_states: np.ndarray, attractors: dict, attractor_dist_threshold: float, invalid_label: int = -1, verbose: bool = True):

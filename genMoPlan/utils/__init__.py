@@ -4,9 +4,9 @@ from .config import *
 from .data_preprocessing import *
 from .git_utils import *
 from .json_args import *
+from .manifold import *
 from .model import *
 from .params import *
-from .plan import *
 from .progress import *
 from .roa import *
 from .serialization import *

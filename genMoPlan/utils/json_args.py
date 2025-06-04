@@ -1,9 +1,15 @@
-import collections
+import pickle
+from base64 import b64decode
 import copy
 import json
 import numpy as np
+import warnings
 
-def process_data_structures(data_obj, verbose=False):
+
+def process_data_structures(data_obj, key,verbose=False):
+    if key == 'manifold' and data_obj is not None:
+        return pickle.loads(b64decode(data_obj['_value']))
+
     if type(data_obj) is dict and '_value' in data_obj:
         if '_string' not in data_obj:
             keyType = eval(data_obj['_type'])
@@ -15,12 +21,12 @@ def process_data_structures(data_obj, verbose=False):
     elif type(data_obj) is dict:
         new_dict = {}
         for key, value in data_obj.items():
-            new_dict[key] = process_data_structures(value, verbose)
+            new_dict[key] = process_data_structures(value, key, verbose)
         return new_dict
     elif type(data_obj) is list:
         new_list = []
         for value in data_obj:
-            new_list.append(process_data_structures(value, verbose))
+            new_list.append(process_data_structures(value, key, verbose))
         return new_list
     return data_obj
 
@@ -35,7 +41,7 @@ class JSONArgs:
 
     def _process_data_structures(self, verbose):
         for key, value in self._data.items():
-            processed_value = process_data_structures(value, verbose)
+            processed_value = process_data_structures(value, key, verbose)
             if processed_value is not None:
                 self._data[key] = processed_value
             else:
@@ -43,7 +49,10 @@ class JSONArgs:
                 self._data[key] = value
 
     def __getitem__(self, key):
-        return self._data[key]
+        if key in self._data:
+            return self._data[key]
+        else:
+            return None
 
     def __iter__(self):
         return iter(self._data)
@@ -61,10 +70,11 @@ class JSONArgs:
         return key in self._data
 
     def __getattr__(self, key):
-        try:
+        if key in self._data:
             return self._data[key]
-        except KeyError:
-            raise AttributeError(f"'JSONArgs' object has no attribute '{key}'")
+        else:
+            warnings.warn(f"'JSONArgs' object has no attribute '{key}'")
+            return None
 
     def __setattr__(self, key, value):
         if key == '_data' or key == '_raw_data':

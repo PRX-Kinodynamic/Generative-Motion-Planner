@@ -1,9 +1,12 @@
+import copy
+import json
 import os
 import importlib
 import random
 import sys
 import time
 from typing import List
+import warnings
 
 import numpy as np
 import torch
@@ -20,7 +23,8 @@ def set_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 def watch_dict(args_to_watch):
@@ -91,6 +95,69 @@ def lazy_fstring(template, args):
     ## https://stackoverflow.com/a/53671539
     return eval(f"f'{template}'")
 
+class Args:
+    def __init__(self, args):
+        object.__setattr__(self, '_args', args)
+
+    def __getattr__(self, key):
+        if hasattr(self._args, key):
+            return getattr(self._args, key)
+        else:
+            warnings.warn(f"'Args' object has no attribute '{key}'")
+            return None
+        
+    def __setattr__(self, key, value):
+        if key == '_args':
+            object.__setattr__(self, key, value)
+        else:
+            setattr(self._args, key, value)
+
+    def __delattr__(self, key):
+        delattr(self._args, key)
+
+    def __contains__(self, key):
+        return hasattr(self._args, key)
+    
+    def __len__(self):
+        return len(vars(self._args))
+    
+    def __iter__(self):
+        return iter(vars(self._args))
+    
+    def __getitem__(self, key):
+        return getattr(self._args, key)
+    
+    def __setitem__(self, key, value):
+        setattr(self._args, key, value)
+    
+    def __delitem__(self, key):
+        delattr(self._args, key)
+
+    def __repr__(self):
+        return f"Args({vars(self._args)})"
+    
+    def __str__(self):
+        return str(vars(self._args))
+    
+    def __copy__(self):
+        return Args(copy.copy(self._args))
+    
+    def __deepcopy__(self, memo):
+        return Args(copy.deepcopy(self._args, memo))
+    
+    def copy(self):
+        return self.__copy__()
+    
+    def to_dict(self):
+        return vars(self._args)
+    
+    def to_json(self):
+        return json.dumps(vars(self._args))
+    
+    def safe_get(self, key, default):
+        if not hasattr(self._args, key):
+            return default
+        return getattr(self._args, key)
 
 class Parser(Tap):
     first_save = True
@@ -101,7 +168,11 @@ class Parser(Tap):
 
         for k, v in kwargs.items():
             self._args.append(f"--{str(k)}")
-            self._args.append(str(v))
+            if isinstance(v, list):
+                for item in v:
+                    self._args.append(str(item))
+            else:
+                self._args.append(str(v))
         
 
     def save(self, args):
@@ -114,7 +185,7 @@ class Parser(Tap):
         print(f"[ utils/setup ] Saved args to {fullpath}")
         super().save(fullpath, skip_unpicklable=True)
 
-    def get_args(self, ignore_sys_argv=False):
+    def get_cmd_args(self, ignore_sys_argv=False):
         if ignore_sys_argv:
             return self._args
         elif len(self._args) == 0:
@@ -134,7 +205,7 @@ class Parser(Tap):
         Read config file and override parameters of experiment if necessary
         Add extras from command line to override parameters from config file
         """
-        cmd_args = self.get_args(ignore_sys_argv)
+        cmd_args = self.get_cmd_args(ignore_sys_argv)
         args = super().parse_args(known_only=True, args=cmd_args)
         args.config = f"config.{args.dataset}"
         args = self.read_config(args, method=args.method, variations=args.variations)
@@ -147,7 +218,7 @@ class Parser(Tap):
 
         args.savepath = os.path.join(args.logbase, args.dataset, args.exp_name)
 
-        return args
+        return Args(args)
 
     def read_config(self, args, method, variations):
         """
@@ -280,7 +351,6 @@ class Parser(Tap):
             save_git_diff(os.path.join(args.savepath, "diff.txt"))
         except:
             print("[ utils/setup ] WARNING: did not save git diff")
-
 
 class TrainingParser(Parser):
     dataset: str
