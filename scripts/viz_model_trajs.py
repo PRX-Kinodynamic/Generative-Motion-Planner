@@ -1,4 +1,4 @@
-from scripts.paths import expand_model_paths
+from genMoPlan.utils import expand_model_paths
 from scripts.viz_model import visualize_generated_trajectories
 
 

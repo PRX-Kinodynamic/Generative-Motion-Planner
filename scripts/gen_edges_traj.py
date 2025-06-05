@@ -1,4 +1,4 @@
-from genMoPlan.utils import ROAEstimator
+from genMoPlan.eval.roa import ROAEstimator
 
 
 dataset = "pendulum_lqr_50k"

@@ -2,7 +2,7 @@ import argparse
 import os
 import numpy as np
 from genMoPlan.eval.final_states import evaluate_final_state_std, plot_final_state_std, plot_final_state_std_sigmoid, plot_final_state_eight_root_std
-from genMoPlan.utils.roa import ROAEstimator
+from genMoPlan.eval.roa import ROAEstimator
 
 TYPES_ENUM = {
     "std": 'std',

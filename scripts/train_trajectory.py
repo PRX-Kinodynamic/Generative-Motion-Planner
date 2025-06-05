@@ -222,6 +222,7 @@ try:
         num_trajs=1000,
         model_paths=args.savepath,
         model_state_name="best.pt",
+        observation_dim=observation_dim,
     )
 except Exception as e:
     print(f"Error visualizing trajectories: {e}")

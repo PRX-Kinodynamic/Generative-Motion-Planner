@@ -1,6 +1,6 @@
 import argparse
 
-from genMoPlan.utils import ROAEstimator
+from genMoPlan.eval.roa import ROAEstimator
 
 def estimate_roa(
     dataset, 
@@ -46,7 +46,7 @@ def estimate_roa(
             save=True,
         )
 
-    roa_estimator.compute_attractor_labels() # In case, the attractor dist threshold has changed and the labels from old loaded runs and new runs are inconsistent
+    roa_estimator.compute_attractor_labels()
 
     roa_estimator.compute_attractor_probabilities(plot=not no_img)
 
