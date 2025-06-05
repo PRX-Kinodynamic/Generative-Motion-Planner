@@ -1,4 +1,4 @@
-from scripts.paths import expand_model_paths
+from genMoPlan.utils import expand_model_paths
 import os
 import matplotlib.pyplot as plt
 import numpy as np

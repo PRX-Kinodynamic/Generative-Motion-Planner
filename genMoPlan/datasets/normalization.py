@@ -152,9 +152,9 @@ class LimitsNormalizer(Normalizer):
         '''
             x : [ -1, 1 ]
         '''
-        if x.max() > 1 + eps or x.min() < -1 - eps: 
+        if x[..., self._indices_to_normalize].max() > 1 + eps or x[..., self._indices_to_normalize].min() < -1 - eps: 
             # print(f'[ datasets/mujoco ] Warning: sample out of range | ({x.min():.4f}, {x.max():.4f})')
-            x = np.clip(x, -1, 1)
+            x[..., self._indices_to_normalize] = np.clip(x[..., self._indices_to_normalize], -1, 1)
 
         ## [ -1, 1 ] --> [ 0, 1 ]
         x[..., self._indices_to_normalize] = (x[..., self._indices_to_normalize] + 1) / 2.

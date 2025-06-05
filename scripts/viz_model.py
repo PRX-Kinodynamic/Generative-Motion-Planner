@@ -1,7 +1,8 @@
 from os import path
 import argparse
 
-from genMoPlan.utils import ROAEstimator, load_trajectories, plot_trajectories
+from genMoPlan.utils import load_trajectories, plot_trajectories
+from genMoPlan.eval.roa import ROAEstimator
 
 
 def visualize_generated_trajectories(

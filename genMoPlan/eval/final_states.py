@@ -1,6 +1,6 @@
 import numpy as np
 from scipy.stats import circstd
-from genMoPlan.utils.roa import ROAEstimator
+from genMoPlan.eval.roa import ROAEstimator
 from genMoPlan.datasets.normalization import get_normalizer, Normalizer
 
 

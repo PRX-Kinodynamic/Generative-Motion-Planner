@@ -5,9 +5,9 @@ import shutil
 from tqdm import tqdm
 import gc
 
-from genMoPlan.utils.roa import ROAEstimator
+from genMoPlan.eval.roa import ROAEstimator
 from scripts.estimate_roa import estimate_roa
-from paths import expand_model_paths
+from genMoPlan.utils import expand_model_paths
 
 base_path = "/common/home/st1122/Projects/genMoPlan/experiments/"
 
