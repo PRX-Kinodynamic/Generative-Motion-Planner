@@ -167,7 +167,7 @@ def generate_trajectories(
     
     if only_return_final_states:
         return process_states(final_states, normalizer, post_process_fns, post_process_fn_kwargs, verbose)
-
+    
     return process_trajectories(trajectories, normalizer, post_process_fns, post_process_fn_kwargs, verbose)
 
 
@@ -200,7 +200,7 @@ def process_trajectories(trajectories, normalizer, post_process_fns, post_proces
         # Apply unnormalization to all trajectories at once
         all_trajectories = np.concatenate(trajectories, axis=0)
         all_trajectories = normalizer.unnormalize(all_trajectories)
-    
+
         processed_trajectories = []
 
         # Split the processed trajectories back into individual trajectories
@@ -210,13 +210,14 @@ def process_trajectories(trajectories, normalizer, post_process_fns, post_proces
         for i, traj_length in enumerate(traj_lengths):
             traj_end_idx = traj_start_idx + traj_length
             processed_trajectories.append(all_trajectories[traj_start_idx:traj_end_idx])
+            traj_start_idx += traj_length
 
         trajectories = np.array(processed_trajectories)
 
     if post_process_fns is not None:
         for post_process_fn in post_process_fns:
             trajectories = post_process_fn(trajectories, **post_process_fn_kwargs)
-    
+
     return trajectories
 
 
