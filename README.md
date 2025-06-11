@@ -10,7 +10,7 @@ GenMoPlan is a research framework for training diffusion-based and flow-matching
 
 - Training diffusion models for trajectory generation
 - Flow matching models for conditional trajectory generation
-- Support for pendulum, acrobot, and other control systems
+- Support for any control systems along with manifold operations (limited to flow matching)
 - Visualization tools for datasets and generated trajectories
 - Region of Attraction (RoA) estimation
 
