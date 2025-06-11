@@ -4,11 +4,8 @@ import torch
 import numpy as np
 
 from genMoPlan.datasets.normalization import *
-from genMoPlan.datasets.utils import apply_padding, make_indices
+from genMoPlan.datasets.utils import EMPTY_DICT, apply_padding, make_indices, DataSample, NONE_TENSOR
 from genMoPlan.utils import load_trajectories
-
-
-Batch = namedtuple("Batch", "trajectory conditions query")
 
 class TrajectoryDataset(torch.utils.data.Dataset):
     normed_trajectories = None
@@ -110,14 +107,17 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         """
         conditions on current observation for planning
         """
-        return dict(enumerate(history))
+        if self.is_history_conditioned:
+            return dict(enumerate(history))
+        else:
+            return EMPTY_DICT
 
-    def get_query(self, history):
+    def get_global_query(self, history):
         """
         query on current observation for planning
         """
         if self.is_history_conditioned:
-            return torch.zeros(0, dtype=torch.float32, device='cpu')
+            return NONE_TENSOR
         else:
             return history
         
@@ -162,8 +162,12 @@ class TrajectoryDataset(torch.utils.data.Dataset):
 
         trajectory = self.get_trajectory(history, horizon)
         conditions = self.get_conditions(history)
-        query = self.get_query(history)
+        global_query = self.get_global_query(history)
 
-        batch = Batch(trajectory=trajectory, conditions=conditions, query=query)
+        data_sample = DataSample(
+            trajectory=trajectory, 
+            conditions=conditions, 
+            global_query=global_query, 
+        )
 
-        return batch
+        return data_sample

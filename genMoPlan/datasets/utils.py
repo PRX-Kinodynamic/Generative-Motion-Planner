@@ -2,11 +2,16 @@ from collections import defaultdict, namedtuple
 import numpy as np
 import torch
 
+
+
+NONE_TENSOR = torch.zeros(0, dtype=torch.float32, device='cpu')
+EMPTY_DICT = {}
+
 Index = namedtuple("Index", "path_ind history_start history_end horizon_start horizon_end")
+DataSample = namedtuple("DataSample", "trajectory conditions global_query local_query", defaults=(EMPTY_DICT, NONE_TENSOR, NONE_TENSOR))
 
 def compute_actual_length(length, stride):
     return 1 + (length - 1) * stride
-
 
 def make_indices(path_lengths, history_length, use_history_padding, horizon_length, use_horizon_padding, stride):
     if use_history_padding and use_horizon_padding:

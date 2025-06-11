@@ -56,6 +56,7 @@ class Diffusion(GenerativeModel):
         has_local_query=False,
         has_global_query=False,
         # Diffusion specific parameters
+        sort_by_values=False,
         n_timesteps=100,
         predict_epsilon=True,
         **kwargs,
@@ -76,6 +77,7 @@ class Diffusion(GenerativeModel):
             **kwargs
         )
         
+        self.sort_by_values = sort_by_values
         self.predict_epsilon = predict_epsilon
         self.n_timesteps = int(n_timesteps)
 
@@ -246,7 +248,7 @@ class Diffusion(GenerativeModel):
         return_chain=False, 
         sample_fn=default_sample_fn, 
         **sample_kwargs,
-    ):
+    ) -> Sample:
         """
 
         Apply conditioning to x by fixing the states in x at the given timesteps from cond
@@ -275,7 +277,8 @@ class Diffusion(GenerativeModel):
 
         progress.stamp()
 
-        x, values = sort_by_values(x, values)
+        if self.sort_by_values:
+            x, values = sort_by_values(x, values)
 
         if return_chain:
             chain = torch.stack(chain, dim=1)
