@@ -21,6 +21,11 @@ def _generate_trajectory_batch(
         verbose: bool = True, 
         horizon_length: int = None,
     ):
+    """
+    Generate a trajectory from the model given the start states.
+
+    TODO: Currently assumes that the conditions are only the initial states. This should be changed to support the history_length > 1 case and other conditioning methods as well as global and local queries.
+    """
 
     batch_size = len(start_states)
 
@@ -39,12 +44,17 @@ def _generate_trajectory_batch(
     
     with tqdm(total=num_inference_steps, disable=not verbose) as pbar:
         while current_idx < max_path_length:
+            slice_path_length = min(prediction_length, max_path_length - current_idx)
+
             conditions = {0: current_states}
 
-            next_trajs = model.forward(conditions, verbose=False, return_chain=False, **conditional_sample_kwargs).trajectories
-
-            slice_path_length = min(prediction_length, max_path_length - current_idx)
-            next_trajs = next_trajs[:, model_args.history_length: model_args.history_length + slice_path_length]
+            sample = model(
+                cond=conditions, 
+                verbose=False, 
+                return_chain=False, 
+                **conditional_sample_kwargs
+            )
+            next_trajs = sample.trajectories[:, model_args.history_length: model_args.history_length + slice_path_length]
 
             # Adding the next states to the trajectory
             if not only_return_final_states:

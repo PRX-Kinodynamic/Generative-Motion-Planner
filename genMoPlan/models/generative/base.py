@@ -56,7 +56,7 @@ class GenerativeModel(nn.Module, ABC):
 
     @abstractmethod
     @torch.no_grad()
-    def conditional_sample(self, cond, **kwargs):
+    def conditional_sample(self, cond, **kwargs) -> Sample:
         """
         Generate samples conditioned on the input.
         Must be implemented by subclasses.
@@ -73,7 +73,7 @@ class GenerativeModel(nn.Module, ABC):
         return self.compute_loss(x, cond, global_query, local_query)
 
     @torch.no_grad()
-    def forward(self, cond, global_query=None, local_query=None, verbose=True, return_chain=False, **kwargs):
+    def forward(self, cond, global_query=None, local_query=None, verbose=True, return_chain=False, **kwargs) -> Sample:
         batch_size = len(cond[0])
         shape = (batch_size, self.prediction_length, self.output_dim)
         return self.conditional_sample(cond, shape, global_query=global_query, local_query=local_query, verbose=verbose, return_chain=return_chain, **kwargs) 

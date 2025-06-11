@@ -12,6 +12,8 @@ DEVICE = "cuda"
 def to_np(x):
     if torch.is_tensor(x):
         x = x.detach().cpu().numpy()
+    if isinstance(x, list):
+        x = np.array(x)
     return x
 
 
