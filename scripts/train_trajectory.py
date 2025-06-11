@@ -116,7 +116,8 @@ gen_model_config = utils.Config(
     loss_weights=args.loss_weights,
     loss_discount=args.loss_discount,
     action_indices=args.action_indices,
-    has_query=args.has_query,
+    has_local_query=args.has_local_query,
+    has_global_query=args.has_global_query,
     manifold=manifold,
     **args.method_kwargs,
     device=args.device,
@@ -186,10 +187,8 @@ print("✓")
 
 
 gen_model.eval()
-_, cond, query = train_dataset[0]
-if args.is_history_conditioned:
-    query = None
-print(f"[ scripts/train_trajectory ] Forward pass time: {timeit.timeit(lambda: gen_model.forward(cond, query), number=10) / 10} seconds")
+sample = train_dataset[0]
+print(f"[ scripts/train_trajectory ] Forward pass time: {timeit.timeit(lambda: gen_model.forward(cond=sample.conditions, global_query=sample.global_query, local_query=sample.local_query), number=10) / 10} seconds")
 gen_model.train()
 
 # -----------------------------------------------------------------------------#
