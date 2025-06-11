@@ -140,7 +140,7 @@ Main dependencies:
 - tqdm
 - einops
 - scipy
-- flow_matching
+- [flow_matching](https://github.com/Ewerton-Vieira/flow_matching.git)
 
 See `environment.yml` and `requirements.txt` for complete dependency information.
 
