@@ -28,7 +28,8 @@ class FlowMatching(GenerativeModel):
         loss_weights=None,
         loss_discount=1.0,
         action_indices=None,
-        has_query=False,
+        has_local_query=False,
+        has_global_query=False,
         # Flow matching specific parameters
         scheduler="CondOTScheduler",
         path="AffineProbPath",
@@ -47,7 +48,8 @@ class FlowMatching(GenerativeModel):
             loss_weights=loss_weights,
             loss_discount=loss_discount,
             action_indices=action_indices,
-            has_query=has_query,
+            has_local_query=has_local_query,
+            has_global_query=has_global_query,
             **kwargs
         )
         
@@ -101,7 +103,7 @@ class FlowMatching(GenerativeModel):
 
     # --------------------------------------- vector field ----------------------------------------#
 
-    def vector_field(self, x=None, t=None, query=None):
+    def vector_field(self, x=None, t=None, global_query=None, local_query=None):
         if x is None or t is None:
             raise ValueError("x and t must be provided")
         
@@ -109,8 +111,8 @@ class FlowMatching(GenerativeModel):
             batch_size = x.shape[0]
             t = t.unsqueeze(0).repeat(batch_size)
 
-        # The model expects parameters in the order: (x, query, t)
-        vector_field = self.model(x, query, t)
+        # The model expects parameters in the order: (x, global_query, local_query, t)
+        vector_field = self.model(x, global_query, local_query, t)
 
         # Zero out the vector field for the history portion
         if self.history_length > 0:
@@ -120,7 +122,7 @@ class FlowMatching(GenerativeModel):
 
     # ------------------------------------------ training ------------------------------------------#
 
-    def compute_loss(self, x_target, cond, query=None):
+    def compute_loss(self, x_target, cond, global_query=None, local_query=None):
         """
         Choose a random timestep t and calculate the loss for the model
         """
@@ -137,7 +139,7 @@ class FlowMatching(GenerativeModel):
 
         path_sample = self.path.sample(t=t, x_0=x_noisy, x_1=x_target)
 
-        loss, info = self.loss_fn(self.vector_field(x=path_sample.x_t, t=path_sample.t), path_sample.dx_t, loss_weights=self.loss_weights)
+        loss, info = self.loss_fn(self.vector_field(x=path_sample.x_t, t=path_sample.t, global_query=global_query, local_query=local_query), path_sample.dx_t, loss_weights=self.loss_weights)
 
         return loss, info
 
@@ -145,15 +147,16 @@ class FlowMatching(GenerativeModel):
     # ------------------------------------------ inference ------------------------------------------#
 
     @torch.no_grad()
-    def conditional_sample(self, cond, shape, query=None, n_timesteps=5, integration_method="euler", return_chain=False, n_intermediate_steps=0, **kwargs):
+    def conditional_sample(self, cond, shape, global_query=None, local_query=None, n_timesteps=5, integration_method="euler", return_chain=False, n_intermediate_steps=0, **kwargs):
         """
         Generate samples by running the flow matching ODE solver from noise to target.
         
         Args:
             cond: Conditioning information that will be applied to the samples
             shape: Shape of the output samples
-            query: Optional query tensor for conditional generation
-            n_time  steps: Number of timesteps to use for the ODE solver
+            global_query: Optional global query tensor for conditional generation
+            local_query: Optional local query tensor for conditional generation
+            n_timesteps: Number of timesteps to use for the ODE solver
             integration_method: Integration method to use ("midpoint", "euler", etc.)
             return_chain: Whether to return intermediate states in the sampling chain
             n_intermediate_steps: Number of intermediate steps to save (if return_chain=True)
@@ -179,10 +182,11 @@ class FlowMatching(GenerativeModel):
         if self.manifold is not None:
             x_noisy = self.manifold.wrap(x_noisy)
 
-        # Make query explicit in model_extras
         model_extras = {}
-        if query is not None:
-            model_extras['query'] = query
+        if global_query is not None:
+            model_extras['global_query'] = global_query
+        if local_query is not None:
+            model_extras['local_query'] = local_query
 
         sol = self.solver.sample(
             x_init=x_noisy, 
@@ -209,11 +213,13 @@ class FlowMatching(GenerativeModel):
     
     # ------------------------------------------ validation ------------------------------------------#
 
-    def validation_loss(self, x, cond, query, **sample_kwargs):
-        if not self.has_query:
-            query = None
+    def validation_loss(self, x, cond, global_query=None, local_query=None, **sample_kwargs):
+        if not self.has_local_query:
+            local_query = None
+        if not self.has_global_query:
+            global_query = None
 
-        sol = self.conditional_sample(cond, x.shape, query=query, verbose=False, return_chain=False, **sample_kwargs)
+        sol = self.conditional_sample(cond, x.shape, global_query=global_query, local_query=local_query, verbose=False, return_chain=False, **sample_kwargs)
 
         if self.manifold is not None:
             x = self.manifold.wrap(x)

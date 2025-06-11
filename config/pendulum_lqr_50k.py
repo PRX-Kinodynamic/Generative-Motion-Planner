@@ -60,7 +60,8 @@ base = {
         "loss_discount": 1,
         "clip_denoised": False,
         "observation_dim": 2,
-        "has_query": False,
+        "has_local_query": False,
+        "has_global_query": False,
 
         #-------------------------------- dataset --------------------------------#
         "loader": "datasets.TrajectoryDataset",
