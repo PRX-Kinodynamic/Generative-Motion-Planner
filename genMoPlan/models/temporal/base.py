@@ -11,8 +11,9 @@ class TemporalModel(nn.Module):
         prediction_length, 
         input_dim, 
         output_dim, 
-        query_dim=0,
-        query_length=0,
+        global_query_dim=0,
+        global_query_length=0,
+        local_query_dim=0,
         **kwargs,
     ):
         super().__init__()
@@ -20,10 +21,11 @@ class TemporalModel(nn.Module):
         self.prediction_length = prediction_length
         self.input_dim = input_dim
         self.output_dim = output_dim
-        self.query_dim = query_dim
-        self.query_length = query_length
+        self.global_query_dim = global_query_dim
+        self.global_query_length = global_query_length
+        self.local_query_dim = local_query_dim
 
     @abstractmethod
-    def forward(self, x, query, time):
+    def forward(self, x, global_query=None, local_query=None, time=None):
         raise NotImplementedError("Subclasses must implement this method")
         

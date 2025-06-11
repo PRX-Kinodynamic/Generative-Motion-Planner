@@ -18,13 +18,13 @@ from .base import GenerativeModel, Sample
 
 
 @torch.no_grad()
-def default_sample_fn(model, x, query, t, **kwargs):
+def default_sample_fn(model, x, global_query, local_query, t, **kwargs):
     """
     Get the model_mean and the fixed variance from the model
 
     then sample noise from a normal distribution
     """
-    model_mean, _, model_log_variance = model.p_mean_variance(x=x, query=query, t=t)
+    model_mean, _, model_log_variance = model.p_mean_variance(x=x, global_query=global_query, local_query=local_query, t=t)
     model_std = torch.exp(0.5 * model_log_variance)
 
     # no noise when t == 0
@@ -53,8 +53,10 @@ class Diffusion(GenerativeModel):
         loss_weights=None,
         loss_discount=1.0,
         action_indices=None,
-        has_query=False,
+        has_local_query=False,
+        has_global_query=False,
         # Diffusion specific parameters
+        sort_by_values=False,
         n_timesteps=100,
         predict_epsilon=True,
         **kwargs,
@@ -70,10 +72,12 @@ class Diffusion(GenerativeModel):
             loss_weights=loss_weights,
             loss_discount=loss_discount,
             action_indices=action_indices,
-            has_query=has_query,
+            has_local_query=has_local_query,
+            has_global_query=has_global_query,
             **kwargs
         )
         
+        self.sort_by_values = sort_by_values
         self.predict_epsilon = predict_epsilon
         self.n_timesteps = int(n_timesteps)
 
@@ -143,7 +147,7 @@ class Diffusion(GenerativeModel):
 
         return sample
 
-    def compute_loss(self, x_target, cond, query=None):
+    def compute_loss(self, x_target, cond, global_query=None, local_query=None):
         """
         Get a normal distribution of noise and sample a noisy x by adding a scaled noise to a scaled x_start
         Apply conditioning to the noisy x
@@ -162,7 +166,7 @@ class Diffusion(GenerativeModel):
         
         apply_conditioning(x_noisy, cond)
 
-        x_recon = self.model(x_noisy, query, t)
+        x_recon = self.model(x_noisy, global_query, local_query, t)
 
         assert noise.shape == x_recon.shape
 
@@ -210,7 +214,7 @@ class Diffusion(GenerativeModel):
         )
         return posterior_mean, posterior_variance, posterior_log_variance_clipped
     
-    def p_mean_variance(self, x, query, t):
+    def p_mean_variance(self, x, global_query, local_query, t):
         """
         Reconstructs x by getting an output from the model and then either subtracting the noise and returning the output directly as x_con
 
@@ -219,9 +223,9 @@ class Diffusion(GenerativeModel):
         Then gets the mean, variance and log variance of the posterior distribution and returns them
         """
 
-        x_recon = self.predict_start_from_noise(
-            x, t=t, model_output=self.model(x, query, t)
-        )
+        model_output = self.model(x, global_query=global_query, local_query=local_query, time=t)
+
+        x_recon = self.predict_start_from_noise(x, t=t, model_output=model_output)
 
         if self.clip_denoised:
             x_recon.clamp_(-1.0, 1.0)
@@ -238,12 +242,13 @@ class Diffusion(GenerativeModel):
         self, 
         cond, 
         shape, 
-        query=None, 
+        global_query=None, 
+        local_query=None, 
         verbose=False, 
         return_chain=False, 
         sample_fn=default_sample_fn, 
         **sample_kwargs,
-    ):
+    ) -> Sample:
         """
 
         Apply conditioning to x by fixing the states in x at the given timesteps from cond
@@ -261,7 +266,7 @@ class Diffusion(GenerativeModel):
         progress = utils.Progress(self.n_timesteps) if verbose else utils.Silent()
         for i in reversed(range(0, self.n_timesteps)):
             t = make_timesteps(batch_size, i, device)
-            x, values = sample_fn(self, x, query, t, **sample_kwargs)
+            x, values = sample_fn(self, x, global_query, local_query, t, **sample_kwargs)
             apply_conditioning(x, cond)
 
             progress.update(
@@ -272,7 +277,8 @@ class Diffusion(GenerativeModel):
 
         progress.stamp()
 
-        x, values = sort_by_values(x, values)
+        if self.sort_by_values:
+            x, values = sort_by_values(x, values)
 
         if return_chain:
             chain = torch.stack(chain, dim=1)

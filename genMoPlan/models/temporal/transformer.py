@@ -1,27 +1,245 @@
 import torch
 import torch.nn as nn
 import math
+import einops
+from typing import Optional
 
 from genMoPlan.models.helpers import SinusoidalPosEmb
 from genMoPlan.models.temporal.base import TemporalModel
 
+
+class GlobalQueryProcessor(nn.Module):
+    """Process global query sequences into conditioning embeddings for transformer."""
+    
+    def __init__(self, global_query_dim, global_query_length, global_query_embed_dim):
+        super().__init__()
+        self.global_query_dim = global_query_dim
+        self.global_query_length = global_query_length
+        self.global_query_embed_dim = global_query_embed_dim
+        
+        if global_query_length > 1:
+            # Use transformer encoder for temporal patterns
+            self.input_projection = nn.Linear(global_query_dim, global_query_embed_dim)
+            encoder_layer = nn.TransformerEncoderLayer(
+                d_model=global_query_embed_dim,
+                nhead=8,
+                dim_feedforward=global_query_embed_dim * 4,
+                dropout=0.1,
+                activation='gelu',
+                batch_first=True
+            )
+            self.temporal_encoder = nn.TransformerEncoder(encoder_layer, num_layers=2)
+            self.pooling = nn.AdaptiveAvgPool1d(1)
+        else:
+            # Simple linear projection for single timestep
+            self.temporal_encoder = nn.Linear(global_query_dim, global_query_embed_dim)
+        
+        # Final conditioning MLP
+        self.query_mlp = nn.Sequential(
+            nn.Linear(global_query_embed_dim, global_query_embed_dim * 4),
+            nn.GELU(),
+            nn.Linear(global_query_embed_dim * 4, global_query_embed_dim),
+        )
+    
+    def forward(self, global_query):
+        """
+        Args:
+            global_query (torch.Tensor): Query tensor of shape [batch, query_length, query_dim]
+            
+        Returns:
+            torch.Tensor: Query embedding of shape [batch, query_embed_dim]
+        """
+        if self.global_query_length > 1:
+            # Project to embedding dimension
+            global_query_projected = self.input_projection(global_query)
+            # Apply transformer encoder
+            global_query_encoded = self.temporal_encoder(global_query_projected)
+            # Pool across sequence length
+            global_query_pooled = self.pooling(global_query_encoded.transpose(1, 2)).squeeze(-1)
+        else:
+            # Single timestep processing
+            global_query_pooled = self.temporal_encoder(global_query.squeeze(1))
+        
+        # Apply conditioning MLP
+        global_query_embedding = self.query_mlp(global_query_pooled)
+        
+        return global_query_embedding
+
+
+class LocalQueryProcessor(nn.Module):
+    """Process local queries that vary per timestep using transformer."""
+    
+    def __init__(self, local_query_dim, local_query_embed_dim):
+        super().__init__()
+        self.local_query_dim = local_query_dim
+        self.local_query_embed_dim = local_query_embed_dim
+        
+        # Process each timestep's query independently
+        self.local_mlp = nn.Sequential(
+            nn.Linear(local_query_dim, local_query_embed_dim * 2),
+            nn.GELU(),
+            nn.Linear(local_query_embed_dim * 2, local_query_embed_dim),
+        )
+    
+    def forward(self, local_query):
+        """
+        Args:
+            local_query: [batch, prediction_length, local_query_dim]
+        Returns:
+            [batch, prediction_length, local_query_embed_dim]
+        """
+        return self.local_mlp(local_query)
+
+
+class TimeConditionedTransformerBlock(nn.Module):
+    """Transformer block with time and query conditioning using cross-attention and FiLM."""
+    
+    def __init__(
+        self,
+        hidden_dim,
+        num_heads,
+        feedforward_dim,
+        time_embed_dim,
+        global_query_embed_dim=0,
+        local_query_embed_dim=0,
+        dropout=0.1
+    ):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.use_global_query = global_query_embed_dim > 0
+        self.use_local_query = local_query_embed_dim > 0
+        
+        # Self-attention
+        self.self_attn = nn.MultiheadAttention(
+            hidden_dim, num_heads, dropout=dropout, batch_first=True
+        )
+        
+        # Time conditioning via FiLM
+        self.time_gamma = nn.Sequential(
+            nn.GELU(),
+            nn.Linear(time_embed_dim, hidden_dim)
+        )
+        self.time_beta = nn.Sequential(
+            nn.GELU(),
+            nn.Linear(time_embed_dim, hidden_dim)
+        )
+        
+        # Global query conditioning via FiLM
+        if self.use_global_query:
+            self.global_query_gamma = nn.Sequential(
+                nn.GELU(),
+                nn.Linear(global_query_embed_dim, hidden_dim)
+            )
+            self.global_query_beta = nn.Sequential(
+                nn.GELU(),
+                nn.Linear(global_query_embed_dim, hidden_dim)
+            )
+        
+        # Local query conditioning via cross-attention
+        if self.use_local_query:
+            self.local_query_cross_attn = nn.MultiheadAttention(
+                hidden_dim, num_heads, dropout=dropout, batch_first=True
+            )
+            self.local_query_projection = nn.Linear(local_query_embed_dim, hidden_dim)
+        
+        # Feedforward network
+        self.feedforward = nn.Sequential(
+            nn.Linear(hidden_dim, feedforward_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(feedforward_dim, hidden_dim),
+            nn.Dropout(dropout)
+        )
+        
+        # Layer normalizations
+        self.norm1 = nn.LayerNorm(hidden_dim)
+        self.norm2 = nn.LayerNorm(hidden_dim)
+        if self.use_local_query:
+            self.norm3 = nn.LayerNorm(hidden_dim)
+        
+        self.dropout = nn.Dropout(dropout)
+    
+    def forward(self, x, t, q_global=None, q_local=None):
+        """
+        Args:
+            x: [batch, seq_len, hidden_dim]
+            t: [batch, time_embed_dim]
+            q_global: [batch, global_query_embed_dim]
+            q_local: [batch, seq_len, local_query_embed_dim]
+        """
+        # Self-attention with residual connection
+        attn_out, _ = self.self_attn(x, x, x)
+        x = x + self.dropout(attn_out)
+        x = self.norm1(x)
+        
+        # Apply time conditioning via FiLM
+        gamma_time = self.time_gamma(t).unsqueeze(1)  # [batch, 1, hidden_dim]
+        beta_time = self.time_beta(t).unsqueeze(1)    # [batch, 1, hidden_dim]
+        x = x * (1 + gamma_time) + beta_time
+        
+        # Apply global query conditioning via FiLM
+        if self.use_global_query and q_global is not None:
+            gamma_global = self.global_query_gamma(q_global).unsqueeze(1)  # [batch, 1, hidden_dim]
+            beta_global = self.global_query_beta(q_global).unsqueeze(1)    # [batch, 1, hidden_dim]
+            x = x * (1 + gamma_global) + beta_global
+        
+        # Apply local query conditioning via cross-attention
+        if self.use_local_query and q_local is not None:
+            q_local_proj = self.local_query_projection(q_local)  # [batch, seq_len, hidden_dim]
+            cross_attn_out, _ = self.local_query_cross_attn(x, q_local_proj, q_local_proj)
+            x = x + self.dropout(cross_attn_out)
+            x = self.norm3(x)
+        
+        # Feedforward with residual connection
+        ff_out = self.feedforward(x)
+        x = x + ff_out
+        x = self.norm2(x)
+        
+        return x
+
+
 class TemporalTransformer(TemporalModel):
+    """Temporal Transformer model for diffusion and flow matching.
+    
+    A transformer architecture specifically designed for temporal data, with time conditioning
+    and optional query conditioning support.
+    
+    Args:
+        prediction_length (int): Length of the prediction sequence.
+        input_dim (int): Dimension of the input state space.
+        output_dim (int): Dimension of the output state space.
+        global_query_dim (int): Dimension of the state space of the global query.
+        global_query_length (int): Length of the global query sequence.
+        local_query_dim (int): Dimension of the state space of the local query.
+        hidden_dim (int, optional): Hidden dimension of transformer. Defaults to 256.
+        num_layers (int, optional): Number of transformer layers. Defaults to 6.
+        num_heads (int, optional): Number of attention heads. Defaults to 8.
+        feedforward_dim (int, optional): Dimension of feedforward network. Defaults to 4*hidden_dim.
+        dropout (float, optional): Dropout rate. Defaults to 0.1.
+        time_embed_dim (int, optional): Dimension of time embeddings. Defaults to hidden_dim.
+        global_query_embed_dim (int, optional): Dimension of global query embeddings. Defaults to hidden_dim.
+        local_query_embed_dim (int, optional): Dimension of local query embeddings. Defaults to hidden_dim.
+        use_positional_encoding (bool, optional): Whether to use learnable positional encoding. Defaults to True.
+    """
+    
     def __init__(
         self,
         prediction_length,
         input_dim,
         output_dim,
-        query_dim=0,
-        query_length=0,
+        global_query_dim=0,
+        global_query_length=0,
+        local_query_dim=0,
         # Transformer specific parameters
-        hidden_dim=128,
-        depth=4,
-        heads=4,
-        hidden_dim_mult=4,
-        dropout=0.05,
+        hidden_dim=256,
+        num_layers=6,
+        num_heads=8,
+        feedforward_dim=None,
+        dropout=0.1,
         time_embed_dim=None,
-        use_relative_pos=False,
-        recency_decay_rate=0.0,
+        global_query_embed_dim=None,
+        local_query_embed_dim=None,
+        use_positional_encoding=True,
         verbose=True,
         **kwargs,
     ):
@@ -29,249 +247,130 @@ class TemporalTransformer(TemporalModel):
             prediction_length,
             input_dim,
             output_dim,
-            query_dim,
-            query_length,
+            global_query_dim,
+            global_query_length,
+            local_query_dim,
         )
-
+        
+        if feedforward_dim is None:
+            feedforward_dim = hidden_dim * 4
         if time_embed_dim is None:
             time_embed_dim = hidden_dim
+        if global_query_embed_dim is None:
+            global_query_embed_dim = hidden_dim
+        if local_query_embed_dim is None:
+            local_query_embed_dim = hidden_dim
         
-        self.use_relative_pos = use_relative_pos
-
         if verbose:
-            print(f"[ models/transformer ] Initializing TemporalTransformer with hidden_dim: {hidden_dim}, Feed-forward dimension: {hidden_dim * hidden_dim_mult}, depth: {depth}, heads: {heads}, time_embed_dim: {time_embed_dim}")
+            print(f"[ models/transformer ] Hidden dim: {hidden_dim}, layers: {num_layers}, heads: {num_heads}")
+            print(f"[ models/transformer ] Feedforward dim: {feedforward_dim}, time_embed_dim: {time_embed_dim}")
+            if global_query_dim > 0:
+                print(f"[ models/transformer ] Global query conditioning enabled: global_query_dim={global_query_dim}, global_query_embed_dim={global_query_embed_dim}")
+            if local_query_dim > 0:
+                print(f"[ models/transformer ] Local query conditioning enabled: local_query_dim={local_query_dim}, local_query_embed_dim={local_query_embed_dim}")
+        
+        # Input projection
+        self.input_projection = nn.Linear(input_dim, hidden_dim)
+        
+        # Positional encoding
+        self.use_positional_encoding = use_positional_encoding
+        if use_positional_encoding:
+            self.positional_encoding = nn.Parameter(torch.randn(1, prediction_length, hidden_dim) * 0.02)
         
         # Time embedding
         self.time_mlp = nn.Sequential(
             SinusoidalPosEmb(time_embed_dim),
             nn.Linear(time_embed_dim, time_embed_dim * 4),
-            nn.Mish(),
+            nn.GELU(),
             nn.Linear(time_embed_dim * 4, time_embed_dim),
         )
         
-        # Input projection
-        self.input_proj = nn.Linear(input_dim, hidden_dim)
-        
-        # Only register absolute positional embedding if using absolute encoding
-        if not self.use_relative_pos:
-            self.register_buffer(
-                "pos_embedding", 
-                self._create_sinusoidal_positional_embedding(prediction_length, hidden_dim)
+        # Query processors
+        self.use_global_query = global_query_dim > 0
+        if self.use_global_query:
+            self.global_query_processor = GlobalQueryProcessor(
+                global_query_dim, global_query_length, global_query_embed_dim
             )
         
-        # Transformer blocks
-        self.blocks = nn.ModuleList([
-            TransformerBlock(
-                hidden_dim,
-                prediction_length,
-                time_embed_dim,
-                heads=heads,
-                hidden_dim_mult=hidden_dim_mult,
-                dropout=dropout,
-                use_relative_pos=self.use_relative_pos,
-                recency_decay_rate=recency_decay_rate
+        self.use_local_query = local_query_dim > 0
+        if self.use_local_query:
+            self.local_query_processor = LocalQueryProcessor(
+                local_query_dim, local_query_embed_dim
             )
-            for _ in range(depth)
+        
+        # Transformer layers
+        self.transformer_layers = nn.ModuleList([
+            TimeConditionedTransformerBlock(
+                hidden_dim=hidden_dim,
+                num_heads=num_heads,
+                feedforward_dim=feedforward_dim,
+                time_embed_dim=time_embed_dim,
+                global_query_embed_dim=global_query_embed_dim if self.use_global_query else 0,
+                local_query_embed_dim=local_query_embed_dim if self.use_local_query else 0,
+                dropout=dropout
+            )
+            for _ in range(num_layers)
         ])
         
-        # Optional query embedding
-        self.has_query = query_dim is not None and query_dim > 0
-        if self.has_query:
-            self.query_proj = nn.Sequential(
-                nn.Linear(query_dim, hidden_dim),
-                nn.GELU(),
-                nn.Linear(hidden_dim, hidden_dim)
-            )
-        
         # Output projection
-        self.output_proj = nn.Linear(hidden_dim, output_dim)
+        self.output_projection = nn.Sequential(
+            nn.LayerNorm(hidden_dim),
+            nn.Linear(hidden_dim, output_dim)
+        )
         
-        # Initialize model
+        # Initialize weights
         self._init_weights()
     
     def _init_weights(self):
-        """
-        Initialize weights for better convergence
-        """
-        for p in self.parameters():
-            if p.dim() > 1:  # Skip LayerNorm and biases
-                nn.init.xavier_uniform_(p)
+        """Initialize weights following transformer best practices."""
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+            elif isinstance(module, nn.LayerNorm):
+                nn.init.ones_(module.weight)
+                nn.init.zeros_(module.bias)
     
-    def _create_sinusoidal_positional_embedding(self, length, dim):
-        """
-        Create sinusoidal positional embeddings for absolute transformer positions
-        """
-        position = torch.arange(length).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, dim, 2) * (-math.log(10000.0) / dim))
-        pos_embedding = torch.zeros(length, dim)
-        pos_embedding[:, 0::2] = torch.sin(position * div_term)
-        pos_embedding[:, 1::2] = torch.cos(position * div_term)
-        return pos_embedding
+    def forward(self, x, global_query=None, local_query=None, time=None):
+        """Forward pass through the Temporal Transformer model.
         
-    def forward(self, x, query, time):
-        """
-        x: [batch_size, prediction_length, input_dim]
-        query: conditional information [batch_size, query_dim] or None
-        time: [batch_size] time embedding
-        """
-        time_embed = self.time_mlp(time)  # [batch_size, time_embed_dim]
-        
-        x_embed = self.input_proj(x)  # [batch_size, prediction_length, hidden_dim]
-        
-        if not self.use_relative_pos:
-            x_embed = x_embed + self.pos_embedding.unsqueeze(0)  # [batch_size, prediction_length, hidden_dim]
-        
-        if self.has_query and query is not None:
-            query_emb = self.query_proj(query).unsqueeze(1)  # [batch_size, 1, dim]
-            x_embed = x_embed + query_emb
-        
-        for block in self.blocks:
-            x_embed = block(x_embed, time_embed)
-        
-        x_pred = self.output_proj(x_embed)  # [batch_size, prediction_length, output_dim]
-        
-        return x_pred
-
-
-class TransformerBlock(nn.Module):
-    def __init__(self, hidden_dim, prediction_length, time_embed_dim, heads, hidden_dim_mult, dropout, use_relative_pos, recency_decay_rate):
-        super().__init__()
-        self.use_relative_pos = use_relative_pos
-
-        self.norm1 = nn.LayerNorm(hidden_dim)
-        
-        
-        if use_relative_pos:
-            self.attn = RelativeMultiheadAttention(hidden_dim, heads, prediction_length, dropout, recency_decay_rate)
-        else:
-            self.attn = nn.MultiheadAttention(hidden_dim, heads, dropout=dropout, batch_first=True)
-        
-        self.norm2 = nn.LayerNorm(hidden_dim)
-        ff_dim = hidden_dim * hidden_dim_mult
-        self.ff = nn.Sequential(
-            nn.Linear(hidden_dim, ff_dim),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(ff_dim, hidden_dim),
-            nn.Dropout(dropout)
-        )
-        
-        # Time embedding projection
-        self.time_proj = nn.Sequential(
-            nn.Linear(time_embed_dim, hidden_dim),
-            nn.GELU(),
-            nn.Linear(hidden_dim, hidden_dim)
-        )
-        
-    def forward(self, x, t):
-        """
-        x: [batch_size, prediction_length, hidden_dim]
-        t: [batch_size, time_embed_dim]
-        """
-        # Time embedding
-        time_emb = self.time_proj(t).unsqueeze(1)  # [batch_size, 1, dim]
-        
-        # Apply time embedding
-        x_time = x + time_emb
-        
-        # Self-attention with residual
-        x_norm = self.norm1(x_time)
-        
-        if self.use_relative_pos:
-            attn_out = self.attn(x_norm)
-        else:
-            attn_out, _ = self.attn(x_norm, x_norm, x_norm)
+        Args:
+            x (torch.Tensor): Input tensor of shape [batch, prediction_length, input_dim].
+            global_query (torch.Tensor): Global query tensor of shape [batch, global_query_length, global_query_dim] or None.
+            local_query (torch.Tensor): Local query tensor of shape [batch, prediction_length, local_query_dim] or None.
+            time (torch.Tensor): Time tensor. Usually the timestep of the noising/denoising process.
             
-        x = x + attn_out
-        
-        # Feedforward with residual
-        x = x + self.ff(self.norm2(x))
-        
-        return x
-
-
-class RelativeMultiheadAttention(nn.Module):
-    """
-    Multi-head Attention with Relative Positional Encoding.
-    
-    This implementation adds relative positional information directly into the attention
-    calculation rather than adding positional encodings to the input embeddings.
-    
-    The relative positional encoding is implemented as a learnable bias matrix where:
-    - The matrix has size (2 * max_seq_len - 1, num_heads)
-    - Each position in the matrix represents the bias to apply for a specific relative distance
-    - For a relative distance d, we add a bias value to the attention score
-    - The center of the matrix (max_seq_len-1) represents a relative distance of 0
-    - Positions to the left represent negative distances, to the right positive distances
-    
-    Key advantages:
-    1. Learns position-specific attention patterns rather than using fixed encodings
-    2. Captures token relationships based on their relative positions rather than absolute
-    3. Can be more effective for tasks where relative ordering is more important than absolute positioning
-    
-    This implementation:
-    - Creates a learnable bias table for all possible relative positions
-    - Pre-computes relative position indices for efficient lookups during forward pass
-    - Integrates the relative position bias directly into the attention score calculation
-    """
-    def __init__(self, dim, num_heads, max_seq_len, dropout, recency_decay_rate):
-        super().__init__()
-        self.num_heads = num_heads
-        self.head_dim = dim // num_heads
-        self.scale = self.head_dim ** -0.5
-        self.recency_decay_rate = recency_decay_rate
-        
-        self.qkv = nn.Linear(dim, dim * 3)
-        self.proj = nn.Linear(dim, dim)
-        self.dropout = nn.Dropout(dropout)
-        
-        # Create relative position bias table
-        self.max_seq_len = max_seq_len
-        self.rel_pos_bias = nn.Parameter(torch.zeros(2 * max_seq_len - 1, num_heads))
-        
-        # Initialize the relative position bias
-        nn.init.xavier_uniform_(self.rel_pos_bias)
-        
-        # Generate relative position indices for future lookups
-        pos_indices = torch.arange(max_seq_len, device=self.rel_pos_bias.device)
-        rel_indices = pos_indices.unsqueeze(1) - pos_indices.unsqueeze(0) + max_seq_len - 1
-        self.register_buffer("rel_indices", rel_indices)
-        
-    def forward(self, x):
+        Returns:
+            torch.Tensor: Output tensor of shape [batch, prediction_length, output_dim].
+        """
         batch_size, seq_len, _ = x.shape
         
-        # Calculate QKV projections
-        qkv = self.qkv(x).reshape(batch_size, seq_len, 3, self.num_heads, self.head_dim)
-        qkv = qkv.permute(2, 0, 3, 1, 4)
-        q, k, v = qkv[0], qkv[1], qkv[2]  # Each is [batch, num_heads, seq_len, head_dim]
+        # Project input to hidden dimension
+        x = self.input_projection(x)  # [batch, seq_len, hidden_dim]
         
-        # Compute attention matrix with scaled dot-product
-        attn = (q @ k.transpose(-2, -1)) * self.scale  # [batch, num_heads, seq_len, seq_len]
+        # Add positional encoding
+        if self.use_positional_encoding:
+            x = x + self.positional_encoding
         
-        # Compute relative distances (absolute difference between positions)
-        pos_indices = torch.arange(seq_len, device=x.device)
-        rel_dist = torch.abs(pos_indices.unsqueeze(1) - pos_indices.unsqueeze(0))  # shape: [seq_len, seq_len]
-
-        # Compute the decay factor for each relative position
-        decay = torch.exp(-self.recency_decay_rate * rel_dist)  # shape: [seq_len, seq_len]
+        # Process time embedding
+        t = self.time_mlp(time)  # [batch, time_embed_dim]
         
-        # Get the learned relative bias and permute it to shape [num_heads, seq_len, seq_len]
-        rel_pos_bias = self.rel_pos_bias[self.rel_indices[:seq_len, :seq_len]]  # [seq_len, seq_len, num_heads]
-        rel_pos_bias = rel_pos_bias.permute(2, 0, 1)  # [num_heads, seq_len, seq_len]
-
-        # Apply the decay factor; unsqueeze to match dimensions: [1, 1, seq_len, seq_len]
-        decay = decay.unsqueeze(0).unsqueeze(0)
-
-        # Add the decayed bias to the attention scores
-        attn = attn + (decay * rel_pos_bias).unsqueeze(0)
+        # Process global query
+        q_global = None
+        if self.use_global_query and global_query is not None:
+            q_global = self.global_query_processor(global_query)
         
-        # Apply softmax and dropout
-        attn = torch.softmax(attn, dim=-1)
-        attn = self.dropout(attn)
+        # Process local query
+        q_local = None
+        if self.use_local_query and local_query is not None:
+            q_local = self.local_query_processor(local_query)
         
-        # Apply attention to values
-        out = (attn @ v).transpose(1, 2).reshape(batch_size, seq_len, -1)
-        out = self.proj(out)
+        # Apply transformer layers
+        for layer in self.transformer_layers:
+            x = layer(x, t, q_global, q_local)
         
-        return out
-
+        # Project to output dimension
+        x = self.output_projection(x)  # [batch, seq_len, output_dim]
+        
+        return x
