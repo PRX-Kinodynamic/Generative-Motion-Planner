@@ -1,15 +1,17 @@
-from collections import namedtuple
 import warnings
 
-from torch import nn
 import torch
-import numpy as np
 
-from flow_matching.path.scheduler import *
-from flow_matching.path import *
-from flow_matching.solver import *
+try:
+    from flow_matching.path.scheduler import *
+    from flow_matching.path import *
+    from flow_matching.solver import *
 
-from genMoPlan.models.manifold import ProjectToTangent
+    FLOW_MATCHING_AVAILABLE = True
+except ImportError:
+    FLOW_MATCHING_AVAILABLE = False
+
+
 from genMoPlan.models.helpers import apply_conditioning
 
 from .base import GenerativeModel, Sample
@@ -37,6 +39,9 @@ class FlowMatching(GenerativeModel):
         n_fourier_features=1,
         **kwargs,
     ):
+        if not FLOW_MATCHING_AVAILABLE:
+            raise ImportError("Flow matching is not available. Please install flow_matching to use the flow matching method.")
+
         super().__init__(
             model=model,
             input_dim=input_dim,
@@ -52,7 +57,7 @@ class FlowMatching(GenerativeModel):
             has_global_query=has_global_query,
             **kwargs
         )
-        
+
         self.n_timesteps = 1
         self.history_length = history_length
 
@@ -73,6 +78,8 @@ class FlowMatching(GenerativeModel):
         path_args = [scheduler]
 
         if self.manifold is not None:
+            from genMoPlan.models.manifold import ProjectToTangent
+
             path_args.append(self.manifold)
             solver_args = [self.manifold]
             self.model = ProjectToTangent(
