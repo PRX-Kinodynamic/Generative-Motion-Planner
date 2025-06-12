@@ -21,7 +21,7 @@ class IdentityFeatureLayer(nn.Module):
         super().__init__()
         self.input_dim = input_dim
 
-    def forward(self, x, query):
+    def forward(self, x):
         return x
     
 
@@ -32,7 +32,7 @@ class FlatTorusFeatureLayer(nn.Module):
 
         self.layer = FourierFeatures(n_fourier_features)
 
-    def forward(self, x, query):
+    def forward(self, x):
         return self.layer(x)
 
 
@@ -55,13 +55,9 @@ class ProductFeatureLayer(nn.Module):
             
         self.input_layers = nn.ModuleList(input_layers)
 
-    def forward(self, x, query):
+    def forward(self, x):
         x_split = self.manifold.split(x)
-        if query is not None:
-            query_split = self.manifold.split(query)
-            return torch.cat([layer(x_split[i], query_split[i]) for i, layer in enumerate(self.input_layers)], dim=-1)
-        else:
-            return torch.cat([layer(x_split[i], query) for i, layer in enumerate(self.input_layers)], dim=-1)
+        return torch.cat([layer(x_split[i]) for i, layer in enumerate(self.input_layers)], dim=-1)
 
 
 class ProjectToTangent(nn.Module):
@@ -81,9 +77,9 @@ class ProjectToTangent(nn.Module):
         else:
             raise ValueError(f"Unsupported manifold type: {self.manifold.manifold_type}")
         
-    def forward(self, x, query, t):
+    def forward(self, x, global_query, local_query, t):
         x = self.manifold.projx(x)
-        manifold_features = self.manifold_features_layer(x, query)
-        v = self.model(manifold_features, query, t)
+        manifold_features = self.manifold_features_layer(x)
+        v = self.model(manifold_features, global_query, local_query, t)
         v = self.manifold.proju(x, v)
         return v
