@@ -1,7 +1,6 @@
-from collections import namedtuple
-
 import torch
 import numpy as np
+from typing import List, Optional
 
 from genMoPlan.datasets.normalization import *
 from genMoPlan.datasets.utils import EMPTY_DICT, apply_padding, make_indices, DataSample, NONE_TENSOR
@@ -22,6 +21,7 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         trajectory_preprocess_fns: tuple = (),
         preprocess_kwargs: dict = {},
         dataset_size: int = None,
+        fnames: Optional[List[str]] = None,
         use_horizon_padding: bool = False,
         use_history_padding: bool = False,
         is_history_conditioned: bool = True, # Otherwise it is provided as a query that is not predicted by the model
@@ -39,6 +39,7 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         trajectories = self._load_data(
             dataset,
             dataset_size, 
+            fnames,
             trajectory_preprocess_fns, 
             preprocess_kwargs,
             is_validation,
@@ -59,10 +60,10 @@ class TrajectoryDataset(torch.utils.data.Dataset):
             normalizer_params
         )
 
-    def _load_data(self, dataset, dataset_size, trajectory_preprocess_fns, preprocess_kwargs, is_validation):
-        trajectories = load_trajectories(dataset, self.observation_dim, dataset_size, load_reverse=is_validation)
+    def _load_data(self, dataset, dataset_size, fnames, trajectory_preprocess_fns, preprocess_kwargs, is_validation):
+        trajectories = load_trajectories(dataset, self.observation_dim, dataset_size, fnames=fnames, load_reverse=is_validation)
         for trajectory_preprocess_fn in trajectory_preprocess_fns:
-            trajectories = trajectory_preprocess_fn(trajectories, **preprocess_kwargs["trajectory"])
+            trajectories = trajectory_preprocess_fn(trajectories, **preprocess_kwargs.get("trajectory", {}))
         return trajectories
 
     def _normalize(self, trajectories, trajectory_normalizer=None, normalizer_params=None):

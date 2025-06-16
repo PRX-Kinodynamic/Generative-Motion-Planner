@@ -1,6 +1,7 @@
 import argparse
 
 from genMoPlan.eval.roa import ROAEstimator
+from genMoPlan.utils import expand_model_paths
 
 def estimate_roa(
     dataset, 
@@ -17,6 +18,10 @@ def estimate_roa(
     attractor_dist_threshold=None,
     attractor_prob_threshold=None,
 ):
+    if '#' in model_path:
+        model_path = model_path.replace('#', '*')
+        model_path = expand_model_paths(model_path)[0]
+
     if batch_size is not None:
         batch_size = int(batch_size)
 

@@ -339,7 +339,7 @@ def get_fnames_to_load(dataset_path, trajectories_path, num_trajs=None, load_rev
     return fnames
 
 
-def _read_trajectory(delimiter, observation_dim, sequence_path, ignore_empty_lines=False):
+def read_trajectory(sequence_path, observation_dim, ignore_empty_lines=False, delimiter=","):
     with open(sequence_path, "r") as f:
         lines = f.readlines()
 
@@ -379,15 +379,15 @@ def read_trajectories_from_fpaths(trajectories_path, fnames, observation_dim: in
         for fpath in tqdm(fpaths):
             if not fpath.endswith(".txt"):
                 continue
-            trajectories.append(_read_trajectory(delimiter, observation_dim, fpath, ignore_empty_lines))
+            trajectories.append(read_trajectory(fpath, observation_dim, ignore_empty_lines, delimiter))
     else:
         import multiprocessing as mp
 
-        args_list = [(delimiter, observation_dim, fpath, ignore_empty_lines) for fpath in fpaths]
+        args_list = [(fpath, observation_dim, ignore_empty_lines, delimiter) for fpath in fpaths]
 
         with mp.Pool(cpu_count()) as pool:
             trajectories = list(
-                tqdm(pool.starmap(_read_trajectory, args_list), total=len(args_list))
+                tqdm(pool.starmap(read_trajectory, args_list), total=len(args_list))
             )
 
     return trajectories
