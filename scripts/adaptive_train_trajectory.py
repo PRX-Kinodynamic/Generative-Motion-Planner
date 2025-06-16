@@ -1,12 +1,7 @@
-import timeit
-from math import ceil
-
 import torch
 import genMoPlan.utils as utils
 from genMoPlan.adaptive_training import AdaptiveTrainer
 from genMoPlan.models import GenerativeModel, TemporalModel
-from scripts.estimate_roa import estimate_roa
-from scripts.viz_model import visualize_generated_trajectories
 
 parser = utils.TrainingParser()
 args = parser.parse_args()

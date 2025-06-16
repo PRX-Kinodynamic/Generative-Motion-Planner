@@ -64,8 +64,7 @@ def expand_model_paths(model_paths, no_best_pt=False):
 
     print(f"Found {len(expanded_paths)} valid model paths")
     if len(expanded_paths) == 0:
-        print("No valid model paths found. Exiting...")
-        exit(1)
+        raise ValueError("No valid model paths found")
 
     for model_path in expanded_paths:
         print(f"  - {model_path}")

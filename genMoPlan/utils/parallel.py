@@ -48,5 +48,5 @@ def parallelize_toggle(func, args_list, kwargs=None, num_processes=None, show_pr
         return parallelize(func, args_list, kwargs, num_processes, show_progress, desc)
     else:
         if show_progress:
-            return [func(args, **kwargs) for args in tqdm(args_list, desc=desc)]
-        return [func(args, **kwargs) for args in args_list]
+            return [func(*args, **kwargs) for args in tqdm(args_list, desc=desc)]
+        return [func(*args, **kwargs) for args in args_list]
