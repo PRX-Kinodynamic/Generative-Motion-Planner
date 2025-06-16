@@ -247,7 +247,7 @@ class Trainer(object):
 
             self.step += 1
 
-    def save_model(self, label):
+    def save_model(self, label, save_path=None):
         '''
             saves model and ema to disk;
             syncs to storage bucket if a bucket is specified
@@ -257,8 +257,10 @@ class Trainer(object):
             'model': self.model.state_dict(),
             'ema': self.ema_model.state_dict()
         }
+        if save_path is None:
+            save_path = self.logdir
         model_state_name = f'{label}.pt'
-        savepath = os.path.join(self.logdir, model_state_name)
+        savepath = os.path.join(save_path, model_state_name)
         torch.save(data, savepath)
         self.latest_model_state_name = model_state_name
         if self.bucket is not None:
@@ -337,22 +339,26 @@ class Trainer(object):
 
                 val_loss = self.validate()
 
+                # Save model if it's the best so far (any improvement, no matter how small)
                 if val_loss < best_val_loss:
+                    old_best = best_val_loss
                     best_val_loss = val_loss
-                    no_improve_counter = 0
                     self.save_model('best')
-                elif val_loss > best_val_loss + self.min_delta:
-                    no_improve_counter += 1
-                    print(f"No improvement for {no_improve_counter} epoch(s).")
                     
-                    if self.early_stopping and no_improve_counter >= self.patience:
-                        print("Early stopping triggered due to convergence.")
-                        break
-
-                if val_loss == best_val_loss:
-                    print(f"Validation Loss: {val_loss:8.6f} | New best validation loss!")
+                    # Check if this improvement is meaningful for early stopping
+                    if old_best - val_loss > self.min_delta:
+                        no_improve_counter = 0
+                        print(f"Validation Loss: {val_loss:8.6f} | New best validation loss!")
+                    else:
+                        no_improve_counter += 1
+                        print(f"Validation Loss: {val_loss:8.6f} | New best validation loss! (but minimal improvement, counter: {no_improve_counter})")
                 else:
-                    print(f"Validation Loss: {val_loss:8.6f} | Current best: {best_val_loss:8.6f}")
+                    no_improve_counter += 1
+                    print(f"Validation Loss: {val_loss:8.6f} | Current best: {best_val_loss:8.6f} | No improvement for {no_improve_counter} epoch(s).")
+
+                if self.early_stopping and no_improve_counter >= self.patience:
+                    print("Early stopping triggered due to convergence.")
+                    break
             
 
                 if i % self.save_freq == 0:

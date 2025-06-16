@@ -333,9 +333,9 @@ class Parser(Tap):
 
     def mkdir(self, args):
         if (
-            "logbase" in dir(args)
-            and "dataset" in dir(args)
-            and "exp_name" in dir(args)
+            ("logbase" in dir(args) or "logbase" in self._dict or "logbase" in dir(args._args))
+            and ("dataset" in dir(args) or "dataset" in self._dict or "dataset" in dir(args._args))
+            and ("exp_name" in dir(args) or "exp_name" in self._dict or "exp_name" in dir(args._args))
         ):
             self._dict["savepath"] = args.savepath
             if "suffix" in dir(args):
