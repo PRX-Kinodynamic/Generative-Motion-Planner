@@ -34,7 +34,7 @@ base = {
         },
         "invalid_label": -1,
         "n_runs": 100,
-        "batch_size": int(1e6),
+        "batch_size": int(266e3),
         "attractor_dist_threshold": 0.05,
         "attractor_prob_threshold": 0.98,
         "max_path_length": 502,
@@ -74,6 +74,11 @@ base = {
             },
             "plan": None,
         },
+        "state_limits": {
+            "mins": [-np.pi, -2*np.pi],
+            "maxs": [np.pi, 2*np.pi],
+        },
+        "sample_granularity": 0.04,
         "plan_preprocess_fns": None,    
         "trajectory_preprocess_fns": [
             handle_angle_wraparound,
@@ -113,13 +118,13 @@ base = {
         "n_reference": 8,
         "bucket": None,
         "device": "cuda",
-        "seed": None,
+        "seed": 42,
 
         #---------------------------- validation ----------------------------#
         "val_dataset_size": 40,
         "val_batch_size": 2048,
         "patience": 10,
-        "early_stopping": True,
+        "early_stopping": False,
     },
 
     "diffusion": {
@@ -257,3 +262,57 @@ manifold = {
     "min_delta": 5,
 }
 
+adaptive_training = {
+    "prefix": "adaptive_training/",
+    "num_epochs": 20,
+    "min_num_batches_per_epoch": 3e3,
+    "save_freq": 20, # epochs
+    "log_freq": 1e3, # steps
+    "batch_size": 64,
+    "num_workers": cpu_count() - 10,
+    "learning_rate": 2e-4,
+    "gradient_accumulate_every": 1,
+    "ema_decay": 0.995,
+    "save_parallel": False,
+    "n_reference": 8,
+    "bucket": None,
+    "device": "cuda",
+    "seed": 42,
+    "min_delta": 0.0005,
+    "patience": 7,
+    "early_stopping": True,
+    "adaptive_training_kwargs": {
+        "combiner": "adaptive_training.ConcatCombiner",
+        "combiner_kwargs": {},
+        "uncertainty": "adaptive_training.FinalStateStd",
+        "uncertainty_kwargs": {
+            "n_runs": 10,
+            "device": "cuda",
+            "angle_indices": [0],
+            "batch_size": int(266e3),
+            "inference_normalization_params": {
+                "mins": [-np.pi, -2*np.pi],
+                "maxs": [np.pi, 2*np.pi],
+            },
+            "conditional_sample_kwargs": {
+                "n_timesteps": 5,
+                "integration_method": "euler",
+            },
+            "post_process_fns": [
+                process_angles,
+            ],
+            "post_process_fn_kwargs": {
+                "angle_indices": [0],
+            },
+            "num_inference_steps": 17,
+        },
+        "sampler": "adaptive_training.WeightedSampler",
+        "sampler_kwargs": {},
+        "init_size": 100,
+        "val_size": 40,
+        "step_size": 50,
+        "stop_std": 0.01,
+        "max_iters": 30,
+        "filter_seen": False,
+    },
+}

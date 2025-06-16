@@ -1,7 +1,11 @@
+from collections.abc import Callable
+from typing import List
 import numpy as np
+from tqdm import tqdm
 from scipy.stats import circstd
-from genMoPlan.eval.roa import ROAEstimator
 from genMoPlan.datasets.normalization import get_normalizer, Normalizer
+from genMoPlan.models.generative.base import GenerativeModel
+from genMoPlan.utils.json_args import JSONArgs
 
 
 def compute_final_state_std(final_states, angle_indices):
@@ -25,37 +29,53 @@ def compute_final_state_std(final_states, angle_indices):
     
     return std
 
+def evaluate_final_state_std(
+        model: GenerativeModel, 
+        start_states: np.ndarray, 
+        model_args: JSONArgs, 
+        n_runs: int,
+        num_inference_steps: int, 
+        inference_normalization_params: dict, 
+        device: str,
+        batch_size: int = 5000,
+        conditional_sample_kwargs: dict = {},
+        post_process_fns: List[Callable] = [],
+        post_process_fn_kwargs: dict = {},
+    ):
+    from genMoPlan.utils import generate_trajectories
 
-def evaluate_final_state_std(roa_estimator: ROAEstimator, horizon_length: int, num_inference_steps: int, angle_indices: list, inference_normalization_params: dict):
-    """
-    Evaluate the variance of the final states of the trajectories.
-    
-    Parameters:
-    roa_estimator: ROAEstimator instance
-    horizon_length: int, length of prediction horizon
-    num_inference_steps: int, number of inference steps
-    angle_indices: list of indices corresponding to angular dimensions
-    
-    Returns:
-    tuple: (variance_per_state, merged_score)
-        - variance_per_state: np.array of shape (num_start_states, 2)
-        - merged_score: np.array of shape (num_start_states,)
-    """
-    roa_estimator.set_horizon_and_max_path_lengths(horizon_length, num_inference_steps=num_inference_steps)
-    roa_estimator.generate_trajectories(compute_labels=False, discard_trajectories=True, save=False)
+    max_path_length = (num_inference_steps * model_args.horizon_length) + model_args.history_length
 
-    final_states = roa_estimator.final_states
+    num_start_states, dim = start_states.shape
 
-    normalizer: Normalizer = get_normalizer(roa_estimator.model_args.trajectory_normalizer, inference_normalization_params)
-    norm_final_states = normalizer(final_states)
+    final_states = np.zeros((num_start_states, n_runs, dim))
 
-    std_per_state = compute_final_state_std(norm_final_states, angle_indices)
+    for i in tqdm(range(n_runs), desc="Generating trajectories for uncertainty computation"):
+        run_final_states = generate_trajectories(
+            model, 
+            model_args, 
+            start_states, 
+            max_path_length, 
+            device,
+            verbose=True,
+            batch_size=batch_size,
+            conditional_sample_kwargs=conditional_sample_kwargs,
+            only_return_final_states=True,
+            post_process_fns=post_process_fns,
+            post_process_fn_kwargs=post_process_fn_kwargs,
+            horizon_length=model_args.horizon_length,
+        )
+        normalizer: Normalizer = get_normalizer(model_args.trajectory_normalizer, inference_normalization_params)
+        final_states[:, i, :] = normalizer(run_final_states)
+
+    std_per_state = compute_final_state_std(final_states, model_args.angle_indices)
     merged_std = np.mean(std_per_state, axis=1)
     
     return merged_std
+    
 
 
-def plot_final_state_std(std, start_states, save_path: str, title: str):
+def plot_final_state_std(std, start_states, save_path: str, title: str, s=1):
     import matplotlib.pyplot as plt
     from matplotlib import cm
 
@@ -64,67 +84,9 @@ def plot_final_state_std(std, start_states, save_path: str, title: str):
     # Apply log normalization
     scatter = plt.scatter(start_states[:, 0], start_states[:, 1], 
                       c=std, cmap=cm.viridis,
-                      alpha=1, edgecolors='none', s=1)
+                      alpha=1, edgecolors='none', s=s)
 
     plt.colorbar(scatter, label='Std')
-    plt.title(title)
-    plt.grid(True, alpha=0.3)
-
-    plt.savefig(save_path, dpi=300)
-    plt.close()
-
-
-def plot_final_state_log_std(std, start_states, save_path: str, title: str):
-    import matplotlib.pyplot as plt
-    from matplotlib import cm
-
-    log_std = np.log(np.log(np.log(std + 1) + 1) + 1)
-
-    plt.figure(figsize=(10, 8))
-    scatter = plt.scatter(start_states[:, 0], start_states[:, 1], 
-                      c=log_std, cmap=cm.viridis,
-                      alpha=1, edgecolors='none', s=1)
-
-    plt.colorbar(scatter, label='Log Std')
-    plt.title(title)
-    plt.grid(True, alpha=0.3)
-
-    plt.savefig(save_path, dpi=300)
-    plt.close()
-
-
-def plot_final_state_eight_root_std(std, start_states, save_path: str, title: str):
-    import matplotlib.pyplot as plt
-    from matplotlib import cm
-
-    eight_root_std = np.power(std, 1/8)
-    
-    plt.figure(figsize=(10, 8))
-    scatter = plt.scatter(start_states[:, 0], start_states[:, 1], 
-                        c=eight_root_std, cmap=cm.viridis, 
-                        alpha=1, edgecolors='none', s=1)
-
-    plt.colorbar(scatter, label='Eight Root Std')
-    plt.title(title)
-    plt.grid(True, alpha=0.3)
-
-    plt.savefig(save_path, dpi=300)
-    plt.close()
-
-
-
-def plot_final_state_std_sigmoid(std, start_states, save_path: str, title: str):
-    import matplotlib.pyplot as plt
-    from matplotlib import cm
-
-    sigmoid_std = 1 / (1 + np.exp(-std))
-
-    plt.figure(figsize=(10, 8))
-    scatter = plt.scatter(start_states[:, 0], start_states[:, 1], 
-                        c=sigmoid_std, cmap=cm.viridis, 
-                        alpha=1, edgecolors='none', s=1)
-
-    plt.colorbar(scatter, label='Sigmoid Std')
     plt.title(title)
     plt.grid(True, alpha=0.3)
 
