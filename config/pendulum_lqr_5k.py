@@ -90,7 +90,7 @@ base = {
         "n_reference": 8,
         "bucket": None,
         "device": "cuda",
-        "seed": None,
+        "seed": 42,
 
         #---------------------------- validation ----------------------------#
         "val_dataset_size": 100,

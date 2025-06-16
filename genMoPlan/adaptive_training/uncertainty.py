@@ -1,9 +1,11 @@
+from collections.abc import Callable
 import os
 import numpy as np
-from typing import List, Optional
+from typing import List, Union
 import torch
 from genMoPlan.models.generative.base import GenerativeModel
-from genMoPlan.eval.final_states import compute_final_state_std, plot_final_state_std
+from genMoPlan.eval.final_states import compute_final_state_std, evaluate_final_state_std, plot_final_state_std
+from genMoPlan.utils import JSONArgs
 
 
 class Uncertainty:
@@ -19,43 +21,46 @@ class FinalStateStd(Uncertainty):
 
     def __init__(
         self,
-        n_runs: int = 10,
-        batch_size: int = 256,
-        angle_indices: Optional[List[int]] = None,
-        device: str = "cpu",
+        n_runs: int,
+        device: str,
+        angle_indices: List[int],
+        batch_size: int = int(1e6),
+        inference_normalization_params: dict = None,
+        conditional_sample_kwargs: dict = {},
+        post_process_fns: List[Callable] = [],
+        post_process_fn_kwargs: dict = {},
+        num_inference_steps: int = None,
     ):
         self.n_runs = n_runs
         self.batch_size = batch_size
-        self.angle_indices = angle_indices or []
+        self.angle_indices = angle_indices
         self.device = device
+        self.inference_normalization_params = inference_normalization_params
+        self.conditional_sample_kwargs = conditional_sample_kwargs
+        self.post_process_fns = post_process_fns
+        self.post_process_fn_kwargs = post_process_fn_kwargs
+        self.num_inference_steps = num_inference_steps
 
     @torch.no_grad()
-    def compute(self, model: GenerativeModel, start_states: np.ndarray, savepath: str, titleSuffix: str) -> np.ndarray:
+    def compute(self, model: GenerativeModel, model_args: JSONArgs, start_states: np.ndarray, save_path: str, title_suffix: str) -> np.ndarray:
         model.eval()
 
-        n_states, dim = start_states.shape
-        final_states = np.zeros((n_states, self.n_runs, dim), dtype=np.float32)
+        std = evaluate_final_state_std(
+            model,
+            start_states,
+            model_args,
+            self.n_runs,
+            self.num_inference_steps,
+            self.inference_normalization_params,
+            self.device,
+            self.batch_size,
+            self.conditional_sample_kwargs,
+            self.post_process_fns,
+            self.post_process_fn_kwargs,
+        )
 
-        for run in range(self.n_runs):
-            for idx in range(0, n_states, self.batch_size):
-                batch_slice = slice(idx, min(idx + self.batch_size, n_states))
-                batch_states = start_states[batch_slice]
+        np.save(os.path.join(save_path, "uncertainty.npy"), std)
 
-                batch_tensor = torch.from_numpy(batch_states).float().to(self.device)
+        plot_final_state_std(std, start_states, save_path=os.path.join(save_path, "uncertainty.png"), title=f"Final State Standard Deviation - {title_suffix}", s=10)
 
-                # history length assumed 1
-                cond = {0: batch_tensor}
-
-                sample = model.forward(cond=cond, global_query=None, local_query=None, verbose=False)
-
-                batch_final = sample.trajectories[:, -1, :].cpu().numpy()
-                final_states[batch_slice, run, :] = batch_final
-
-        std_per_state = compute_final_state_std(final_states, self.angle_indices)
-        merged_std = np.mean(std_per_state, axis=1)
-
-        np.save(os.path.join(savepath, "uncertainty.npy"), merged_std)
-
-        plot_final_state_std(merged_std, start_states, savepath=savepath, title=f"Final State Std - {titleSuffix}")
-
-        return merged_std
+        return std
