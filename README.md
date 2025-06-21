@@ -66,6 +66,8 @@ cd ../Generative-Motion-Planner
 pip install -e .
 ```
 
+Note: PyTorch installation may fail. In that case, remove the corresponding line from the requirements.txt file and refer to [PyTorch's website](https://pytorch.org/get-started/locally/) to install it.
+
 ## Usage
 
 ### Training a Diffusion Model
