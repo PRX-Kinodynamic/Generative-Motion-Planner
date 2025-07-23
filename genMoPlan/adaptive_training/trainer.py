@@ -42,7 +42,7 @@ class AdaptiveTrainer:
         init_size: int = 100,
         val_size: int = 40,
         step_size: int = 70,
-        stop_std: float = 0.01,
+        stop_uncertainty: float = 0.01,
         max_iters: int = 30,
         filter_seen: bool = True,
         animate_plots: bool = False,
@@ -53,7 +53,7 @@ class AdaptiveTrainer:
 
         self.init_size = init_size
         self.step_size = step_size
-        self.stop_std = stop_std
+        self.stop_uncertainty = stop_uncertainty
         self.max_iters = max_iters
         self.filter_seen = filter_seen
         self.val_size = val_size
@@ -218,12 +218,12 @@ class AdaptiveTrainer:
 
         print(f"[ adaptive_training/trainer ] Mean {self.uncertainty.name}: {mean_uncertainty:.6f}")
 
-        achieved_stop_std = mean_uncertainty < self.stop_std
+        achieved_stop_uncertainty = mean_uncertainty < self.stop_uncertainty
 
-        if achieved_stop_std:
-            print(f"[ adaptive_training/trainer ] Reached target std {self.stop_std}. Stopping.")
+        if achieved_stop_uncertainty:
+            print(f"[ adaptive_training/trainer ] Reached target uncertainty {self.stop_uncertainty}. Stopping.")
 
-        return achieved_stop_std
+        return achieved_stop_uncertainty
 
     def _get_sampling_uncertainty(self, uncertainty: np.ndarray, seen_set: Set[int], all_dataset_ids: Sequence[int]):
         """

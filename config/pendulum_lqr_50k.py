@@ -288,8 +288,10 @@ adaptive_training = {
     "adaptive_training_kwargs": {
         "combiner": "adaptive_training.ConcatCombiner",
         "combiner_kwargs": {},
-        "uncertainty": "adaptive_training.FinalStateStd",
-        # "uncertainty": "adaptive_training.FinalStateVariance",
+        # "uncertainty": "adaptive_training.FinalStateStd",
+        # "stop_uncertainty": 0.01,
+        "uncertainty": "adaptive_training.FinalStateVariance",
+        "stop_uncertainty": 0.001,
         "animate_plots": True,
         "uncertainty_kwargs": {
             "n_runs": 10,
@@ -317,7 +319,6 @@ adaptive_training = {
         "init_size": 10,
         "step_size": 10,
         "val_size": 40,
-        "stop_std": 0.01,
         "max_iters": 30,
         "filter_seen": False,
     },
