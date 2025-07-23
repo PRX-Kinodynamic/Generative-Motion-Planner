@@ -27,6 +27,7 @@ class AdaptiveTrainer:
     animation_generator: Optional[AnimationGenerator] = None
     uncertainty: Uncertainty
     sampler: DiscreteSampler
+    combiner: DatasetCombiner
 
     def __init__(
         self,
@@ -321,7 +322,7 @@ class AdaptiveTrainer:
                 self._update_animation(iteration, uncertainty, new_ids)
 
                 # Update dataset lists/sets
-                dataset_ids = self.combiner.combine(dataset_ids, new_ids)
+                dataset_ids = self.combiner.combine(dataset_ids, new_ids, uncertainty)
                 seen_set.update(new_ids)
 
                 # Stop if we've now covered the entire pool (at least once)
