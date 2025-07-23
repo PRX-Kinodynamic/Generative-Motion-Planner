@@ -73,3 +73,6 @@ def expand_model_paths(model_paths, no_best_pt=False):
     
     return expanded_paths
 
+def _get_non_angular_indices(angle_indices: List[int], dimensions: int) -> List[int]:
+    return [i for i in range(dimensions) if i not in angle_indices]
+
