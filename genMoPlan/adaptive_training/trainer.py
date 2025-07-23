@@ -6,12 +6,12 @@ from typing import Sequence, Set, Union, Optional
 import torch
 import matplotlib.pyplot as plt
 import numpy as np
-import imageio
 
 from genMoPlan.adaptive_training.data_sampler import *
 from genMoPlan.adaptive_training.uncertainty import *
 from genMoPlan.adaptive_training.dataset_combiner import *
 from genMoPlan.adaptive_training.animation_generator import AnimationGenerator
+from genMoPlan.adaptive_training.video_generator import generate_sample_evolution_videos, generate_uncertainty_evolution_videos
 from genMoPlan.models.generative.base import GenerativeModel
 from genMoPlan.datasets.trajectory import TrajectoryDataset
 from genMoPlan import utils
@@ -257,34 +257,8 @@ class AdaptiveTrainer:
         Creates mp4 files for uncertainty and samples from the images generated in each iteration.
         """
         print("[ adaptive_training/trainer ] Creating evolution videos...")
-        
-        uncertainty_images = []
-        samples_images = []
-
-        for i in range(num_iterations):
-            iteration_dir = path.join(self.args.savepath, f"iteration_{i}")
-            
-            uncertainty_img_path = path.join(iteration_dir, "uncertainty.png")
-            if path.exists(uncertainty_img_path):
-                uncertainty_images.append(imageio.imread(uncertainty_img_path))
-
-            samples_img_path = path.join(iteration_dir, "new_samples.png")
-            if path.exists(samples_img_path):
-                samples_images.append(imageio.imread(samples_img_path))
-
-        if len(uncertainty_images) > 1:
-            uncertainty_video_path = path.join(self.args.savepath, "uncertainty_evolution.mp4")
-            imageio.mimsave(uncertainty_video_path, uncertainty_images, fps=2)
-            print(f"[ adaptive_training/trainer ] Saved uncertainty evolution video to {uncertainty_video_path}")
-        else:
-            print("[ adaptive_training/trainer ] Not enough uncertainty images to create video.")
-
-        if len(samples_images) > 1:
-            samples_video_path = path.join(self.args.savepath, "samples_evolution.mp4")
-            imageio.mimsave(samples_video_path, samples_images, fps=2)
-            print(f"[ adaptive_training/trainer ] Saved samples evolution video to {samples_video_path}")
-        else:
-            print("[ adaptive_training/trainer ] Not enough new samples images to create video.")
+        generate_uncertainty_evolution_videos(num_iterations, self.args.savepath)
+        generate_sample_evolution_videos(num_iterations, self.args.savepath)
 
     # --------------------------- main loop ------------------------- #
 
