@@ -15,6 +15,9 @@ dependencies:
   - gh
   - scikit-learn
   - pip
+  - imageio
+  - imageio-ffmpeg
+  - pillow
   - pip:
     - -r requirements.txt
     - -e .

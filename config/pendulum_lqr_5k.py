@@ -118,7 +118,7 @@ base = {
             "n_timesteps": 20,
         },
         "prefix": "diffusion/",
-        "min_delta": 1e-4,
+        "min_delta": 1e-5,
         "validation_kwargs": {},
     },
 

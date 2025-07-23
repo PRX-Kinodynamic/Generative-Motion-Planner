@@ -326,7 +326,7 @@ class Trainer(object):
         self.model.load_state_dict(data['model'])
         self.ema_model.load_state_dict(data['ema'])
 
-    def train(self):
+    def train(self, reraise_keyboard_interrupt: bool = False):
         best_val_loss = float('inf')
         no_improve_counter = 0
 
@@ -365,7 +365,9 @@ class Trainer(object):
                     self.save_model(f'state_{i}_epochs')
 
         except KeyboardInterrupt:
-            print("Training interrupted. Saving model...")
+            print("Keyboard interrupt. Training stopped.")
+            if reraise_keyboard_interrupt:
+                raise KeyboardInterrupt
 
         self.save_model('final')
         self.save_losses()

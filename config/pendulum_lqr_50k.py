@@ -3,6 +3,10 @@ from flow_matching.utils.manifolds import FlatTorus, Euclidean, Product
 import numpy as np
 from genMoPlan.utils import watch, handle_angle_wraparound, augment_unwrapped_state_data, watch_dict, process_angles
 
+is_arrakis = False
+
+max_batch_size = int(1e6) if is_arrakis else int(266e3)
+
 # ------------------------ base ------------------------#
 
 ## automatically make experiment names for planning
@@ -34,7 +38,7 @@ base = {
         },
         "invalid_label": -1,
         "n_runs": 100,
-        "batch_size": int(266e3),
+        "batch_size": max_batch_size,
         "attractor_dist_threshold": 0.05,
         "attractor_prob_threshold": 0.98,
         "max_path_length": 502,
@@ -278,18 +282,20 @@ adaptive_training = {
     "bucket": None,
     "device": "cuda",
     "seed": 42,
-    "min_delta": 0.0005,
+    "min_delta": 0.0001,
     "patience": 7,
     "early_stopping": True,
     "adaptive_training_kwargs": {
         "combiner": "adaptive_training.ConcatCombiner",
         "combiner_kwargs": {},
         "uncertainty": "adaptive_training.FinalStateStd",
+        # "uncertainty": "adaptive_training.FinalStateVariance",
+        "animate_plots": True,
         "uncertainty_kwargs": {
             "n_runs": 10,
             "device": "cuda",
             "angle_indices": [0],
-            "batch_size": int(266e3),
+            "batch_size": max_batch_size,
             "inference_normalization_params": {
                 "mins": [-np.pi, -2*np.pi],
                 "maxs": [np.pi, 2*np.pi],
@@ -306,11 +312,11 @@ adaptive_training = {
             },
             "num_inference_steps": 17,
         },
-        "sampler": "adaptive_training.WeightedSampler",
+        "sampler": "adaptive_training.WeightedDiscreteSampler",
         "sampler_kwargs": {},
-        "init_size": 100,
+        "init_size": 10,
+        "step_size": 10,
         "val_size": 40,
-        "step_size": 50,
         "stop_std": 0.01,
         "max_iters": 30,
         "filter_seen": False,
