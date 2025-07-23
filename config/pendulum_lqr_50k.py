@@ -114,7 +114,7 @@ base = {
         "save_freq": 20, # epochs
         "log_freq": 1e3, # steps
         "batch_size": 64,
-        "num_workers": cpu_count() - 10,
+        "num_workers": 4,
         "learning_rate": 2e-4,
         "gradient_accumulate_every": 1,
         "ema_decay": 0.995,
@@ -273,7 +273,7 @@ adaptive_training = {
     "save_freq": 20, # epochs
     "log_freq": 1e3, # steps
     "batch_size": 64,
-    "num_workers": cpu_count() - 10,
+    "num_workers": 4,
     "learning_rate": 2e-4,
     "gradient_accumulate_every": 1,
     "ema_decay": 0.995,
