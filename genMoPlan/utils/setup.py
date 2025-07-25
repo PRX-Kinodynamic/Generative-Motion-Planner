@@ -19,6 +19,25 @@ from .git_utils import (
 )
 
 
+def recursive_update(d, u):
+    for k, v in u.items():
+        # First, check if the key exists in the base dictionary
+        if k in d:
+            # If both the new value and the existing value are dictionaries, recurse
+            if isinstance(v, dict) and isinstance(d[k], dict):
+                recursive_update(d[k], v)
+            # If the new value is a dict but the old one isn't, raise the type error
+            elif isinstance(v, dict) and not isinstance(d[k], dict):
+                raise ValueError(f"[ utils/setup ] Type mismatch: cannot overwrite non-dict with dict for key '{k}'")
+            # Otherwise, just update the value
+            else:
+                d[k] = v
+        # If the key is new, just add it
+        else:
+            d[k] = v
+    return d
+
+
 def set_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
@@ -242,16 +261,29 @@ class Parser(Tap):
         args.used_variations = []
         
         if variations:
+            valid_variations = []
             for variation in variations:
                 if hasattr(module, variation):
-                    print(
-                        f"[ utils/setup ] Using overrides | config: {args.config} | variation: {variation}"
-                    )
-                    overrides = getattr(module, variation)
-                    params.update(overrides)
-                    args.used_variations.append(variation)
-                else:
-                    print(f"[ utils/setup ] Warning: variation {variation} not found in config: {args.config}")
+                    valid_variations.append(variation)
+
+            if len(valid_variations) != len(variations):
+                print(f"[ utils/setup ] Warning: below variations not found in config: {args.config}:")
+                for variation in variations:
+                    if variation not in valid_variations:
+                        print(f"    - {variation}")
+        
+                input("Press Enter to continue with the remaining variations...")
+
+            variations = valid_variations
+
+
+            for variation in variations:
+                print(
+                    f"[ utils/setup ] Using overrides | config: {args.config} | variation: {variation}"
+                )
+                overrides = getattr(module, variation)
+                recursive_update(params, overrides)
+                args.used_variations.append(variation)
         else:
             print(
                 f"[ utils/setup ] Not using overrides | config: {args.config} | variation: base"
