@@ -14,7 +14,7 @@ def _get_image_paths(savepath: str, num_iterations: int, img_name: str):
             image_paths.append(img_path)
     return image_paths
 
-def generate_uncertainty_evolution_videos(
+def _generate_uncertainty_evolution_videos(
     num_iterations: int,
     savepath: str,
 ):
@@ -31,7 +31,7 @@ def generate_uncertainty_evolution_videos(
     else:
         print("[ adaptive_training/trainer ] Not enough uncertainty images to create video.")
 
-def generate_sample_evolution_videos(
+def _generate_sample_evolution_videos(
     num_iterations: int,
     savepath: str,
 ):
@@ -47,3 +47,10 @@ def generate_sample_evolution_videos(
         print(f"[ adaptive_training/trainer ] Saved samples evolution video to {samples_video_path}")
     else:
         print("[ adaptive_training/trainer ] Not enough new samples images to create video.")
+
+def generate_iteration_evolution_videos(
+    num_iterations: int,
+    savepath: str,
+):
+    _generate_uncertainty_evolution_videos(num_iterations, savepath)
+    _generate_sample_evolution_videos(num_iterations, savepath)

@@ -11,7 +11,7 @@ from genMoPlan.adaptive_training.data_sampler import *
 from genMoPlan.adaptive_training.uncertainty import *
 from genMoPlan.adaptive_training.dataset_combiner import *
 from genMoPlan.adaptive_training.animation_generator import AnimationGenerator
-from genMoPlan.adaptive_training.video_generator import generate_sample_evolution_videos, generate_uncertainty_evolution_videos
+from genMoPlan.adaptive_training.video_generator import generate_iteration_evolution_videos
 from genMoPlan.models.generative.base import GenerativeModel
 from genMoPlan.datasets.trajectory import TrajectoryDataset
 from genMoPlan import utils
@@ -258,8 +258,7 @@ class AdaptiveTrainer:
         Creates mp4 files for uncertainty and samples from the images generated in each iteration.
         """
         print("[ adaptive_training/trainer ] Creating evolution videos...")
-        generate_uncertainty_evolution_videos(num_iterations, self.args.savepath)
-        generate_sample_evolution_videos(num_iterations, self.args.savepath)
+        generate_iteration_evolution_videos(num_iterations, self.args.savepath)
 
     # --------------------------- main loop ------------------------- #
 
@@ -336,6 +335,10 @@ class AdaptiveTrainer:
         print("[ adaptive_training/trainer ] Training complete.")
 
         trainer.save_model("final", save_path=self.args.savepath)
+
+        self._load_best_model()
+
+        trainer.save_model("best", save_path=self.args.savepath)
 
         if last_iteration > -1:
             self._create_videos(last_iteration + 1)

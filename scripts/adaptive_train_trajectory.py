@@ -95,6 +95,3 @@ trainer_config.save()
 # # -----------------------------------------------------------------------------#
 torch.set_num_threads(args.num_workers)
 trainer.run()
-
-if args.no_inference:
-    exit()

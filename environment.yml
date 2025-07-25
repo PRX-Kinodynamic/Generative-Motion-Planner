@@ -18,6 +18,7 @@ dependencies:
   - imageio
   - imageio-ffmpeg
   - pillow
+  - pytest
   - pip:
     - -r requirements.txt
     - -e .
