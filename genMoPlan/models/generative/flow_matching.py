@@ -2,6 +2,8 @@ import warnings
 
 import torch
 
+from genMoPlan.utils.arrays import torch_randn_like
+
 try:
     from flow_matching.path.scheduler import *
     from flow_matching.path import *
@@ -129,14 +131,19 @@ class FlowMatching(GenerativeModel):
 
     # ------------------------------------------ training ------------------------------------------#
 
-    def compute_loss(self, x_target, cond, global_query=None, local_query=None):
+    def compute_loss(self, x_target, cond, global_query=None, local_query=None, seed=None):
         """
         Choose a random timestep t and calculate the loss for the model
         """
-        batch_size = len(x_target)
-        t = torch.rand(batch_size, device=x_target.device)
+        if seed is not None:
+            generator = torch.Generator(device=x_target.device).manual_seed(seed)
+        else:
+            generator = None
 
-        x_noisy = torch.randn_like(x_target)
+        batch_size = len(x_target)
+        t = torch.rand(batch_size, device=x_target.device, generator=generator)
+
+        x_noisy = torch_randn_like(x_target, generator=generator)
         
         apply_conditioning(x_noisy, cond)
 
@@ -154,7 +161,7 @@ class FlowMatching(GenerativeModel):
     # ------------------------------------------ inference ------------------------------------------#
 
     @torch.no_grad()
-    def conditional_sample(self, cond, shape, global_query=None, local_query=None, n_timesteps=5, integration_method="euler", return_chain=False, n_intermediate_steps=0, **kwargs) -> Sample:
+    def conditional_sample(self, cond, shape, global_query=None, local_query=None, n_timesteps=5, integration_method="euler", return_chain=False, n_intermediate_steps=0, seed=None, **kwargs) -> Sample:
         """
         Generate samples by running the flow matching ODE solver from noise to target.
         
@@ -182,7 +189,12 @@ class FlowMatching(GenerativeModel):
 
         T = torch.linspace(0, 1, n_intermediate_steps + 2)
 
-        x_noisy = torch.randn(shape, device=device)
+        if seed is not None:
+            generator = torch.Generator(device=device).manual_seed(seed)
+        else:
+            generator = None
+
+        x_noisy = torch.randn(shape, device=device, generator=generator)
         
         apply_conditioning(x_noisy, cond)
 
@@ -226,7 +238,7 @@ class FlowMatching(GenerativeModel):
         if not self.has_global_query:
             global_query = None
 
-        sol = self.conditional_sample(cond, x.shape, global_query=global_query, local_query=local_query, verbose=False, return_chain=False, **sample_kwargs)
+        sol = self.conditional_sample(cond, x.shape, global_query=global_query, local_query=local_query, verbose=False, return_chain=False, seed=self.val_seed, **sample_kwargs)
 
         if self.manifold is not None:
             x = self.manifold.wrap(x)
