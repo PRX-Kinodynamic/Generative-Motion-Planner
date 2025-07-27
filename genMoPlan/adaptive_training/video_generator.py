@@ -1,7 +1,7 @@
 from os import path
 import imageio
 
-uncertainty_img_name = "uncertainty.png"
+uncertainty_img_name = "normalized_uncertainty.png"
 samples_img_name = "new_samples.png"
 fps = 2
 

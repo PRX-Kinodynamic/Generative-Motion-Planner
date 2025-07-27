@@ -286,7 +286,7 @@ class AdaptiveTrainer:
 
                 trainer = self._train_iteration(iteration, dataset_ids)
 
-                uncertainty = self.uncertainty.compute(
+                uncertainty = self.uncertainty.compute_normalized_uncertainty(
                     self.model, 
                     self.args, 
                     self._dataset_start_points, 
