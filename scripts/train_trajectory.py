@@ -141,7 +141,6 @@ trainer_config = utils.Config(
     log_freq=args.log_freq,
     save_parallel=args.save_parallel,
     results_folder=args.savepath,
-    bucket=args.bucket,
     n_reference=args.n_reference,
     method=args.method,
     exp_name=args.exp_name,

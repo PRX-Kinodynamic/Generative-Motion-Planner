@@ -102,7 +102,7 @@ def print_grid_analysis(grid_info):
 
 
 def main(args):
-    dataset_path = path.join("data_trajectories", args.dataset)
+    dataset_path = path.join(utils.get_data_trajectories_path(), args.dataset)
     trajectories_path = path.join(dataset_path, "trajectories")
 
     fnames = utils.get_fnames_to_load(dataset_path, trajectories_path)

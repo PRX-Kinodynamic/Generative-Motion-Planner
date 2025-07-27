@@ -8,8 +8,7 @@ dependencies:
   - matplotlib
   - tqdm
   - einops
-  - git
-  - gitpython
+  - python-dotenv
   - scipy
   - notebook
   - gh

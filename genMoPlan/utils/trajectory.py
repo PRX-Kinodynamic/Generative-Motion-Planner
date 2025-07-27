@@ -7,8 +7,7 @@ import torch
 import numpy as np
 
 from genMoPlan.models.generative.base import GenerativeModel
-from genMoPlan.utils.arrays import to_torch
-from genMoPlan.utils.model import get_normalizer_params
+from genMoPlan.utils import to_torch, get_normalizer_params, get_data_trajectories_path
 
 def _generate_trajectory_batch(
         start_states: np.ndarray,
@@ -396,7 +395,7 @@ def load_trajectories(dataset, observation_dim: int, dataset_size=None, parallel
     """
     load dataset from directory
     """
-    dataset_path = path.join("data_trajectories", dataset)
+    dataset_path = path.join(get_data_trajectories_path(), dataset)
     trajectories_path = path.join(dataset_path, "trajectories")
 
     if fnames is None:

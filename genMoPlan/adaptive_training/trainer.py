@@ -95,7 +95,7 @@ class AdaptiveTrainer:
         self._dataset_start_points = start_points[remaining_ids]
     
     def _load_start_points(self):
-        dataset_path = path.join("data_trajectories", self.args.dataset)
+        dataset_path = path.join(utils.get_data_trajectories_path(), self.args.dataset)
         trajectories_path = path.join(dataset_path, "trajectories")
 
         fnames = utils.get_fnames_to_load(dataset_path, trajectories_path)
@@ -150,7 +150,6 @@ class AdaptiveTrainer:
             log_freq=self.args.log_freq,
             save_parallel=self.args.save_parallel,
             results_folder=self.logdir,
-            bucket=self.args.bucket,
             n_reference=self.args.n_reference,
             method=self.args.method,
             exp_name=self.args.exp_name,
@@ -275,6 +274,8 @@ class AdaptiveTrainer:
         self.logdir = None
 
         last_iteration = -1
+        trainer = None
+
         for iteration in range(self.max_iters):
             try:
                 last_iteration = iteration
@@ -334,11 +335,12 @@ class AdaptiveTrainer:
 
         print("[ adaptive_training/trainer ] Training complete.")
 
-        trainer.save_model("final", save_path=self.args.savepath)
+        if trainer is not None:
+            trainer.save_model("final", save_path=self.args.savepath)
 
-        self._load_best_model()
+            self._load_best_model()
 
-        trainer.save_model("best", save_path=self.args.savepath)
+            trainer.save_model("best", save_path=self.args.savepath)
 
         if last_iteration > -1:
             self._create_videos(last_iteration + 1)

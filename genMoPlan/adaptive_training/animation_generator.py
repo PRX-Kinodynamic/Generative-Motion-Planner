@@ -7,8 +7,8 @@ from typing import List, Optional, Sequence, Tuple
 import imageio
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.colors import ListedColormap
 
+from genMoPlan.utils import get_data_trajectories_path
 
 class AnimationGenerator:
     """Handles the generation of animations from plot images."""
@@ -22,7 +22,7 @@ class AnimationGenerator:
 
     def _load_roa_data(self, dataset_name: str) -> Tuple[np.ndarray, np.ndarray]:
         """Loads the Region of Attraction (ROA) data from the specified dataset."""
-        roa_file_path = path.join('data_trajectories', dataset_name, 'roa_labels.txt')
+        roa_file_path = path.join(get_data_trajectories_path(), dataset_name, 'roa_labels.txt')
         if not path.exists(roa_file_path):
             raise FileNotFoundError(f"ROA data file not found at: {roa_file_path}")
 
