@@ -32,7 +32,7 @@ def main(args):
 
 
     img_path = path.join(
-        "data_trajectories", args.dataset, fname + ".png"
+        utils.get_data_trajectories_path(), args.dataset, fname + ".png"
     )
 
     utils.plot_trajectories(trajectories, img_path, verbose=True)

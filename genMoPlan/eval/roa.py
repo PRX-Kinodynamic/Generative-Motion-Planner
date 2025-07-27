@@ -12,8 +12,7 @@ from typing import Optional
 
 from tqdm import tqdm
 
-from genMoPlan.utils.json_args import JSONArgs
-from genMoPlan.utils.trajectory import plot_trajectories
+from genMoPlan.utils import JSONArgs, plot_trajectories, get_data_trajectories_path
 
 def _load_final_states(file_path):
     labels = []
@@ -242,7 +241,7 @@ class ROAEstimator:
     def load_ground_truth(self):
         if self.verbose:
             print('[ scripts/estimate_roa ] Loading ground truth')
-        roa_labels_fpath = path.join("data_trajectories", self.dataset, "roa_labels.txt")
+        roa_labels_fpath = path.join(get_data_trajectories_path(), self.dataset, "roa_labels.txt")
 
         start_states = []
         expected_labels = []

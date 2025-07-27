@@ -5,18 +5,33 @@ import importlib
 import random
 import sys
 import time
-from typing import List
+from typing import List, Optional
 import warnings
 
 import numpy as np
 import torch
 from tap import Tap
 
-from .serialization import mkdir
-from .git_utils import (
-    get_git_rev,
-    save_git_diff,
-)
+from .paths import mkdir
+
+
+def recursive_update(d, u):
+    for k, v in u.items():
+        # First, check if the key exists in the base dictionary
+        if k in d:
+            # If both the new value and the existing value are dictionaries, recurse
+            if isinstance(v, dict) and isinstance(d[k], dict):
+                recursive_update(d[k], v)
+            # If the new value is a dict but the old one isn't, raise the type error
+            elif isinstance(v, dict) and not isinstance(d[k], dict):
+                raise ValueError(f"[ utils/setup ] Type mismatch: cannot overwrite non-dict with dict for key '{k}'")
+            # Otherwise, just update the value
+            else:
+                d[k] = v
+        # If the key is new, just add it
+        else:
+            d[k] = v
+    return d
 
 
 def set_seed(seed):
@@ -161,6 +176,7 @@ class Args:
 
 class Parser(Tap):
     first_save = True
+    suffix: Optional[str] = None
 
     def __init__(self, **kwargs):
         super().__init__()
@@ -179,7 +195,6 @@ class Parser(Tap):
         if self.first_save:
             self.first_save = False
             self.mkdir(args)
-            self.save_diff(args)
 
         fullpath = os.path.join(args.savepath, "args.json")
         print(f"[ utils/setup ] Saved args to {fullpath}")
@@ -209,10 +224,9 @@ class Parser(Tap):
         args = super().parse_args(known_only=True, args=cmd_args)
         args.config = f"config.{args.dataset}"
         args = self.read_config(args, method=args.method, variations=args.variations)
-        self.add_extras(args)
+        self.apply_config_overrides(args)
         self.eval_fstrings(args)
         self.set_seed(args)
-        self.get_commit(args)
         self.set_loadbase(args)
         self.generate_exp_name(args)
 
@@ -242,16 +256,29 @@ class Parser(Tap):
         args.used_variations = []
         
         if variations:
+            valid_variations = []
             for variation in variations:
                 if hasattr(module, variation):
-                    print(
-                        f"[ utils/setup ] Using overrides | config: {args.config} | variation: {variation}"
-                    )
-                    overrides = getattr(module, variation)
-                    params.update(overrides)
-                    args.used_variations.append(variation)
-                else:
-                    print(f"[ utils/setup ] Warning: variation {variation} not found in config: {args.config}")
+                    valid_variations.append(variation)
+
+            if len(valid_variations) != len(variations):
+                print(f"[ utils/setup ] Warning: below variations not found in config: {args.config}:")
+                for variation in variations:
+                    if variation not in valid_variations:
+                        print(f"    - {variation}")
+        
+                input("Press Enter to continue with the remaining variations...")
+
+            variations = valid_variations
+
+
+            for variation in variations:
+                print(
+                    f"[ utils/setup ] Using overrides | config: {args.config} | variation: {variation}"
+                )
+                overrides = getattr(module, variation)
+                recursive_update(params, overrides)
+                args.used_variations.append(variation)
         else:
             print(
                 f"[ utils/setup ] Not using overrides | config: {args.config} | variation: base"
@@ -264,7 +291,7 @@ class Parser(Tap):
 
         return args
 
-    def add_extras(self, args):
+    def apply_config_overrides(self, args):
         """
         Override config parameters with command-line arguments
         """
@@ -325,11 +352,17 @@ class Parser(Tap):
         if not "exp_name" in dir(args):
             return
         exp_name = getattr(args, "exp_name")
-        if callable(exp_name):
+        if not callable(exp_name):
+            exp_name_string = exp_name
+        else:
             exp_name_string = exp_name(args)
-            print(f"[ utils/setup ] Setting exp_name to: {exp_name_string}")
-            setattr(args, "exp_name", exp_name_string)
-            self._dict["exp_name"] = exp_name_string
+
+        if self.suffix is not None:
+            exp_name_string = f"{exp_name_string}_{self.suffix}"
+
+        print(f"[ utils/setup ] Setting exp_name to: {exp_name_string}")
+        setattr(args, "exp_name", exp_name_string)
+        self._dict["exp_name"] = exp_name_string
 
     def mkdir(self, args):
         if (
@@ -343,14 +376,6 @@ class Parser(Tap):
             if mkdir(args.savepath):
                 print(f"[ utils/setup ] Made savepath: {args.savepath}")
 
-    def get_commit(self, args):
-        args.commit = get_git_rev()
-
-    def save_diff(self, args):
-        try:
-            save_git_diff(os.path.join(args.savepath, "diff.txt"))
-        except:
-            print("[ utils/setup ] WARNING: did not save git diff")
 
 class TrainingParser(Parser):
     dataset: str

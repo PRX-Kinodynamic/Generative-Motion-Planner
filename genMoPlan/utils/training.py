@@ -10,7 +10,6 @@ import matplotlib.pyplot as plt
 
 from .arrays import batch_to_device
 from .timer import Timer
-from .cloud import sync_logs
 from .model import GenerativeModel
 
 def cycle(dl):
@@ -103,7 +102,6 @@ class Trainer(object):
         save_parallel: bool = False,
         results_folder: str = './results',
         n_reference: int = 8,
-        bucket: str = None,
         val_batch_size: int = 32,
         num_epochs: int = 100,
         patience: int = 10,
@@ -134,7 +132,6 @@ class Trainer(object):
         self.train_dataset = train_dataset
         self.val_dataset = val_dataset
         self.logdir = results_folder
-        self.bucket = bucket
         self.n_reference = n_reference
         self.method = method
         self.exp_name = exp_name
@@ -250,7 +247,6 @@ class Trainer(object):
     def save_model(self, label, save_path=None):
         '''
             saves model and ema to disk;
-            syncs to storage bucket if a bucket is specified
         '''
         data = {
             'step': self.step,
@@ -263,8 +259,6 @@ class Trainer(object):
         savepath = os.path.join(save_path, model_state_name)
         torch.save(data, savepath)
         self.latest_model_state_name = model_state_name
-        if self.bucket is not None:
-            sync_logs(self.logdir, bucket=self.bucket, background=self.save_parallel)
 
     def add_train_losses(self, losses):
         for key, loss in losses.items():

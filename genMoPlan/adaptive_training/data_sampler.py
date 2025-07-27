@@ -42,32 +42,31 @@ class DiscreteSampler(ABC):
 
     def _plot_sample_plot(
         self, 
+        uncertainty: np.ndarray,
         chosen_indices: np.ndarray, 
-        probs: np.ndarray,
         dataset_start_points: np.ndarray, 
         save_path: str,
         sample_plot_options: dict,
     ):
         chosen_start_points = dataset_start_points[chosen_indices]
 
-        use_cmap = sample_plot_options.get('use_cmap', False)
-
-        if use_cmap:
-            cmap = plt.get_cmap(sample_plot_options.get('cmap', 'viridis'))
-            colors = cmap(probs)
-        else:
-            colors = 'r'
-
         plt.figure(figsize=(10.08, 8))
         plt.scatter(
+            dataset_start_points[:, 0], dataset_start_points[:, 1], 
+            c=uncertainty,
+            cmap='viridis',
+            alpha=1, 
+            edgecolors='none',
+            s=10,
+        )
+        plt.colorbar(label='Uncertainty')
+        plt.scatter(
             chosen_start_points[:, 0], chosen_start_points[:, 1], 
-            c=colors,
+            c='r',
             marker='x',
             alpha=1, 
             s=10,
         )
-        if use_cmap:
-            plt.colorbar(label='Probability')
         plt.title(sample_plot_options.get('title', 'New Samples Plot'))
         plt.savefig(os.path.join(save_path, 'new_samples.png'))
         plt.close()
@@ -102,10 +101,28 @@ class DiscreteSampler(ABC):
             self._plot_sample_hist(probs, chosen_indices, save_path, hist_save_options)
 
         if sample_plot_options:
-            self._plot_sample_plot(chosen_indices, probs, dataset_start_points, save_path, sample_plot_options)
+            self._plot_sample_plot(uncertainty, chosen_indices, dataset_start_points, save_path, sample_plot_options)
 
 
         return [candidate_ids[i] for i in chosen_indices]
+
+
+class UniformDiscreteSampler(DiscreteSampler):
+    """
+    Samples uniformly from the candidate ids.
+    """
+    def _sample_indices(
+        self, 
+        uncertainty: np.ndarray,
+        num_candidates: int,
+        num_samples: int = 1,
+    ) -> List[int]:
+        return np.random.choice(
+            num_candidates, 
+            size=num_samples, 
+            replace=False,
+        )
+
 
 
 class WeightedDiscreteSampler(DiscreteSampler):

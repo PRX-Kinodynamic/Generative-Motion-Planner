@@ -122,3 +122,9 @@ def report_parameters(model, topk=10):
         f"... and {len(counts)-topk} others accounting for {_to_str(remaining_parameters)} parameters",
     )
     return n_parameters
+
+def torch_randn_like(x, generator=None, device=None):
+    """ Replicates torch.randn_like but allows for a generator to be passed in """
+
+    device = device or x.device
+    return torch.randn(x.size(), dtype=x.dtype, layout=x.layout, device=device, generator=generator)
