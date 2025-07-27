@@ -5,6 +5,7 @@ import torch
 import numpy as np
 
 import genMoPlan.utils as utils
+from genMoPlan.utils.arrays import torch_randn_like
 
 from ..helpers import (
     apply_conditioning,
@@ -18,7 +19,7 @@ from .base import GenerativeModel, Sample
 
 
 @torch.no_grad()
-def default_sample_fn(model, x, global_query, local_query, t, **kwargs):
+def default_sample_fn(model, x, global_query, local_query, t, generator=None, **kwargs):
     """
     Get the model_mean and the fixed variance from the model
 
@@ -28,7 +29,7 @@ def default_sample_fn(model, x, global_query, local_query, t, **kwargs):
     model_std = torch.exp(0.5 * model_log_variance)
 
     # no noise when t == 0
-    noise = torch.randn_like(x)
+    noise = torch_randn_like(x, generator=generator)
     noise[t == 0] = 0
 
     values = torch.zeros(len(x), device=x.device)
@@ -136,9 +137,9 @@ class Diffusion(GenerativeModel):
 
     # ------------------------------------------ training ------------------------------------------#
 
-    def q_sample(self, x_target, t, noise=None):
+    def q_sample(self, x_target, t, noise=None, generator=None):
         if noise is None:
-            noise = torch.randn_like(x_target)
+            noise = torch_randn_like(x_target, generator=generator)
 
         sample = (
             extract(self.sqrt_alphas_cumprod, t, x_target.shape) * x_target
@@ -147,7 +148,7 @@ class Diffusion(GenerativeModel):
 
         return sample
 
-    def compute_loss(self, x_target, cond, global_query=None, local_query=None):
+    def compute_loss(self, x_target, cond, global_query=None, local_query=None, seed=None):
         """
         Get a normal distribution of noise and sample a noisy x by adding a scaled noise to a scaled x_start
         Apply conditioning to the noisy x
@@ -157,12 +158,17 @@ class Diffusion(GenerativeModel):
         If predict epsilon, calculate the loss between the reconstructed x and the noise
         else, calculate the loss between the reconstructed x and the x_start
         """
+        if seed is not None:
+            generator = torch.Generator(device=x_target.device).manual_seed(seed)
+        else:
+            generator = None
+
         batch_size = len(x_target)
-        t = torch.randint(0, self.n_timesteps, (batch_size,), device=x_target.device).long()
+        t = torch.randint(0, self.n_timesteps, (batch_size,), device=x_target.device, generator=generator).long()
 
-        noise = torch.randn_like(x_target)
+        noise = torch_randn_like(x_target, generator=generator)
 
-        x_noisy = self.q_sample(x_target=x_target, t=t, noise=noise)
+        x_noisy = self.q_sample(x_target=x_target, t=t, noise=noise, generator=generator)
         
         apply_conditioning(x_noisy, cond)
 
@@ -247,6 +253,7 @@ class Diffusion(GenerativeModel):
         verbose=False, 
         return_chain=False, 
         sample_fn=default_sample_fn, 
+        seed=None,
         **sample_kwargs,
     ) -> Sample:
         """
@@ -257,8 +264,13 @@ class Diffusion(GenerativeModel):
         """
         device = self.betas.device
 
+        if seed is not None:
+            generator = torch.Generator(device=device).manual_seed(seed)
+        else:
+            generator = None
+
         batch_size = shape[0]
-        x = torch.randn(shape, device=device)
+        x = torch.randn(shape, device=device, generator=generator)
         apply_conditioning(x, cond)
 
         chain = [x] if return_chain else None
@@ -266,7 +278,7 @@ class Diffusion(GenerativeModel):
         progress = utils.Progress(self.n_timesteps) if verbose else utils.Silent()
         for i in reversed(range(0, self.n_timesteps)):
             t = make_timesteps(batch_size, i, device)
-            x, values = sample_fn(self, x, global_query, local_query, t, **sample_kwargs)
+            x, values = sample_fn(self, x, global_query, local_query, t, generator=generator, **sample_kwargs)
             apply_conditioning(x, cond)
 
             progress.update(
