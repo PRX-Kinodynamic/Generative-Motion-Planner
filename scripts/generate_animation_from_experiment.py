@@ -103,11 +103,11 @@ def main():
             continue
         iteration = int(iteration_num_match.group(1))
 
-        uncertainty_path = os.path.join(it_dir, "uncertainty.npy")
+        uncertainty_path = os.path.join(it_dir, "normalized_uncertainty.npy")
         indices_path = os.path.join(it_dir, "sampled_indices.npy")
 
         if not os.path.exists(uncertainty_path):
-            print(f"Warning: uncertainty.npy not found in {it_dir}, skipping iteration {iteration}.")
+            print(f"Warning: normalized_uncertainty.npy not found in {it_dir}, skipping iteration {iteration}.")
             continue
         if not os.path.exists(indices_path):
             print(f"Warning: sampled_indices.npy not found in {it_dir}, skipping iteration {iteration}.")

@@ -69,9 +69,9 @@ class Uncertainty(ABC):
     - _compute_non_angular_uncertainty
     - _compute_angular_uncertainty
 
-    The uncertainty is computed by averaging over all dimensions.
+    The uncertainty is computed by averaging over all dimensions and then normalized to [0, 1].
 
-    The uncertainty is saved to a file and plotted.
+    The normalized uncertainty is saved to a file and plotted.
     """
 
     name: str
@@ -104,7 +104,7 @@ class Uncertainty(ABC):
     @abstractmethod
     def _compute_angular_uncertainty(self, final_states: np.ndarray, angle_indices: List[int]) -> np.ndarray: ...
 
-    def compute(
+    def compute_normalized_uncertainty(
         self, 
         model: GenerativeModel, 
         model_args: JSONArgs, 
@@ -140,11 +140,14 @@ class Uncertainty(ABC):
         # Average over all dimensions
         uncertainty = np.mean(uncertainty_per_dim, axis=1)
 
-        np.save(os.path.join(save_path, "uncertainty.npy"), uncertainty)
+        # Normalize the uncertainty to [0, 1]
+        normalized_uncertainty = (uncertainty - np.min(uncertainty)) / (np.max(uncertainty) - np.min(uncertainty) + 1e-8)
 
-        self.plot_uncertainty(uncertainty, start_states, save_path, title_suffix)
+        np.save(os.path.join(save_path, "normalized_uncertainty.npy"), normalized_uncertainty)
 
-        return uncertainty
+        self.plot_uncertainty(normalized_uncertainty, start_states, save_path, title_suffix)
+
+        return normalized_uncertainty
 
     def plot_uncertainty(
         self, 
@@ -153,7 +156,7 @@ class Uncertainty(ABC):
         save_path: str, 
         title_suffix: str,
     ):
-        plot_path = os.path.join(save_path, "uncertainty.png")
+        plot_path = os.path.join(save_path, "normalized_uncertainty.png")
         title = f"{self.name} - {title_suffix}"
         plt.figure(figsize=(10.08, 8))
     
@@ -166,7 +169,7 @@ class Uncertainty(ABC):
             s=10,
         )
 
-        plt.colorbar(scatter, label='Uncertainty')
+        plt.colorbar(scatter, label='Normalized Uncertainty')
         plt.title(title)
         plt.grid(True, alpha=0.3)
 
@@ -174,7 +177,7 @@ class Uncertainty(ABC):
         plt.close()
 
 class FinalStateStd(Uncertainty):
-    name: str = "Final State Standard Deviation"
+    name: str = "Normalized Std Dev"
 
     def _compute_non_angular_uncertainty(self, final_states: np.ndarray, non_angular_indices: List[int]) -> np.ndarray:
         return np.std(final_states[:, :, non_angular_indices], axis=1)
@@ -183,7 +186,7 @@ class FinalStateStd(Uncertainty):
         return circstd(final_states[:, :, angle_indices], high=np.pi, low=-np.pi, axis=1)
 
 class FinalStateVariance(Uncertainty):
-    name: str = "Final State Variance"
+    name: str = "Normalized Variance"
 
     def _compute_non_angular_uncertainty(self, final_states: np.ndarray, non_angular_indices: List[int]) -> np.ndarray:
         return np.var(final_states[:, :, non_angular_indices], axis=1)

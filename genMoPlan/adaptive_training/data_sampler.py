@@ -117,11 +117,17 @@ class UniformDiscreteSampler(DiscreteSampler):
         num_candidates: int,
         num_samples: int = 1,
     ) -> List[int]:
-        return np.random.choice(
-            num_candidates, 
-            size=num_samples, 
+        # Uniform probabilities over all candidates
+        probs = np.full(num_candidates, 1.0 / num_candidates, dtype=float)
+
+        chosen_indices = np.random.choice(
+            num_candidates,
+            size=num_samples,
             replace=False,
+            p=probs,
         )
+
+        return chosen_indices, probs
 
 
 
@@ -135,13 +141,19 @@ class WeightedDiscreteSampler(DiscreteSampler):
         num_candidates: int, 
         num_samples: int = 1,
     ) -> List[int]:
-        
-        probs = uncertainty / (uncertainty.sum() + 1e-8)
+        # Form probabilities proportional to the provided uncertainty.
+        total_uncertainty = float(uncertainty.sum())
+        if total_uncertainty <= 1e-8:
+            print("Warning: all uncertainties are (close to) zero → falling back to uniform sampling.")
+            # Degenerate case: all uncertainties are (close to) zero → fall back to uniform sampling.
+            probs = np.full(num_candidates, 1.0 / num_candidates, dtype=float)
+        else:
+            probs = uncertainty / total_uncertainty
 
         chosen_indices = np.random.choice(
-            num_candidates, 
-            size=num_samples, 
-            replace=False, 
+            num_candidates,
+            size=num_samples,
+            replace=False,
             p=probs,
         )
 
