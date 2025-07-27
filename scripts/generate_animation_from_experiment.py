@@ -14,7 +14,7 @@ def load_start_point(fname, dataset_path, observation_dim):
 
 def load_all_start_points(exp_args):
     """Loads all start points from the dataset specified in experiment args."""
-    dataset_path = os.path.join("data_trajectories", exp_args.dataset)
+    dataset_path = os.path.join(utils.get_data_trajectories_path(), exp_args.dataset)
     trajectories_path = os.path.join(dataset_path, "trajectories")
 
     fnames = utils.get_fnames_to_load(dataset_path, trajectories_path)

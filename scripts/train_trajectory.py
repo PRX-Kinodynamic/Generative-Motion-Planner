@@ -119,6 +119,7 @@ gen_model_config = utils.Config(
     has_local_query=args.has_local_query,
     has_global_query=args.has_global_query,
     manifold=manifold,
+    val_seed=args.val_seed,
     **args.method_kwargs,
     device=args.device,
 )
@@ -141,7 +142,6 @@ trainer_config = utils.Config(
     log_freq=args.log_freq,
     save_parallel=args.save_parallel,
     results_folder=args.savepath,
-    bucket=args.bucket,
     n_reference=args.n_reference,
     method=args.method,
     exp_name=args.exp_name,

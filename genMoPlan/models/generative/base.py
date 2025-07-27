@@ -29,6 +29,7 @@ class GenerativeModel(nn.Module, ABC):
         has_global_query=False,
         has_local_query=False,
         manifold=None,
+        val_seed=42,
         **kwargs,
     ):
         super().__init__()
@@ -45,6 +46,7 @@ class GenerativeModel(nn.Module, ABC):
         self.register_buffer("loss_weights", get_loss_weights(output_dim, prediction_length, loss_discount, loss_weights))
         self.manifold = manifold
         self.loss_fn = Losses[loss_type](history_length, action_indices, manifold=manifold)
+        self.val_seed = val_seed
 
     @abstractmethod
     def compute_loss(self, x, *args):
@@ -90,4 +92,4 @@ class GenerativeModel(nn.Module, ABC):
         if not self.has_global_query:
             global_query = None
 
-        return self.compute_loss(x, cond, global_query, local_query)
+        return self.compute_loss(x, cond, global_query, local_query, seed=self.val_seed)

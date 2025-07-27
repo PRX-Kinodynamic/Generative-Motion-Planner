@@ -8,8 +8,7 @@ dependencies:
   - matplotlib
   - tqdm
   - einops
-  - git
-  - gitpython
+  - python-dotenv
   - scipy
   - notebook
   - gh
@@ -18,6 +17,7 @@ dependencies:
   - imageio
   - imageio-ffmpeg
   - pillow
+  - pytest
   - pip:
     - -r requirements.txt
     - -e .

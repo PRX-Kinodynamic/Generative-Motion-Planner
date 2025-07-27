@@ -6,12 +6,12 @@ from typing import Sequence, Set, Union, Optional
 import torch
 import matplotlib.pyplot as plt
 import numpy as np
-import imageio
 
 from genMoPlan.adaptive_training.data_sampler import *
 from genMoPlan.adaptive_training.uncertainty import *
 from genMoPlan.adaptive_training.dataset_combiner import *
 from genMoPlan.adaptive_training.animation_generator import AnimationGenerator
+from genMoPlan.adaptive_training.video_generator import generate_iteration_evolution_videos
 from genMoPlan.models.generative.base import GenerativeModel
 from genMoPlan.datasets.trajectory import TrajectoryDataset
 from genMoPlan import utils
@@ -27,6 +27,7 @@ class AdaptiveTrainer:
     animation_generator: Optional[AnimationGenerator] = None
     uncertainty: Uncertainty
     sampler: DiscreteSampler
+    combiner: DatasetCombiner
 
     def __init__(
         self,
@@ -42,7 +43,7 @@ class AdaptiveTrainer:
         init_size: int = 100,
         val_size: int = 40,
         step_size: int = 70,
-        stop_std: float = 0.01,
+        stop_uncertainty: float = 0.01,
         max_iters: int = 30,
         filter_seen: bool = True,
         animate_plots: bool = False,
@@ -53,7 +54,7 @@ class AdaptiveTrainer:
 
         self.init_size = init_size
         self.step_size = step_size
-        self.stop_std = stop_std
+        self.stop_uncertainty = stop_uncertainty
         self.max_iters = max_iters
         self.filter_seen = filter_seen
         self.val_size = val_size
@@ -94,7 +95,7 @@ class AdaptiveTrainer:
         self._dataset_start_points = start_points[remaining_ids]
     
     def _load_start_points(self):
-        dataset_path = path.join("data_trajectories", self.args.dataset)
+        dataset_path = path.join(utils.get_data_trajectories_path(), self.args.dataset)
         trajectories_path = path.join(dataset_path, "trajectories")
 
         fnames = utils.get_fnames_to_load(dataset_path, trajectories_path)
@@ -149,7 +150,6 @@ class AdaptiveTrainer:
             log_freq=self.args.log_freq,
             save_parallel=self.args.save_parallel,
             results_folder=self.logdir,
-            bucket=self.args.bucket,
             n_reference=self.args.n_reference,
             method=self.args.method,
             exp_name=self.args.exp_name,
@@ -218,12 +218,12 @@ class AdaptiveTrainer:
 
         print(f"[ adaptive_training/trainer ] Mean {self.uncertainty.name}: {mean_uncertainty:.6f}")
 
-        achieved_stop_std = mean_uncertainty < self.stop_std
+        achieved_stop_uncertainty = mean_uncertainty < self.stop_uncertainty
 
-        if achieved_stop_std:
-            print(f"[ adaptive_training/trainer ] Reached target std {self.stop_std}. Stopping.")
+        if achieved_stop_uncertainty:
+            print(f"[ adaptive_training/trainer ] Reached target uncertainty {self.stop_uncertainty}. Stopping.")
 
-        return achieved_stop_std
+        return achieved_stop_uncertainty
 
     def _get_sampling_uncertainty(self, uncertainty: np.ndarray, seen_set: Set[int], all_dataset_ids: Sequence[int]):
         """
@@ -257,34 +257,7 @@ class AdaptiveTrainer:
         Creates mp4 files for uncertainty and samples from the images generated in each iteration.
         """
         print("[ adaptive_training/trainer ] Creating evolution videos...")
-        
-        uncertainty_images = []
-        samples_images = []
-
-        for i in range(num_iterations):
-            iteration_dir = path.join(self.args.savepath, f"iteration_{i}")
-            
-            uncertainty_img_path = path.join(iteration_dir, "uncertainty.png")
-            if path.exists(uncertainty_img_path):
-                uncertainty_images.append(imageio.imread(uncertainty_img_path))
-
-            samples_img_path = path.join(iteration_dir, "new_samples.png")
-            if path.exists(samples_img_path):
-                samples_images.append(imageio.imread(samples_img_path))
-
-        if len(uncertainty_images) > 1:
-            uncertainty_video_path = path.join(self.args.savepath, "uncertainty_evolution.mp4")
-            imageio.mimsave(uncertainty_video_path, uncertainty_images, fps=2)
-            print(f"[ adaptive_training/trainer ] Saved uncertainty evolution video to {uncertainty_video_path}")
-        else:
-            print("[ adaptive_training/trainer ] Not enough uncertainty images to create video.")
-
-        if len(samples_images) > 1:
-            samples_video_path = path.join(self.args.savepath, "samples_evolution.mp4")
-            imageio.mimsave(samples_video_path, samples_images, fps=2)
-            print(f"[ adaptive_training/trainer ] Saved samples evolution video to {samples_video_path}")
-        else:
-            print("[ adaptive_training/trainer ] Not enough new samples images to create video.")
+        generate_iteration_evolution_videos(num_iterations, self.args.savepath)
 
     # --------------------------- main loop ------------------------- #
 
@@ -301,6 +274,8 @@ class AdaptiveTrainer:
         self.logdir = None
 
         last_iteration = -1
+        trainer = None
+
         for iteration in range(self.max_iters):
             try:
                 last_iteration = iteration
@@ -347,7 +322,7 @@ class AdaptiveTrainer:
                 self._update_animation(iteration, uncertainty, new_ids)
 
                 # Update dataset lists/sets
-                dataset_ids = self.combiner.combine(dataset_ids, new_ids)
+                dataset_ids = self.combiner.combine(dataset_ids, new_ids, uncertainty)
                 seen_set.update(new_ids)
 
                 # Stop if we've now covered the entire pool (at least once)
@@ -360,7 +335,12 @@ class AdaptiveTrainer:
 
         print("[ adaptive_training/trainer ] Training complete.")
 
-        trainer.save_model("final", save_path=self.args.savepath)
+        if trainer is not None:
+            trainer.save_model("final", save_path=self.args.savepath)
+
+            self._load_best_model()
+
+            trainer.save_model("best", save_path=self.args.savepath)
 
         if last_iteration > -1:
             self._create_videos(last_iteration + 1)

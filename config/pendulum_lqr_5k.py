@@ -1,5 +1,5 @@
 import numpy as np
-from genMoPlan.utils import watch, handle_angle_wraparound, augment_unwrapped_state_data
+from genMoPlan.utils import watch, handle_angle_wraparound, augment_unwrapped_state_data, get_experiments_path
 
 # ------------------------ base ------------------------#
 
@@ -14,7 +14,7 @@ args_to_watch = [
     ("stride", "STRD"),
 ]
 
-logbase = "experiments"
+logbase = get_experiments_path()
 
 base = {
     "inference": {
@@ -88,7 +88,6 @@ base = {
         "ema_decay": 0.995,
         "save_parallel": False,
         "n_reference": 8,
-        "bucket": None,
         "device": "cuda",
         "seed": 42,
 

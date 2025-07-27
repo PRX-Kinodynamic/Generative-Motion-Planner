@@ -1,9 +1,9 @@
 from os import cpu_count
 from flow_matching.utils.manifolds import FlatTorus, Euclidean, Product
 import numpy as np
-from genMoPlan.utils import watch, handle_angle_wraparound, augment_unwrapped_state_data, watch_dict, process_angles
+from genMoPlan.utils import watch, handle_angle_wraparound, augment_unwrapped_state_data, watch_dict, process_angles, get_experiments_path
 
-is_arrakis = False
+is_arrakis = True
 
 max_batch_size = int(1e6) if is_arrakis else int(266e3)
 
@@ -26,7 +26,7 @@ results_args_to_watch = [
     ("attractor_prob_threshold", "APTH"),
 ]
 
-logbase = "experiments"
+logbase = get_experiments_path()
 
 base = {
     "inference": {
@@ -114,19 +114,19 @@ base = {
         "save_freq": 20, # epochs
         "log_freq": 1e3, # steps
         "batch_size": 64,
-        "num_workers": cpu_count() - 10,
+        "num_workers": 4,
         "learning_rate": 2e-4,
         "gradient_accumulate_every": 1,
         "ema_decay": 0.995,
         "save_parallel": False,
         "n_reference": 8,
-        "bucket": None,
         "device": "cuda",
         "seed": 42,
 
         #---------------------------- validation ----------------------------#
         "val_dataset_size": 40,
         "val_batch_size": 2048,
+        "val_seed": 42,
         "patience": 10,
         "early_stopping": False,
     },
@@ -273,23 +273,22 @@ adaptive_training = {
     "save_freq": 20, # epochs
     "log_freq": 1e3, # steps
     "batch_size": 64,
-    "num_workers": cpu_count() - 10,
+    "num_workers": 4,
     "learning_rate": 2e-4,
     "gradient_accumulate_every": 1,
     "ema_decay": 0.995,
     "save_parallel": False,
     "n_reference": 8,
-    "bucket": None,
     "device": "cuda",
     "seed": 42,
-    "min_delta": 0.0001,
+    "min_delta": int(1e-5),
     "patience": 7,
     "early_stopping": True,
     "adaptive_training_kwargs": {
         "combiner": "adaptive_training.ConcatCombiner",
         "combiner_kwargs": {},
-        "uncertainty": "adaptive_training.FinalStateStd",
-        # "uncertainty": "adaptive_training.FinalStateVariance",
+        "uncertainty": "adaptive_training.FinalStateVariance",
+        "stop_uncertainty": 0.001,
         "animate_plots": True,
         "uncertainty_kwargs": {
             "n_runs": 10,
@@ -314,11 +313,35 @@ adaptive_training = {
         },
         "sampler": "adaptive_training.WeightedDiscreteSampler",
         "sampler_kwargs": {},
-        "init_size": 10,
-        "step_size": 10,
+        "init_size": 100,
+        "step_size": 50,
         "val_size": 40,
-        "stop_std": 0.01,
         "max_iters": 30,
         "filter_seen": False,
     },
+}
+
+small_dataset = {
+    "adaptive_training_kwargs": {
+        "init_size": 10,
+        "step_size": 10,
+    }
+}
+
+uncertainty_std = {
+    "adaptive_training_kwargs": {
+        "uncertainty": "adaptive_training.FinalStateStd",
+        "stop_uncertainty": 0.01,
+    }
+}
+
+adaptive_training_test = {
+    "num_epochs": 1,
+    "min_num_batches_per_epoch": 10,
+    "adaptive_training_kwargs": {
+        "uncertainty_kwargs": {
+            "n_runs": 2,
+        },
+        "max_iters": 2,
+    }
 }
