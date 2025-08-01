@@ -5,7 +5,8 @@ import genMoPlan.utils as utils
 
 
 def main(args):
-    trajectories = utils.load_trajectories(args.dataset, args.num_trajs, parallel=not args.no_parallel)
+    config = utils.get_dataset_config(args.dataset)
+    trajectories = utils.load_trajectories(args.dataset, config["read_trajectory_fn"], args.num_trajs, parallel=not args.no_parallel)
 
     if args.apply_config:
         import importlib

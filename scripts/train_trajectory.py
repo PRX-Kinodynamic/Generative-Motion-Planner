@@ -36,6 +36,7 @@ train_dataset_config = utils.Config(
     use_horizon_padding=args.use_horizon_padding,
     use_plan=args.use_plan,
     is_history_conditioned=args.is_history_conditioned,
+    read_trajectory_fn=args.read_trajectory_fn,
     **args.safe_get("dataset_kwargs", {}),
 )
 
@@ -62,6 +63,7 @@ if args.val_dataset_size is not None:
         use_plan=args.use_plan,
         is_history_conditioned=args.is_history_conditioned,
         is_validation=True,
+        read_trajectory_fn=args.read_trajectory_fn,
         **args.safe_get("dataset_kwargs", {}),
     )
 

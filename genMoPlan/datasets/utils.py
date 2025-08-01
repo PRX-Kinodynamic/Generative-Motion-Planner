@@ -1,6 +1,7 @@
 from collections import defaultdict, namedtuple
 import numpy as np
 import torch
+from tqdm import tqdm
 
 
 
@@ -23,13 +24,11 @@ def make_indices(path_lengths, history_length, use_history_padding, horizon_leng
     actual_horizon_length = compute_actual_length(horizon_length, stride)
     actual_history_length = compute_actual_length(history_length, stride)
 
-    print(f"[ datasets/utils ] Preparing indices for dataset")
-
     print(f"[ datasets/utils ] Actual history length: {actual_history_length}, Actual horizon length: {actual_horizon_length}")
 
     num_indices = defaultdict(int)
 
-    for i, traj_length in enumerate(path_lengths):
+    for i, traj_length in tqdm(enumerate(path_lengths), desc="[ datasets/utils ] Preparing indices for dataset", total=len(path_lengths)):
         min_history_elements = 1 if use_history_padding else actual_history_length
         min_horizon_elements = 0 if use_horizon_padding else actual_horizon_length
 
