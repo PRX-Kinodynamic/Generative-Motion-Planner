@@ -12,7 +12,7 @@ from matplotlib import cm
 
 from genMoPlan.datasets.normalization import get_normalizer, Normalizer
 from genMoPlan.models.generative.base import GenerativeModel
-from genMoPlan.utils import JSONArgs, _get_non_angular_indices
+from genMoPlan.utils import JSONArgs, get_non_angular_indices
 from genMoPlan.utils.trajectory import generate_trajectories
 
 
@@ -129,7 +129,7 @@ class Uncertainty(ABC):
         angle_indices = model_args.angle_indices
 
         num_start_states, num_runs, dimensions = final_states.shape
-        non_angular_indices = _get_non_angular_indices(angle_indices, dimensions)
+        non_angular_indices = get_non_angular_indices(angle_indices, dimensions)
 
         uncertainty_per_dim = np.zeros((num_start_states, dimensions))
 
