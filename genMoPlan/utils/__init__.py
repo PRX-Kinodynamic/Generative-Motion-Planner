@@ -71,6 +71,13 @@ def expand_model_paths(model_paths, no_best_pt=False):
     
     return expanded_paths
 
-def _get_non_angular_indices(angle_indices: List[int], dimensions: int) -> List[int]:
+def get_non_angular_indices(angle_indices: List[int], dimensions: int) -> List[int]:
     return [i for i in range(dimensions) if i not in angle_indices]
 
+def get_dataset_config(dataset: str, ):
+    dataset = dataset.replace("-", "_")
+    config = f'config.{dataset}'
+    print(f"[ utils ] Reading config: {config}:{dataset}")
+    module = importlib.import_module(config)
+    params = getattr(module, "base")["base"].copy()
+    return params
