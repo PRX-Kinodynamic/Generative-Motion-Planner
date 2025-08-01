@@ -128,6 +128,7 @@ class AdaptiveTrainer:
             is_history_conditioned=self.args.is_history_conditioned,
             is_validation=is_validation,
             fnames=fnames,
+            read_trajectory_fn=self.args.read_trajectory_fn,
         )
 
     def _build_trainer(self, train_dataset, val_dataset):

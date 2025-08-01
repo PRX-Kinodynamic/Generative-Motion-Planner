@@ -1,7 +1,7 @@
 from os import path
 import argparse
 
-from genMoPlan.utils import load_trajectories, plot_trajectories
+from genMoPlan.utils import load_trajectories, get_dataset_config
 from genMoPlan.eval.roa import ROAEstimator
 
 
@@ -13,8 +13,9 @@ def visualize_generated_trajectories(
         observation_dim,
         batch_size=None,
     ):
-    test_trajs = load_trajectories(dataset, observation_dim, num_trajs)
-    start_states = test_trajs[:, 0]
+    config = get_dataset_config(dataset)
+    test_trajs = load_trajectories(dataset, config["read_trajectory_fn"], num_trajs)
+    start_states = np.array([traj[0] for traj in test_trajs])
 
     if isinstance(model_paths, str):
         model_paths = [model_paths]
