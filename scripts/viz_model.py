@@ -23,7 +23,7 @@ def visualize_generated_trajectories(
     for model_path in model_paths:
         roa_estimator = ROAEstimator(dataset, model_state_name, model_path, n_runs=1, batch_size=batch_size, verbose=True)
         roa_estimator.start_states = start_states
-        roa_estimator.generate_trajectories(compute_labels=False, discard_trajectories=False, save=False)
+        roa_estimator.generate_trajectories(discard_trajectories=False, save=False)
         roa_estimator.plot_trajectories()
 
 

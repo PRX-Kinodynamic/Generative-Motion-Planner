@@ -47,17 +47,16 @@ def estimate_roa(
     
     if not analyze:
         roa_estimator.generate_trajectories(
-            compute_labels=True,
             save=True,
         )
 
     roa_estimator.compute_attractor_labels()
 
-    roa_estimator.compute_attractor_probabilities(plot=not no_img)
-
-    roa_estimator.predict_attractor_labels(save=True, plot=not no_img)
+    roa_estimator.predict_attractor_labels(save=True)
 
     if not no_img:
+        roa_estimator.plot_attractor_probabilities()
+        roa_estimator.plot_predicted_attractor_labels()
         roa_estimator.plot_roas(plot_separatrix=True)
 
     roa_estimator.compute_classification_results(save=True)

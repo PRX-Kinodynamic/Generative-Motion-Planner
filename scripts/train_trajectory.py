@@ -84,9 +84,9 @@ observation_dim = args.observation_dim
 # -----------------------------------------------------------------------------#
 
 if args.manifold is not None:
-    manifold = utils.ManifoldWrapper(args.manifold)
+    manifold = utils.ManifoldWrapper(args.manifold, manifold_unwrap_fns=args.manifold_unwrap_fns, manifold_unwrap_kwargs=args.manifold_unwrap_kwargs)
     args.manifold = manifold
-    ml_model_input_dim = manifold.compute_feature_dim(observation_dim, n_fourier_features=args.model_kwargs.get("n_fourier_features", 1))
+    ml_model_input_dim = manifold.compute_feature_dim(observation_dim, n_fourier_features=args.method_kwargs.get("n_fourier_features", 1))
 else:
     manifold = None
     ml_model_input_dim = observation_dim

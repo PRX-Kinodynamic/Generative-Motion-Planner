@@ -3,7 +3,7 @@ import genMoPlan.utils as utils
 from genMoPlan.adaptive_training import AdaptiveTrainer
 from genMoPlan.models import GenerativeModel, TemporalModel
 
-parser = utils.TrainingParser()
+parser = utils.Parser()
 args = parser.parse_args()
 
 if 'adaptive_training' not in args.variations:
@@ -13,14 +13,14 @@ utils.set_device(args.device)
 print(f"Using device: {utils.DEVICE}\n")
 
 if args.manifold is not None:
-    manifold = utils.ManifoldWrapper(args.manifold)
+    manifold = utils.ManifoldWrapper(args.manifold, manifold_unwrap_fns=args.manifold_unwrap_fns, manifold_unwrap_kwargs=args.manifold_unwrap_kwargs)
     args.manifold = manifold
     ml_model_input_dim = manifold.compute_feature_dim(args.observation_dim, n_fourier_features=args.model_kwargs.get("n_fourier_features", 1))
 else:
     manifold = None
     ml_model_input_dim = args.observation_dim
 
-ml_model_config = utils.Config(
+ml_model_class_loader = utils.ClassLoader(
     args.model,
     savepath=(args.savepath, "ml_model_config.pkl"),
     prediction_length=args.horizon_length + args.history_length,
@@ -31,7 +31,7 @@ ml_model_config = utils.Config(
     device=args.device,
 )
 
-gen_model_config = utils.Config(
+gen_model_class_loader = utils.ClassLoader(
     args.method,
     savepath=(args.savepath, "gen_model_config.pkl"),
     input_dim=args.observation_dim,
@@ -56,18 +56,18 @@ gen_model_config = utils.Config(
 # # -------------------------------- instantiate --------------------------------#
 # # -----------------------------------------------------------------------------#
 
-ml_model: TemporalModel = ml_model_config()
+ml_model: TemporalModel = ml_model_class_loader()
 
-gen_model: GenerativeModel = gen_model_config(ml_model)
+gen_model: GenerativeModel = gen_model_class_loader(ml_model)
 
-trainer_config = utils.Config(
+trainer_class_loader = utils.ClassLoader(
     AdaptiveTrainer,
     model=gen_model,
     args=args,
     **args.adaptive_training_kwargs,
 )
 
-trainer: AdaptiveTrainer = trainer_config()
+trainer: AdaptiveTrainer = trainer_class_loader()
 
 # # -----------------------------------------------------------------------------#
 # # ------------------------ test forward & backward pass -----------------------#
@@ -86,9 +86,9 @@ print("✓")
 # -----------------------------------------------------------------------------#
 
 parser.save(args)
-ml_model_config.save()
-gen_model_config.save()
-trainer_config.save()
+ml_model_class_loader.save()
+gen_model_class_loader.save()
+trainer_class_loader.save()
 
 
 # # -----------------------------------------------------------------------------#
