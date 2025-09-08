@@ -35,7 +35,6 @@ roa_estimator.expected_labels = roa_estimator.expected_labels[edge_indices]
 roa_estimator.timestamp = "limited_trajectories"
 
 roa_estimator.generate_trajectories(
-    compute_labels=True,
     discard_trajectories=True,
     save=True,
 )

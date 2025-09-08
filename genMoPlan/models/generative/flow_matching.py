@@ -226,7 +226,8 @@ class FlowMatching(GenerativeModel):
             sol = torch.clamp(sol, -1.0, 1.0)
 
         if self.manifold is not None:
-            sol = self.manifold.wrap(sol)
+            sol = self.manifold.wrap(sol) # Wrap the samples to the manifold for safety
+            sol = self.manifold.unwrap(sol) # Unwrap the samples to the original space
 
         return Sample(trajectories=sol, values=None, chains=chains)
     
@@ -239,9 +240,6 @@ class FlowMatching(GenerativeModel):
             global_query = None
 
         sol = self.conditional_sample(cond, x.shape, global_query=global_query, local_query=local_query, verbose=False, return_chain=False, seed=self.val_seed, **sample_kwargs)
-
-        if self.manifold is not None:
-            x = self.manifold.wrap(x)
 
         loss, info = self.loss_fn(sol.trajectories, x, loss_weights=self.loss_weights)
 

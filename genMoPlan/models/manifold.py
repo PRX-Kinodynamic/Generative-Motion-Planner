@@ -1,3 +1,5 @@
+import math
+
 import torch
 from torch import nn, Tensor
 from genMoPlan.utils.manifold import ManifoldWrapper, ManifoldType
@@ -14,7 +16,7 @@ class FourierFeatures(nn.Module):
         feature_vector += [
             torch.cos((i + 1) * x) for i in range(self.n_fourier_features)
         ]
-        return torch.cat(feature_vector, dim=-1)
+        return torch.cat(feature_vector, dim=-1) / math.sqrt(self.n_fourier_features)
 
 class IdentityFeatureLayer(nn.Module):
     def __init__(self, input_dim: int):
@@ -67,11 +69,12 @@ class ProjectToTangent(nn.Module):
         super().__init__()
         self.model = model
         self.manifold = manifold
+        
 
         if self.manifold.manifold_type == ManifoldType.SPHERE:
-            self.manifold_features_layer = IdentityFeatureLayer(manifold, input_dim)
+            self.manifold_features_layer = IdentityFeatureLayer(input_dim)
         elif self.manifold.manifold_type == ManifoldType.FLAT_TORUS:
-            self.manifold_features_layer = FlatTorusFeatureLayer(manifold, input_dim, n_fourier_features)
+            self.manifold_features_layer = FlatTorusFeatureLayer(input_dim, n_fourier_features)
         elif self.manifold.manifold_type == ManifoldType.PRODUCT:
             self.manifold_features_layer = ProductFeatureLayer(manifold, input_dim, n_fourier_features)
         else:

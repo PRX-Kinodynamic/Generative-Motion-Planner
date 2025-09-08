@@ -1,6 +1,6 @@
 import os
 import glob
-
+from argparse import Namespace
 
 from .arrays import *
 from .class_loader import *
@@ -74,10 +74,37 @@ def expand_model_paths(model_paths, no_best_pt=False):
 def get_non_angular_indices(angle_indices: List[int], dimensions: int) -> List[int]:
     return [i for i in range(dimensions) if i not in angle_indices]
 
-def get_dataset_config(dataset: str, ):
-    dataset = dataset.replace("-", "_")
-    config = f'config.{dataset}'
-    print(f"[ utils ] Reading config: {config}:{dataset}")
-    module = importlib.import_module(config)
-    params = getattr(module, "base")["base"].copy()
-    return params
+
+
+def load_roa_labels(
+    dataset: str, 
+    
+) -> np.ndarray:
+    roa_labels_fpath = path.join(get_data_trajectories_path(), dataset, "roa_labels.txt")
+
+    start_states = []
+    expected_labels = []
+
+    if os.path.exists(roa_labels_fpath):
+            with open(roa_labels_fpath, "r") as f:
+                for line in f:
+                    line_data = line.strip().split(' ')[1:]
+                    start_states.append([np.float32(line_data[0]), np.float32(line_data[1])])
+                    expected_labels.append(int(line_data[2]))
+    else:
+        raise FileNotFoundError(f"File {roa_labels_fpath} not found")
+
+    return np.array(start_states, dtype=np.float32), np.array(expected_labels, dtype=np.int32)
+
+
+
+def query_roa_labels_for_start_points(query_points: np.ndarray, all_start_states: np.ndarray, all_roa_labels: np.ndarray, max_distance: float = 1e-2) -> np.ndarray:
+    from scipy.spatial import cKDTree
+
+    kdtree = cKDTree(all_start_states)
+    distances, indices = kdtree.query(query_points)
+
+    if distances.max() > max_distance:
+        raise ValueError(f"Maximum distance between query points and all start states is greater than {max_distance}. Some query points are not in the given start states.")
+
+    return all_roa_labels[indices]

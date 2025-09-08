@@ -1,11 +1,40 @@
-from os import cpu_count
+import socket
 from flow_matching.utils.manifolds import FlatTorus, Euclidean, Product
 import numpy as np
-from genMoPlan.utils import watch, handle_angle_wraparound, augment_unwrapped_state_data, watch_dict, process_angles, get_experiments_path
+from genMoPlan.utils import watch, handle_angle_wraparound, augment_unwrapped_state_data, watch_dict, process_angles, get_experiments_path, shift_to_zero_center_angles
 
-is_arrakis = True
+is_arrakis = 'arrakis' in socket.gethostname()
 
 max_batch_size = int(1e6) if is_arrakis else int(266e3)
+
+def read_trajectory(sequence_path):
+    with open(sequence_path, "r") as f:
+        lines = f.readlines()
+
+    trajectory = []
+
+    for i, line in enumerate(lines):
+        line = line.strip()
+        if line == "":
+            if i < len(lines) - 1:
+                raise ValueError(f"[ config/pendulum_lqr_50k ] Empty line found at {sequence_path} at line {i}")
+            else:
+                break
+
+        state = line.split(',')
+
+        state = [s for s in state if s != ""]
+
+        if len(state) < 2:
+            raise ValueError(f"[ config/pendulum_lqr_50k ] Trajectory at {sequence_path} has less than 2 states at line {i}")
+
+        state = state[:2]
+
+        state = [float(s) for s in state]
+
+        trajectory.append(state)
+
+    return np.array(trajectory, dtype=np.float32)
 
 # ------------------------ base ------------------------#
 
@@ -37,10 +66,10 @@ base = {
             (0, 0): 1,
         },
         "invalid_label": -1,
-        "n_runs": 100,
+        "n_runs": 10,
         "batch_size": max_batch_size,
-        "attractor_dist_threshold": 0.05,
-        "attractor_prob_threshold": 0.98,
+        "attractor_dist_threshold": 0.075,
+        "attractor_prob_threshold": 0.6,
         "max_path_length": 502,
         "flow_matching": {
             "n_timesteps": 5,
@@ -54,6 +83,10 @@ base = {
         },
         "final_state_directory": "final_states",
         "generated_trajectory_directory": "generated_trajectories",
+        "manifold_unwrap_fns": [shift_to_zero_center_angles],
+        "manifold_unwrap_kwargs": {
+            "angle_indices": [0],
+        },
     },
 
     "base": {
@@ -69,6 +102,7 @@ base = {
 
         #-------------------------------- dataset --------------------------------#
         "loader": "datasets.TrajectoryDataset",
+        "read_trajectory_fn": read_trajectory,
         "trajectory_normalizer": "LimitsNormalizer",
         "plan_normalizer": None,
         "normalizer_params": {
@@ -77,10 +111,6 @@ base = {
                 "maxs": [2*np.pi, 2*np.pi],
             },
             "plan": None,
-        },
-        "state_limits": {
-            "mins": [-np.pi, -2*np.pi],
-            "maxs": [np.pi, 2*np.pi],
         },
         "sample_granularity": 0.04,
         "plan_preprocess_fns": None,    
@@ -246,6 +276,10 @@ manifold = {
             (Euclidean(), 1),
         ],
     ),
+    "manifold_unwrap_fns": [shift_to_zero_center_angles],
+    "manifold_unwrap_kwargs": {
+        "angle_indices": [0],
+    },
     "trajectory_preprocess_fns": [],
     "preprocess_kwargs": {},
     "trajectory_normalizer": "LimitsNormalizer",
@@ -261,7 +295,7 @@ manifold = {
         "path": "GeodesicProbPath",
         "scheduler": "CondOTScheduler",
         "solver": "RiemannianODESolver",
-        "n_fourier_features": 1,
+        "n_fourier_features": 4,
     },
     "min_delta": 5,
 }
@@ -285,36 +319,32 @@ adaptive_training = {
     "patience": 7,
     "early_stopping": True,
     "adaptive_training_kwargs": {
+        "n_runs": 10,
+        "num_inference_steps": 17,
+        "sampling_batch_size": max_batch_size,
+        "conditional_sample_kwargs": {
+            "n_timesteps": 5,
+            "integration_method": "euler",
+        },
+        "post_process_fns": [
+            process_angles,
+        ],
+        "post_process_fn_kwargs": {
+            "angle_indices": [0],
+        },
         "combiner": "adaptive_training.ConcatCombiner",
         "combiner_kwargs": {},
-        "uncertainty": "adaptive_training.FinalStateVariance",
-        "stop_uncertainty": 0.001,
         "animate_plots": True,
         "uncertainty_kwargs": {
-            "n_runs": 10,
-            "device": "cuda",
-            "angle_indices": [0],
-            "batch_size": max_batch_size,
             "inference_normalization_params": {
                 "mins": [-np.pi, -2*np.pi],
                 "maxs": [np.pi, 2*np.pi],
             },
-            "conditional_sample_kwargs": {
-                "n_timesteps": 5,
-                "integration_method": "euler",
-            },
-            "post_process_fns": [
-                process_angles,
-            ],
-            "post_process_fn_kwargs": {
-                "angle_indices": [0],
-            },
-            "num_inference_steps": 17,
         },
         "sampler": "adaptive_training.WeightedDiscreteSampler",
         "sampler_kwargs": {},
-        "init_size": 100,
-        "step_size": 50,
+        "init_size": 20,
+        "step_size": 20,
         "val_size": 40,
         "max_iters": 30,
         "filter_seen": False,
@@ -328,6 +358,12 @@ small_dataset = {
     }
 }
 
+uncertainty_variance = {
+    "adaptive_training_kwargs": {
+        "uncertainty": "adaptive_training.FinalStateVariance",
+        "stop_uncertainty": 0.001,
+    }
+}
 uncertainty_std = {
     "adaptive_training_kwargs": {
         "uncertainty": "adaptive_training.FinalStateStd",
@@ -336,12 +372,11 @@ uncertainty_std = {
 }
 
 adaptive_training_test = {
-    "num_epochs": 1,
-    "min_num_batches_per_epoch": 10,
+    # "num_epochs": 7,
+    # "min_num_batches_per_epoch": 10,
     "adaptive_training_kwargs": {
-        "uncertainty_kwargs": {
-            "n_runs": 2,
-        },
-        "max_iters": 2,
+        "n_runs": 10,
+        "num_inference_steps": 17,
+        "max_iters": 1,
     }
 }
