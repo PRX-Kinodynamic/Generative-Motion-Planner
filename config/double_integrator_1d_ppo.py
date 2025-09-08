@@ -1,7 +1,7 @@
 import socket
 from flow_matching.utils.manifolds import FlatTorus, Euclidean, Product
 import numpy as np
-from genMoPlan.utils import watch, handle_angle_wraparound, augment_unwrapped_state_data, watch_dict, process_angles, get_experiments_path, shift_to_zero_center_angles
+from genMoPlan.utils import watch, watch_dict, get_experiments_path
 
 is_arrakis = 'arrakis' in socket.gethostname()
 
@@ -17,16 +17,16 @@ def read_trajectory(sequence_path):
         line = line.strip()
         if line == "":
             if i < len(lines) - 1:
-                raise ValueError(f"[ config/pendulum_lqr_50k ] Empty line found at {sequence_path} at line {i}")
+                raise ValueError(f"[ config/double_integrator_1d_ppo ] Empty line found at {sequence_path} at line {i}")
             else:
                 break
 
-        state = line.split(',')
+        state = line.split(' ')
 
         state = [s for s in state if s != ""]
 
         if len(state) < 2:
-            raise ValueError(f"[ config/pendulum_lqr_50k ] Trajectory at {sequence_path} has less than 2 states at line {i}")
+            raise ValueError(f"[ config/double_integrator_1d_ppo ] Trajectory at {sequence_path} has less than 2 states at line {i}")
 
         state = state[:2]
 
@@ -66,32 +66,24 @@ base = {
             (0, 0): 1,
         },
         "invalid_label": -1,
-        "n_runs": 10,
+        "n_runs": 100,
         "batch_size": max_batch_size,
         "attractor_dist_threshold": 0.075,
-        "attractor_prob_threshold": 0.6,
-        "max_path_length": 502,
+        "attractor_prob_threshold": 0.8,
+        "max_path_length": 200,
         "flow_matching": {
             "n_timesteps": 5,
             "integration_method": "euler",
         },
-        "post_process_fns": [
-            process_angles,
-        ],
-        "post_process_fn_kwargs": {
-            "angle_indices": [0],
-        },
+        "post_process_fns": [],
+        "post_process_fn_kwargs": {},
         "final_state_directory": "final_states",
         "generated_trajectory_directory": "generated_trajectories",
-        "manifold_unwrap_fns": [shift_to_zero_center_angles],
-        "manifold_unwrap_kwargs": {
-            "angle_indices": [0],
-        },
     },
 
     "base": {
         "action_indices": None,
-        "angle_indices": [0],
+        "angle_indices": [],
         "loss_type": "l2",
         "loss_weights": None,
         "loss_discount": 1,
@@ -107,20 +99,17 @@ base = {
         "plan_normalizer": None,
         "normalizer_params": {
             "trajectory": {
-                "mins": [-2*np.pi, -2*np.pi],
-                "maxs": [2*np.pi, 2*np.pi],
+                "mins": [-1.05, -5],
+                "maxs": [1.05, 5],
             },
             "plan": None,
         },
         "sample_granularity": 0.04,
         "plan_preprocess_fns": None,    
-        "trajectory_preprocess_fns": [
-            handle_angle_wraparound,
-            augment_unwrapped_state_data,
-        ],
+        "trajectory_preprocess_fns": [],
         "preprocess_kwargs": {
             "trajectory": {
-                "angle_indices": [0],
+                "angle_indices": [],
             },
             "plan": None,
         },
@@ -276,18 +265,14 @@ manifold = {
             (Euclidean(), 1),
         ],
     ),
-    "manifold_unwrap_fns": [shift_to_zero_center_angles],
-    "manifold_unwrap_kwargs": {
-        "angle_indices": [0],
-    },
     "trajectory_preprocess_fns": [],
     "preprocess_kwargs": {},
     "trajectory_normalizer": "LimitsNormalizer",
     "plan_normalizer": None,
     "normalizer_params": {
         "trajectory": {
-            "mins": [None, -2*np.pi],
-            "maxs": [None, 2*np.pi],
+            "mins": [-1.05, -5],
+            "maxs": [1.05, 5],
         },
         "plan": None,
     },
@@ -295,7 +280,7 @@ manifold = {
         "path": "GeodesicProbPath",
         "scheduler": "CondOTScheduler",
         "solver": "RiemannianODESolver",
-        "n_fourier_features": 4,
+        "n_fourier_features": 1,
     },
     "min_delta": 5,
 }
@@ -320,31 +305,27 @@ adaptive_training = {
     "early_stopping": True,
     "adaptive_training_kwargs": {
         "n_runs": 10,
-        "num_inference_steps": 17,
+        "num_inference_steps": 7,
         "sampling_batch_size": max_batch_size,
         "conditional_sample_kwargs": {
             "n_timesteps": 5,
             "integration_method": "euler",
         },
-        "post_process_fns": [
-            process_angles,
-        ],
-        "post_process_fn_kwargs": {
-            "angle_indices": [0],
-        },
+        "post_process_fns": [],
+        "post_process_fn_kwargs": {},
         "combiner": "adaptive_training.ConcatCombiner",
         "combiner_kwargs": {},
         "animate_plots": True,
         "uncertainty_kwargs": {
             "inference_normalization_params": {
-                "mins": [-np.pi, -2*np.pi],
-                "maxs": [np.pi, 2*np.pi],
+                "mins": [-1.05, -5],
+                "maxs": [1.05, 5],
             },
         },
         "sampler": "adaptive_training.WeightedDiscreteSampler",
         "sampler_kwargs": {},
-        "init_size": 20,
-        "step_size": 20,
+        "init_size": 100,
+        "step_size": 50,
         "val_size": 40,
         "max_iters": 30,
         "filter_seen": False,
@@ -364,6 +345,7 @@ uncertainty_variance = {
         "stop_uncertainty": 0.001,
     }
 }
+
 uncertainty_std = {
     "adaptive_training_kwargs": {
         "uncertainty": "adaptive_training.FinalStateStd",
@@ -372,11 +354,12 @@ uncertainty_std = {
 }
 
 adaptive_training_test = {
-    # "num_epochs": 7,
-    # "min_num_batches_per_epoch": 10,
+    "num_epochs": 1,
+    "min_num_batches_per_epoch": 10,
     "adaptive_training_kwargs": {
-        "n_runs": 10,
-        "num_inference_steps": 17,
-        "max_iters": 1,
+        "uncertainty_kwargs": {
+            "n_runs": 2,
+        },
+        "max_iters": 2,
     }
 }

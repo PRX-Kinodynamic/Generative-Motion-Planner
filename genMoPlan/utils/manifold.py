@@ -1,3 +1,5 @@
+from typing import List, Callable
+from typing_extensions import Dict
 import warnings
 from torch import nn
 from flow_matching.utils.manifolds import Manifold, Sphere, Product, FlatTorus, Euclidean
@@ -5,6 +7,17 @@ import torch
 from enum import Enum, auto
 import copy
 
+def _determine_manifold_type(manifold):
+    if isinstance(manifold, Sphere):
+        return ManifoldType.SPHERE
+    elif isinstance(manifold, FlatTorus):
+        return ManifoldType.FLAT_TORUS
+    elif isinstance(manifold, Product):
+        return ManifoldType.PRODUCT
+    elif isinstance(manifold, Euclidean):
+        return ManifoldType.EUCLIDEAN
+    else:
+        raise ValueError(f"Unsupported manifold: {type(manifold)}")
 
 class ManifoldType(Enum):
     SPHERE = auto()
@@ -13,17 +26,24 @@ class ManifoldType(Enum):
     EUCLIDEAN = auto()
 
 class ManifoldWrapper:
-    def __init__(self, manifold: Manifold):
+    def __init__(self, manifold: Manifold, manifold_unwrap_fns: List[Callable] = None, manifold_unwrap_kwargs: Dict = None):
         self._manifold = manifold
-        self.manifold_type = self._determine_manifold_type(manifold)
+        self.manifold_type = _determine_manifold_type(manifold)
         self.manifold_types = None
+        self._only_zero_center = True # To optimize the wrap function for product manifolds with only zero center manifolds
+
+        self.manifold_unwrap_fns = manifold_unwrap_fns
+        self.manifold_unwrap_kwargs = manifold_unwrap_kwargs
         
         # Pre-compute manifold types if using a product manifold
         if self.manifold_type == ManifoldType.PRODUCT:
             manifold_types = []
 
             for m in self._manifold.manifolds:
-                manifold_types.append(self._determine_manifold_type(m))
+                manifold_types.append(_determine_manifold_type(m))
+
+                if manifold_types[-1] == ManifoldType.SPHERE:
+                    self._only_zero_center = False
 
                 if manifold_types[-1] == ManifoldType.PRODUCT:
                     raise ValueError("Cannot nest product manifolds")
@@ -114,7 +134,7 @@ class ManifoldWrapper:
         if manifold is None:
             manifold = self._manifold
 
-        manifold_type = self._determine_manifold_type(manifold)
+        manifold_type = _determine_manifold_type(manifold)
 
         if manifold_type == ManifoldType.SPHERE or manifold_type == ManifoldType.EUCLIDEAN:
             return input_dim
@@ -124,18 +144,6 @@ class ManifoldWrapper:
             return sum(self.compute_feature_dim(manifold.dimensions[i], n_fourier_features, m) for i, m in enumerate(manifold.manifolds))
         else:
             raise ValueError(f"Unsupported manifold type: {manifold_type}")
-
-    def _determine_manifold_type(self, manifold):
-        if isinstance(manifold, Sphere):
-            return ManifoldType.SPHERE
-        elif isinstance(manifold, FlatTorus):
-            return ManifoldType.FLAT_TORUS
-        elif isinstance(manifold, Product):
-            return ManifoldType.PRODUCT
-        elif isinstance(manifold, Euclidean):
-            return ManifoldType.EUCLIDEAN
-        else:
-            raise ValueError(f"Unsupported manifold: {type(manifold)}")
 
     def __getattr__(self, name):
         # Avoid forwarding special method lookups that might lead to recursion
@@ -218,6 +226,7 @@ class ManifoldWrapper:
             for i, x_i in enumerate(x_split):
                 if self.manifold_types[i] == ManifoldType.SPHERE:
                     # Handle Sphere case
+                    raise NotImplementedError("Sphere wrap params not implemented")
                     c_i, x_i_proj = self._sphere_wrap_params(x_i)
                     dim = c_i.shape[-1]
                     center_out[..., current_center_idx:current_center_idx+dim] = c_i
@@ -240,6 +249,7 @@ class ManifoldWrapper:
             # Fall back to list-based approach if batch dimensions don't match
             for i, x_i in enumerate(x_split):
                 if self.manifold_types[i] == ManifoldType.SPHERE:
+                    raise NotImplementedError("Sphere wrap params not implemented")
                     center_i, x_i_proj = self._sphere_wrap_params(x_i)
                 elif self.manifold_types[i] == ManifoldType.FLAT_TORUS or self.manifold_types[i] == ManifoldType.EUCLIDEAN:
                     center_i, x_i_proj = self._zero_center_params(x_i)
@@ -252,7 +262,9 @@ class ManifoldWrapper:
             return torch.cat(centers, dim=-1), torch.cat(x_projs, dim=-1)
 
     def wrap(self, x):
-        if self.manifold_type == ManifoldType.SPHERE:
+        if self._only_zero_center:
+            center, u = self._zero_center_params(x)
+        elif self.manifold_type == ManifoldType.SPHERE:
             center, u = self._sphere_wrap_params(x)
         elif self.manifold_type == ManifoldType.PRODUCT:
             center, u = self._product_wrap_params(x)
@@ -260,8 +272,19 @@ class ManifoldWrapper:
             center, u = self._zero_center_params(x)
         elif self.manifold_type == ManifoldType.EUCLIDEAN:
             warnings.warn("Need not define Manifold for Euclidean space")
-            return x, x
+            center, u = self._zero_center_params(x)
         else:
             raise ValueError(f"Unsupported manifold: {self.manifold_type}")
-        
+
         return self._manifold.expmap(center, u)
+
+    def proju(self, x, u):
+        if self._only_zero_center:
+            return u
+        else:
+            return self._manifold.proju(x, u)
+
+    def unwrap(self, x):
+        for fn in self.manifold_unwrap_fns:
+            x = fn(x, **self.manifold_unwrap_kwargs)
+        return x
