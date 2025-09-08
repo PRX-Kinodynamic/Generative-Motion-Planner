@@ -25,14 +25,16 @@ class WeightedLoss(nn.Module):
             [ batch_size x horizon x output_dim ]
         """
         loss = self._loss(pred, targ)
-        weighted_loss = (loss * loss_weights).mean()
+        weighted_loss = (loss**2 * loss_weights).sum(dim=-1).mean()
         info = {}
 
         if self.history_length > 1:
-            info["cond_loss"] = (loss[:, :self.history_length] / loss_weights[:self.history_length]).mean()
+            info["cond_loss"] = (loss[:, :self.history_length]).sum(dim=-1).mean()
+        else:
+            info["cond_loss"] = loss[:, 0].mean()
 
         if self.action_indices is not None:
-            info["action_loss"] = loss[:, :, self.action_indices].mean()
+            info["action_loss"] = loss[:, :, self.action_indices].sum(dim=-1).mean()
 
         return weighted_loss, info
 

@@ -1,9 +1,11 @@
 from tqdm import tqdm
 import multiprocessing as mp
 from functools import partial
-from typing import List, Dict, Union, Tuple, Any
+from typing import List, Dict, Union, Tuple, Any, Sequence
 
 import numpy as np
+import torch
+import math
 
 def _add_new_unwrapped_state_trajectories(angle_indices, original_trajectory: np.ndarray) -> List[np.ndarray]:
     all_trajectories = []
@@ -59,7 +61,7 @@ def augment_unwrapped_state_data(data_or_trajectories, parallel=True, angle_indi
     Returns:
         Updated data dictionary or list of trajectories
     """
-    print(f"[ utils/data_preprocessing ] Augmenting unwrapped state data")
+    print(f"[ utils/data_processing ] Augmenting unwrapped state data")
     
     is_dict_input = isinstance(data_or_trajectories, dict)
     
@@ -85,7 +87,7 @@ def augment_unwrapped_state_data(data_or_trajectories, parallel=True, angle_indi
     
     for i, angle_index_combination in enumerate(angle_indices_combinations):
         angle_index_combination = list(angle_index_combination)
-        print(f"[ utils/data_preprocessing ] Processing angle combination {angle_index_combination} ({i+1}/{len(angle_indices_combinations)})")
+        print(f"[ utils/data_processing ] Processing angle combination {angle_index_combination} ({i+1}/{len(angle_indices_combinations)})")
         
         if is_dict_input:
             if not parallel:
@@ -136,7 +138,7 @@ def augment_unwrapped_state_data(data_or_trajectories, parallel=True, angle_indi
     else:
         return updated_trajectories
 
-def _handle_trajectory_angle_wraparound(angle_indices: List[int], trajectory: np.ndarray) -> np.ndarray:
+def _unwrap_trajectory_angles(angle_indices: List[int], trajectory: np.ndarray) -> np.ndarray:
     angles = trajectory[:, angle_indices]
 
     # Compute the difference between successive angle values
@@ -168,7 +170,7 @@ def handle_angle_wraparound(data_or_trajectories, parallel=True, angle_indices: 
     Returns:
         Updated data dictionary or list of trajectories
     """
-    print(f"[ utils/data_preprocessing ] Handling angle wraparound")
+    print(f"[ utils/data_processing ] Handling angle wraparound")
     
     is_dict_input = isinstance(data_or_trajectories, dict)
     
@@ -181,12 +183,12 @@ def handle_angle_wraparound(data_or_trajectories, parallel=True, angle_indices: 
     if not parallel:
         updated_trajectories = []
         for trajectory in tqdm(trajectories):
-            updated_trajectories.append(_handle_trajectory_angle_wraparound(angle_indices, trajectory))
+            updated_trajectories.append(_unwrap_trajectory_angles(angle_indices, trajectory))
     else:
         with mp.Pool(mp.cpu_count()) as pool:
             updated_trajectories = list(
                 tqdm(
-                    pool.imap(partial(_handle_trajectory_angle_wraparound, angle_indices), trajectories),
+                    pool.imap(partial(_unwrap_trajectory_angles, angle_indices), trajectories),
                     total=len(trajectories),
                 )
             )
@@ -232,7 +234,7 @@ def convert_angles_to_signed_range(data_or_trajectories, parallel=True, angle_in
     Returns:
         Updated data dictionary or list of trajectories
     """
-    print(f"[ utils/data_preprocessing ] Converting angles to signed range")
+    print(f"[ utils/data_processing ] Converting angles to signed range")
     
     is_dict_input = isinstance(data_or_trajectories, dict)
     
@@ -266,3 +268,45 @@ def convert_angles_to_signed_range(data_or_trajectories, parallel=True, angle_in
         }
     else:
         return converted_trajectories
+
+
+
+def shift_to_zero_center_angles(
+    data_or_trajectories: Union[np.ndarray, torch.Tensor],
+    *,
+    angle_indices: Sequence[int],
+) -> Union[np.ndarray, torch.Tensor]:
+    """
+    Wrap angles in the given columns to the range (-π, π].
+
+    Works for arrays/tensors of shape (..., D) where D includes angle columns.
+    Vectorized across all indices in `angle_indices`.
+    """
+    if angle_indices is None or len(angle_indices) == 0:
+        raise ValueError("angle_indices must be a non-empty sequence")
+
+    # NumPy path
+    if isinstance(data_or_trajectories, np.ndarray):
+        out = data_or_trajectories.copy()
+        two_pi = 2.0 * np.pi
+        # Vectorized select of all angle columns
+        a = out[..., angle_indices]
+        a = np.remainder(a + np.pi, two_pi) - np.pi  # (-π, π]
+        out[..., angle_indices] = a
+        return out
+
+    # PyTorch path
+    elif torch.is_tensor(data_or_trajectories):
+        x = data_or_trajectories.clone()
+        # ensure indices are a plain list/tuple for indexing
+        idx = list(angle_indices)
+        pi = x.new_tensor(math.pi)
+        two_pi = 2 * pi
+
+        a = x[..., idx]                               # shape (..., K)
+        a = torch.remainder(a + pi, two_pi) - pi      # (-π, π]
+        x[..., idx] = a                                # safe assignment on a slice
+        return x
+
+    else:
+        raise ValueError(f"Unsupported data type: {type(data_or_trajectories)}")

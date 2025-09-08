@@ -328,7 +328,7 @@ class Trainer(object):
 
         try:
             for i in range(self.num_epochs):
-                print(f"Epoch {i} / {self.num_epochs} | {self.train_dataset} | {self.method} | {self.exp_name}")
+                print(f"Epoch {i} / {self.num_epochs} | {self.method} | {self.exp_name}")
                 self.train_one_epoch()  
 
                 val_loss = self.validate()

@@ -29,8 +29,8 @@ def load_model(
         experiments_path: str,
         device: str,
         model_state_name: str = 'best.pt',
-        verbose: bool = False
-        
+        verbose: bool = False,
+        inference_params: dict = None,
     ) -> Tuple[GenerativeModel, JSONArgs]:
     model_args = load_model_args(experiments_path)
     model_path = path.join(experiments_path, model_state_name)
@@ -45,7 +45,11 @@ def load_model(
     method_class = import_class(model_args.method, verbose)
 
     if model_args.manifold is not None:
-        ml_model_input_dim = model_args.manifold.compute_feature_dim(model_args.observation_dim, n_fourier_features=model_args.model_kwargs.get("n_fourier_features", 1))
+        ml_model_input_dim = model_args.manifold.compute_feature_dim(model_args.observation_dim, n_fourier_features=model_args.method_kwargs.get("n_fourier_features", 1))
+
+        if inference_params is not None and "manifold_unwrap_fns" in inference_params:
+            model_args.manifold.manifold_unwrap_fns = inference_params["manifold_unwrap_fns"]
+            model_args.manifold.manifold_unwrap_kwargs = inference_params["manifold_unwrap_kwargs"]
     else:
         ml_model_input_dim = model_args.observation_dim
 
