@@ -3,8 +3,8 @@ import glob
 
 
 from .arrays import *
-from .config import *
-from .data_preprocessing import *
+from .class_loader import *
+from .data_processing import *
 from .json_args import *
 from .manifold import *
 from .model import *

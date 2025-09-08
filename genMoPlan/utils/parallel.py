@@ -2,6 +2,10 @@ import multiprocessing as mp
 from functools import partial
 from tqdm import tqdm
 
+def _apply_with_args_indexed(func, item):
+    index, args = item
+    return index, func(*args)
+
 def parallelize(func, args_list, kwargs=None, num_processes=None, show_progress=True, desc=None):
     """
     Parallelize a function call across multiple processes.
@@ -30,13 +34,12 @@ def parallelize(func, args_list, kwargs=None, num_processes=None, show_progress=
     
     with mp.Pool(num_processes) as pool:
         if show_progress:
-            results = list(
-                tqdm(
-                    pool.starmap(process_func, args_list),
-                    total=len(args_list),
-                    desc=desc
-                )
-            )
+            total_tasks = len(args_list)
+            results = [None] * total_tasks
+            indexed_args = list(enumerate(args_list))
+            iterator = pool.imap_unordered(partial(_apply_with_args_indexed, process_func), indexed_args, chunksize=1)
+            for idx, res in tqdm(iterator, total=total_tasks, desc=desc):
+                results[idx] = res
         else:
             results = pool.starmap(process_func, args_list)
     

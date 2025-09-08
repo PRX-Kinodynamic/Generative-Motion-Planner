@@ -177,6 +177,9 @@ class Args:
 class Parser(Tap):
     first_save = True
     suffix: Optional[str] = None
+    dataset: str = None
+    method: Optional[str] = None
+    variations: List[str] = []
 
     def __init__(self, **kwargs):
         super().__init__()
@@ -212,7 +215,7 @@ class Parser(Tap):
         else:
             return sys.argv + self._args
 
-    def parse_args(self, ignore_sys_argv=False):
+    def parse_args(self, ignore_sys_argv=False, is_for_exp=True):
         """
         Parse arguments and set up experiment
 
@@ -226,11 +229,13 @@ class Parser(Tap):
         args = self.read_config(args, method=args.method, variations=args.variations)
         self.apply_config_overrides(args)
         self.eval_fstrings(args)
-        self.set_seed(args)
-        self.set_loadbase(args)
-        self.generate_exp_name(args)
 
-        args.savepath = os.path.join(args.logbase, args.dataset, args.exp_name)
+        if is_for_exp:
+            self.set_seed(args)
+            self.set_loadbase(args)
+            self.generate_exp_name(args)
+
+            args.savepath = os.path.join(args.logbase, args.dataset, args.exp_name)
 
         return Args(args)
 
@@ -246,12 +251,13 @@ class Parser(Tap):
         module = importlib.import_module(args.config)
         params = getattr(module, "base")["base"].copy()
 
-        if method not in getattr(module, "base"):
-            raise ValueError(f"[ utils/setup ] Method {method} not found in config: {args.config}")
-        
-        print(f"[ utils/setup ] Using method: {method}")
+        if method is not None:
+            if method not in getattr(module, "base"):
+                raise ValueError(f"[ utils/setup ] Method {method} not found in config: {args.config}")
+            
+            print(f"[ utils/setup ] Using method: {method}")
 
-        params.update(getattr(module, "base")[method])
+            params.update(getattr(module, "base")[method])
 
         args.used_variations = []
         
@@ -300,9 +306,10 @@ class Parser(Tap):
             return
 
         print(f"[ utils/setup ] Found extras: {extras}")
-        assert (
-            len(extras) % 2 == 0
-        ), f"Found odd number ({len(extras)}) of extras: {extras}"
+        if len(extras) % 2 != 0:
+            print(f"[ utils/setup ] Found odd number ({len(extras)}) of extras: {extras}. Ignoring extras.")
+            return
+        
         for i in range(0, len(extras), 2):
             key = extras[i].replace("--", "")
             val = extras[i + 1]
@@ -377,7 +384,39 @@ class Parser(Tap):
                 print(f"[ utils/setup ] Made savepath: {args.savepath}")
 
 
-class TrainingParser(Parser):
-    dataset: str
-    method: str
-    variations: List[str] = []
+def get_dataset_config(
+    dataset: str,
+    *,
+    method: Optional[str] = None,
+    variations: List[str] = None,
+):
+    """
+    Get dataset config from config file. Meant for inference or other non-training tasks.
+    """
+
+    if method is not None and variations is not None:
+        parser = Parser(
+            dataset=dataset, 
+            method=method, 
+            variations=variations
+        )
+
+    elif method is not None:
+        parser = Parser(
+            dataset=dataset, 
+            method=method
+        )
+
+    elif variations is not None:
+        parser = Parser(
+            dataset=dataset, 
+            variations=variations
+        )
+
+    else:
+        parser = Parser(
+            dataset=dataset
+        )
+
+    return parser.parse_args(is_for_exp=False, ignore_sys_argv=True)
+

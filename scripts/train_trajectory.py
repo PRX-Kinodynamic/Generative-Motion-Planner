@@ -7,7 +7,7 @@ from genMoPlan.models import GenerativeModel, TemporalModel
 from scripts.estimate_roa import estimate_roa
 from scripts.viz_model import visualize_generated_trajectories
 
-parser = utils.TrainingParser()
+parser = utils.Parser()
 args = parser.parse_args()
 
 utils.set_device(args.device)
@@ -17,7 +17,7 @@ print(f"Using device: {utils.DEVICE}\n")
 # ---------------------------------- dataset ----------------------------------#
 # -----------------------------------------------------------------------------#
 
-train_dataset_config = utils.Config(
+train_dataset_class_loader = utils.ClassLoader(
     args.loader,
     savepath=(args.savepath, "dataset_config.pkl"),
     dataset=args.dataset,
@@ -44,7 +44,7 @@ args.val_dataset_size = None if not hasattr(args, 'val_dataset_size') else args.
 
 if args.val_dataset_size is not None:
     print("Loading validation dataset...\n")
-    val_dataset_config = utils.Config(
+    val_dataset_class_loader = utils.ClassLoader(
         args.loader,
         dataset=args.dataset,
         horizon_length=args.horizon_length,
@@ -68,12 +68,12 @@ if args.val_dataset_size is not None:
     )
 
 print(f"[ scripts/train_trajectory ] Loading dataset")
-train_dataset = train_dataset_config()
+train_dataset = train_dataset_class_loader()
 print(f"[ scripts/train_trajectory ] Training Data Size: {len(train_dataset)}")
 
 if args.val_dataset_size is not None:
     print(f"[ scripts/train_trajectory ] Loading validation dataset")
-    val_dataset = val_dataset_config()
+    val_dataset = val_dataset_class_loader()
     print(f"[ scripts/train_trajectory ] Validation Data Size: {len(val_dataset)}")
 
 observation_dim = args.observation_dim
@@ -95,7 +95,7 @@ else:
 # # ------------------------------ model & trainer ------------------------------#
 # # -----------------------------------------------------------------------------#
 
-ml_model_config = utils.Config(
+ml_model_class_loader = utils.ClassLoader(
     args.model,
     savepath=(args.savepath, "ml_model_config.pkl"),
     prediction_length=args.horizon_length + args.history_length,
@@ -106,7 +106,7 @@ ml_model_config = utils.Config(
     device=args.device,
 )
 
-gen_model_config = utils.Config(
+gen_model_class_loader = utils.ClassLoader(
     args.method,
     savepath=(args.savepath, "gen_model_config.pkl"),
     input_dim=observation_dim,
@@ -126,7 +126,7 @@ gen_model_config = utils.Config(
     device=args.device,
 )
 
-trainer_config = utils.Config(
+trainer_class_loader = utils.ClassLoader(
     utils.Trainer,
     savepath=(args.savepath, "trainer_config.pkl"),
     batch_size=args.batch_size,
@@ -156,11 +156,11 @@ trainer_config = utils.Config(
 # # -------------------------------- instantiate --------------------------------#
 # # -----------------------------------------------------------------------------#
 
-ml_model: TemporalModel = ml_model_config()
+ml_model: TemporalModel = ml_model_class_loader()
 
-gen_model: GenerativeModel = gen_model_config(ml_model)
+gen_model: GenerativeModel = gen_model_class_loader(ml_model)
 
-trainer: utils.Trainer = trainer_config(gen_model, train_dataset, val_dataset)
+trainer: utils.Trainer = trainer_class_loader(gen_model, train_dataset, val_dataset)
 
 # # -----------------------------------------------------------------------------#
 # # ---------------------------- update and save args ---------------------------#
@@ -198,10 +198,10 @@ gen_model.train()
 # -----------------------------------------------------------------------------#
 
 parser.save(args)
-train_dataset_config.save()
-ml_model_config.save()
-gen_model_config.save()
-trainer_config.save()
+train_dataset_class_loader.save()
+ml_model_class_loader.save()
+gen_model_class_loader.save()
+trainer_class_loader.save()
 
 
 # # -----------------------------------------------------------------------------#

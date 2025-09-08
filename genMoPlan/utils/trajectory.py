@@ -13,8 +13,9 @@ def _generate_trajectory_batch(
         start_states: np.ndarray,
         model: GenerativeModel,
         model_args: dict,
-        max_path_length: int,
         device: str,
+        max_path_length: Optional[int] = None,
+        num_inference_steps: Optional[int] = None,
         conditional_sample_kwargs: dict = {}, 
         only_return_final_states: bool = False, 
         verbose: bool = True, 
@@ -33,7 +34,10 @@ def _generate_trajectory_batch(
     current_idx = model_args.history_length
     prediction_length = horizon_length if horizon_length is not None else model_args.horizon_length
 
-    num_inference_steps = np.ceil((max_path_length - model_args.history_length) / prediction_length)
+    if num_inference_steps is None:
+        num_inference_steps = np.ceil((max_path_length - model_args.history_length) / prediction_length)
+    else:
+        max_path_length = model_args.history_length + num_inference_steps * prediction_length
 
     if not only_return_final_states:
         trajectories = np.zeros((batch_size, max_path_length, model_args.observation_dim))
@@ -96,10 +100,11 @@ def generate_trajectories(
     model, 
     model_args, 
     unnormalized_start_states, 
-    max_path_length: int, 
     device,
     verbose: bool = True, 
     batch_size: int = 5000, 
+    max_path_length: Optional[int] = None,
+    num_inference_steps: Optional[int] = None,
     conditional_sample_kwargs: dict = {}, 
     only_return_final_states: bool = False, 
     post_process_fns: List[Callable] = [], 
@@ -124,6 +129,8 @@ def generate_trajectories(
         final_states: The final states of the trajectories.
     """
     from genMoPlan.datasets.normalization import get_normalizer, Normalizer
+
+    assert type(max_path_length) != type(num_inference_steps), "Only one of max_path_length or num_inference_steps must be provided"
 
     if model_args.trajectory_normalizer is not None:
         normalizer: Normalizer = get_normalizer(model_args.trajectory_normalizer, get_normalizer_params(model_args))
@@ -154,8 +161,9 @@ def generate_trajectories(
             batch_start_states, 
             model, 
             model_args, 
-            max_path_length, 
             device,
+            max_path_length=max_path_length,
+            num_inference_steps=num_inference_steps,
             conditional_sample_kwargs=conditional_sample_kwargs, 
             only_return_final_states=only_return_final_states, 
             verbose=verbose, 
@@ -406,7 +414,7 @@ def load_trajectories(dataset, read_trajectory_fn, dataset_size=None, parallel=T
     print(f"[ datasets/sequence ] Loading trajectories from {trajectories_path}")
 
     trajectories = _read_trajectories_from_fpaths(read_trajectory_fn, trajectories_path, fnames, parallel=parallel)
-    trajectories = [np.array(trajectory, dtype=np.float32) for trajectory in trajectories]
+    trajectories = [np.array(trajectory, dtype=np.float32) for trajectory in trajectories if trajectory is not None]
 
     return trajectories
 
