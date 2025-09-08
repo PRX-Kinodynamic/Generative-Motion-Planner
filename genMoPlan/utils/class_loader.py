@@ -22,7 +22,7 @@ def import_class(_class, verbose=True):
     return _class
 
 
-class Config:
+class ClassLoader:
     def __init__(self, _class, verbose=True, savepath=None, device=None, **kwargs):
         self.savepath = savepath
         self._class = import_class(_class)
