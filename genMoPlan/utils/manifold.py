@@ -50,7 +50,10 @@ class ManifoldWrapper:
 
             self.manifold_types = manifold_types
 
-        self.print_manifold_type()
+        print(f"\n[ utils/manifold ] Manifold Type:")
+        print(f"\t {self.get_manifold_desc_str()}")
+
+
     
     def __reduce__(self):
         """Implementation for pickling support."""
@@ -130,20 +133,6 @@ class ManifoldWrapper:
         
         return wrapper
     
-    def compute_feature_dim(self, input_dim: int, n_fourier_features: int = None, manifold: Manifold = None):
-        if manifold is None:
-            manifold = self._manifold
-
-        manifold_type = _determine_manifold_type(manifold)
-
-        if manifold_type == ManifoldType.SPHERE or manifold_type == ManifoldType.EUCLIDEAN:
-            return input_dim
-        elif manifold_type == ManifoldType.FLAT_TORUS:
-            return input_dim * 2 * n_fourier_features
-        elif manifold_type == ManifoldType.PRODUCT:
-            return sum(self.compute_feature_dim(manifold.dimensions[i], n_fourier_features, m) for i, m in enumerate(manifold.manifolds))
-        else:
-            raise ValueError(f"Unsupported manifold type: {manifold_type}")
 
     def __getattr__(self, name):
         # Avoid forwarding special method lookups that might lead to recursion
@@ -169,16 +158,42 @@ class ManifoldWrapper:
 
     def __dir__(self):
         return sorted(set(dir(self.__class__) + dir(self._manifold)))
-   
-    def print_manifold_type(self):
+
+    def __str__(self):
+        return self.get_manifold_desc_str()
+
+    def __repr__(self):
+        return self.get_manifold_desc_str()
+
+    def get_manifold_desc_str(self):
         if self.manifold_type == ManifoldType.PRODUCT:
-            print(f"\n[ utils/manifold ] Manifold Type:")
-            print(f"Manifold Product: [")
+
+            return_str = f"{self.manifold_type.name}: [ "
+
             for i, m in enumerate(self.manifold_types):
-                print(f"  {m.name} x {self._manifold.dimensions[i]}")
-            print("]\n")
+                return_str += f"{m.name} x {self._manifold.dimensions[i]},  "
+
+            return_str += "]"
+
+            return return_str
+
         else:
-            print(f"[ utils/manifold ] Manifold Type: {self.manifold_type.name}")
+            return f"{self.manifold_type.name}"
+    
+    def compute_feature_dim(self, input_dim: int, n_fourier_features: int = None, manifold: Manifold = None):
+        if manifold is None:
+            manifold = self._manifold
+
+        manifold_type = _determine_manifold_type(manifold)
+
+        if manifold_type == ManifoldType.SPHERE or manifold_type == ManifoldType.EUCLIDEAN:
+            return input_dim
+        elif manifold_type == ManifoldType.FLAT_TORUS:
+            return input_dim * 2 * n_fourier_features
+        elif manifold_type == ManifoldType.PRODUCT:
+            return sum(self.compute_feature_dim(manifold.dimensions[i], n_fourier_features, m) for i, m in enumerate(manifold.manifolds))
+        else:
+            raise ValueError(f"Unsupported manifold type: {manifold_type}")
     
     def _sphere_wrap_params(self, x):
         batch_shape = x.shape[:-1]
