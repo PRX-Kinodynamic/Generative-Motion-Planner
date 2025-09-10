@@ -210,8 +210,6 @@ trainer_class_loader.save()
 torch.set_num_threads(args.num_workers)
 trainer.train()
 
-if args.no_inference:
-    exit()
 
 # -----------------------------------------------------------------------------#
 # ------------------------------visualize trajectories-------------------------#
@@ -223,7 +221,6 @@ try:
         num_trajs=1000,
         model_paths=args.savepath,
         model_state_name="best.pt",
-        observation_dim=observation_dim,
     )
 except Exception as e:
     print(f"Error visualizing trajectories: {e}")
@@ -242,7 +239,6 @@ try:
         dataset=args.dataset,
         model_state_name="best.pt",
         model_path=args.savepath,
-        num_batches=3,
     )
 except Exception as e:
     print(f"Error estimating ROA: {e}")

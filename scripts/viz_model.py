@@ -1,5 +1,6 @@
 from os import path
 import argparse
+import numpy as np
 
 from genMoPlan.utils import load_trajectories, get_dataset_config
 from genMoPlan.eval.roa import ROAEstimator
@@ -10,7 +11,6 @@ def visualize_generated_trajectories(
         num_trajs, 
         model_paths,
         model_state_name,
-        observation_dim,
         batch_size=None,
     ):
     config = get_dataset_config(dataset)
@@ -39,16 +39,7 @@ if __name__ == "__main__":
         default=1000,
         help="Number of trajectories to visualize",
     )
-    parser.add_argument(
-        "--compare",
-        action="store_true",
-        help="Add comparison trajectories to the visualization",
-    )
-    parser.add_argument(
-        "--show_traj_ends",
-        action="store_true",
-        help="Show the start and end points of the trajectories",
-    )
+
     parser.add_argument("--model_path", type=str, help="Experiment path")
     
     parser.add_argument(
@@ -56,13 +47,6 @@ if __name__ == "__main__":
         type=str, 
         nargs="+", 
         help="Multiple experiment paths. If provided, will override --model_path"
-    )
-
-    parser.add_argument(
-        "--observation_dim", 
-        type=int, 
-        required=True,
-        help="Observation dimension"
     )
     
     parser.add_argument(
@@ -84,5 +68,4 @@ if __name__ == "__main__":
         model_paths=args.model_paths if args.model_paths is not None else args.model_path,
         model_state_name=args.model_state_name,
         batch_size=args.batch_size,
-        observation_dim=args.observation_dim,
     )
