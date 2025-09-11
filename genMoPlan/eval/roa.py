@@ -145,7 +145,9 @@ class ROAEstimator:
     def _load_model(self, model_state_name: str, inference_params: dict):
         from genMoPlan.utils import load_model
 
-        self.model, self.model_args = load_model(self.model_path, self.device, model_state_name, verbose=self.verbose, inference_params=inference_params)
+        load_ema = self.inference_params["load_ema"] if "load_ema" in self.inference_params else False
+
+        self.model, self.model_args = load_model(self.model_path, self.device, model_state_name, verbose=self.verbose, inference_params=inference_params, load_ema=load_ema)
     
     def _load_params(self):
         self.n_runs = self._orig_n_runs if self._orig_n_runs is not None else self.inference_params["n_runs"]

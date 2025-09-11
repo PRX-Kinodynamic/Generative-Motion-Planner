@@ -170,7 +170,7 @@ base = {
 
         #---------------------------- training ----------------------------#
         "num_epochs": 100,
-        "min_num_batches_per_epoch": 1e4,
+        "min_num_steps_per_epoch": 1e4,
         "save_freq": 20, # epochs
         "log_freq": 1e3, # steps
         "batch_size": 64,
@@ -179,7 +179,6 @@ base = {
         "gradient_accumulate_every": 1,
         "ema_decay": 0.995,
         "save_parallel": False,
-        "n_reference": 8,
         "device": "cuda",
         "seed": 42,
 
@@ -329,7 +328,7 @@ manifold = {
 adaptive_training = {
     "prefix": "adaptive_training/",
     "num_epochs": 20,
-    "min_num_batches_per_epoch": 3e3,
+    "min_num_steps_per_epoch": 3e3,
     "save_freq": 20, # epochs
     "log_freq": 1e3, # steps
     "batch_size": 64,
@@ -338,7 +337,6 @@ adaptive_training = {
     "gradient_accumulate_every": 1,
     "ema_decay": 0.995,
     "save_parallel": False,
-    "n_reference": 8,
     "device": "cuda",
     "seed": 42,
     "min_delta": int(1e-5),
@@ -396,7 +394,7 @@ uncertainty_std = {
 
 adaptive_training_test = {
     "num_epochs": 1,
-    "min_num_batches_per_epoch": 10,
+    "min_num_steps_per_epoch": 10,
     "adaptive_training_kwargs": {
         "uncertainty_kwargs": {
             "n_runs": 2,
