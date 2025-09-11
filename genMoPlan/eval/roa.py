@@ -164,7 +164,6 @@ class ROAEstimator:
         self.conditional_sample_kwargs = self.inference_params[self.method_name] if self.method_name in self.inference_params else {}
 
         self.attractor_classification_fn = self.inference_params["attractor_classification_fn"] if "attractor_classification_fn" in self.inference_params else get_trajectory_attractor_labels
-        breakpoint()
 
     @property
     def timestamp(self):

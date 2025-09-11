@@ -153,7 +153,7 @@ class FlowMatching(GenerativeModel):
 
         path_sample = self.path.sample(t=t, x_0=x_noisy, x_1=x_target)
 
-        loss, info = self.loss_fn(self.vector_field(x=path_sample.x_t, t=path_sample.t, global_query=global_query, local_query=local_query), path_sample.dx_t, loss_weights=self.loss_weights)
+        loss, info = self.loss_fn(self.vector_field(x=path_sample.x_t, t=path_sample.t, global_query=global_query, local_query=local_query), path_sample.dx_t, loss_weights=self.loss_weights, ignore_manifold=True)
 
         return loss, info
 

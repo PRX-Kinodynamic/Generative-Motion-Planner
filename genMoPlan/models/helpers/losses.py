@@ -19,22 +19,22 @@ class WeightedLoss(nn.Module):
         self.action_indices = action_indices
         self.manifold = manifold
 
-    def forward(self, pred, targ, loss_weights):
+    def forward(self, pred, targ, loss_weights, ignore_manifold=False):
         """
         pred, targ : tensor
             [ batch_size x horizon x output_dim ]
         """
-        loss = self._loss(pred, targ)
-        weighted_loss = (loss**2 * loss_weights).sum(dim=-1).mean()
+        loss = self._loss(pred, targ, ignore_manifold)
+        weighted_loss = (loss * loss_weights).mean()
         info = {}
 
         if self.history_length > 1:
-            info["cond_loss"] = (loss[:, :self.history_length]).sum(dim=-1).mean()
+            info["cond_loss"] = (loss[:, :self.history_length]).mean()
         else:
             info["cond_loss"] = loss[:, 0].mean()
 
         if self.action_indices is not None:
-            info["action_loss"] = loss[:, :, self.action_indices].sum(dim=-1).mean()
+            info["action_loss"] = loss[:, :, self.action_indices].mean()
 
         return weighted_loss, info
 
@@ -43,7 +43,7 @@ class ValueLoss(nn.Module):
     def __init__(self, *args):
         super().__init__()
 
-    def forward(self, pred, targ):
+    def forward(self, pred, targ, ignore_manifold=False):
         loss = self._loss(pred, targ).mean()
 
         if len(pred) > 1:
@@ -67,29 +67,26 @@ class ValueLoss(nn.Module):
 
 
 class WeightedL1(WeightedLoss):
-
-    def _loss(self, pred, targ):
+    def _loss(self, pred, targ, ignore_manifold=False):
         return torch.abs(pred - targ)
 
 
 class WeightedL2(WeightedLoss):
-
-    def _loss(self, pred, targ):
-        if self.manifold is not None:
+    def _loss(self, pred, targ, ignore_manifold=False):
+        # Output shape: [batch_size, horizon, output_dim], not performing any reduction over the output_dim
+        if self.manifold is not None and not ignore_manifold:
             return self.manifold.dist(pred, targ)
 
         return F.mse_loss(pred, targ, reduction="none")
 
 
 class ValueL1(ValueLoss):
-
-    def _loss(self, pred, targ):
+    def _loss(self, pred, targ, ignore_manifold=False):
         return torch.abs(pred - targ)
 
 
 class ValueL2(ValueLoss):
-
-    def _loss(self, pred, targ):
+    def _loss(self, pred, targ, ignore_manifold=False):
         return F.mse_loss(pred, targ, reduction="none")
 
 
