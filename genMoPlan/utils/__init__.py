@@ -14,7 +14,7 @@ from .paths import *
 from .progress import *
 from .setup import *
 from .timer import *
-from .training import *
+from .trainer import *
 from .trajectory import *
 
 

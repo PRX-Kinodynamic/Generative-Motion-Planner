@@ -31,15 +31,16 @@ def load_model(
         model_state_name: str = 'best.pt',
         verbose: bool = False,
         inference_params: dict = None,
+        load_ema: bool = False,
     ) -> Tuple[GenerativeModel, JSONArgs]:
     model_args = load_model_args(experiments_path)
     model_path = path.join(experiments_path, model_state_name)
 
     if verbose:
-        print(f"[ utils/model ] Loading model from {model_path}")
+        print(f"[ utils/model ] Loading model from {model_path} | {'Loading EMA Weights' if load_ema else 'Loading Raw Weights'}")
 
     model_state_dict = torch.load(model_path, weights_only=False, map_location=torch.device(device))
-    diff_model_state = model_state_dict["model"]
+    diff_model_state = model_state_dict["model"] if not load_ema else model_state_dict["ema"]
 
     ml_model_class = import_class(model_args.model, verbose)
     method_class = import_class(model_args.method, verbose)

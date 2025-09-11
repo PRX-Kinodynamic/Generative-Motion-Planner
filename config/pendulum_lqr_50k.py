@@ -87,6 +87,7 @@ base = {
         "manifold_unwrap_kwargs": {
             "angle_indices": [0],
         },
+        "load_ema": True,
     },
 
     "base": {
@@ -140,25 +141,30 @@ base = {
 
         #---------------------------- training ----------------------------#
         "num_epochs": 100,
-        "min_num_batches_per_epoch": 1e4,
+        "min_num_steps_per_epoch": 0,
         "save_freq": 20, # epochs
-        "log_freq": 1e3, # steps
-        "batch_size": 64,
+        "log_freq": 1e2, # steps
+        "batch_size": 1024,
         "num_workers": 4,
-        "learning_rate": 2e-4,
+        "learning_rate": 1e-4,
+        "use_lr_scheduler": True,
+        "lr_scheduler_warmup_steps": 1500,
+        "lr_scheduler_min_lr": 2e-5,
         "gradient_accumulate_every": 1,
         "ema_decay": 0.995,
         "save_parallel": False,
-        "n_reference": 8,
         "device": "cuda",
         "seed": 42,
 
-        #---------------------------- validation ----------------------------#
-        "val_dataset_size": 40,
-        "val_batch_size": 2048,
-        "val_seed": 42,
+        #---------------------------- early stopping-------------------------#
         "patience": 10,
+        "warmup_epochs": 5,
         "early_stopping": False,
+
+        #---------------------------- validation ----------------------------#
+        "val_dataset_size": 100,
+        "val_batch_size": max_batch_size,
+        "val_seed": 42,
     },
 
     "diffusion": {
@@ -206,7 +212,7 @@ base = {
             "n_fourier_features": 1,
         },
         "prefix": "flow_matching/",
-        "min_delta": 1e-3,
+        "min_delta": 1e-2,
         "validation_kwargs": {
             "n_timesteps": 5,
             "integration_method": "euler",
@@ -232,41 +238,52 @@ longer_horizon = {
     "horizon_length": 160,
 }
 
+data_lim_10 = {
+    "train_dataset_size": 10,
+    "num_epochs": 200000,
+}
+
+data_lim_25 = {
+    "train_dataset_size": 25,
+    "num_epochs": 80000,
+}
+
+data_lim_50 = {
+    "train_dataset_size": 50,
+    "num_epochs": 40000,
+}
+
 data_lim_100 = {
     "train_dataset_size": 100,
+    "num_epochs": 20000,
 }
 
 data_lim_500 = {
     "train_dataset_size": 500,
+    "num_epochs": 4000,
 }
 
 data_lim_1000 = {
-    "train_dataset_size": 1000
+    "train_dataset_size": 1000,
+    "num_epochs": 2000,
 }
 
 data_lim_2000 = {
-    "train_dataset_size": 2000
+    "train_dataset_size": 2000,
+    "num_epochs": 1000,
 }
 
 data_lim_3500 = {
-    "train_dataset_size": 3500
+    "train_dataset_size": 3500,
+    "num_epochs": 550,
 }
 
 data_lim_5000 = {
-    "train_dataset_size": 5000
+    "train_dataset_size": 5000,
+    "num_epochs": 400,
 }
 
-data_lim_10 = {
-    "train_dataset_size": 10
-}
 
-data_lim_25 = {
-    "train_dataset_size": 25
-}
-
-data_lim_50 = {
-    "train_dataset_size": 50
-}
 
 manifold = {
     "manifold": Product(
@@ -295,28 +312,18 @@ manifold = {
         "path": "GeodesicProbPath",
         "scheduler": "CondOTScheduler",
         "solver": "RiemannianODESolver",
-        "n_fourier_features": 4,
+        "n_fourier_features": 1,
     },
-    "min_delta": 5,
 }
 
 adaptive_training = {
     "prefix": "adaptive_training/",
     "num_epochs": 20,
-    "min_num_batches_per_epoch": 3e3,
-    "save_freq": 20, # epochs
-    "log_freq": 1e3, # steps
-    "batch_size": 64,
-    "num_workers": 4,
-    "learning_rate": 2e-4,
-    "gradient_accumulate_every": 1,
-    "ema_decay": 0.995,
-    "save_parallel": False,
-    "n_reference": 8,
     "device": "cuda",
     "seed": 42,
-    "min_delta": int(1e-5),
-    "patience": 7,
+    "min_delta": 1e-2,
+    "patience": 10,
+    "warmup_epochs": 5,
     "early_stopping": True,
     "adaptive_training_kwargs": {
         "n_runs": 10,
@@ -372,8 +379,6 @@ uncertainty_std = {
 }
 
 adaptive_training_test = {
-    # "num_epochs": 7,
-    # "min_num_batches_per_epoch": 10,
     "adaptive_training_kwargs": {
         "n_runs": 10,
         "num_inference_steps": 17,

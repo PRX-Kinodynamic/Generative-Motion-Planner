@@ -1,16 +1,25 @@
 from collections import defaultdict
+from collections import deque
+from contextlib import contextmanager
+import math
 from math import ceil
 import os
 import copy
 from typing import List
+
 import numpy as np
 import torch
 import multiprocessing
 import matplotlib.pyplot as plt
 
+
 from .arrays import batch_to_device
 from .timer import Timer
 from .model import GenerativeModel
+
+
+
+
 
 def cycle(dl):
     while True:
@@ -81,6 +90,37 @@ class EMA:
             return new
         return old * self.beta + (1 - self.beta) * new
 
+class WarmupCosineDecayScheduler:
+    """Learning rate scheduler with linear warmup followed by cosine decay based on steps."""
+    
+    def __init__(self, optimizer, warmup_steps, total_steps, base_lr=None, min_lr=0.0):
+        self.optimizer = optimizer
+        self.warmup_steps = warmup_steps
+        self.total_steps = total_steps
+        self.min_lr = min_lr
+        self.base_lr = optimizer.param_groups[0]['lr'] if base_lr is None else base_lr
+        self.current_step = 0
+            
+    def step(self, step=None):
+        if step is not None:
+            self.current_step = step
+        else:
+            self.current_step += 1
+            
+        lr = self.get_lr()
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = lr
+            
+    def get_lr(self):
+        if self.current_step <= self.warmup_steps:
+            if self.warmup_steps == 0:
+                return self.base_lr
+            return self.base_lr * self.current_step / self.warmup_steps
+        else:
+            progress = (self.current_step - self.warmup_steps) / max(1, self.total_steps - self.warmup_steps)
+            progress = max(0.0, min(progress, 1.0))
+            return self.min_lr + (self.base_lr - self.min_lr) * 0.5 * (1.0 + math.cos(math.pi * progress))
+
 class Trainer(object):
     latest_model_state_name = None
 
@@ -92,26 +132,29 @@ class Trainer(object):
         validation_kwargs: dict = {},
         ema_decay: float = 0.995,
         batch_size: int = 32,
-        min_num_batches_per_epoch: int = 10000,
+        min_num_steps_per_epoch: int = 10000,
         train_lr: float = 2e-5,
         gradient_accumulate_every: int = 2,
         step_start_ema: int = 2000,
         update_ema_every: int = 10,
         log_freq: int = 100,
-        save_freq: int = 1000,
+        save_freq: int = 20,
         save_parallel: bool = False,
         results_folder: str = './results',
-        n_reference: int = 8,
         val_batch_size: int = 32,
         num_epochs: int = 100,
         patience: int = 10,
         min_delta: float = 1e-4,
+        warmup_epochs: int = 0,
         early_stopping: bool = False,
         method: str = "",
         exp_name: str = "",
         num_workers: int = 4,
         device: str = 'cuda',
         seed: int = None,
+        use_lr_scheduler: bool = False,
+        lr_scheduler_warmup_steps: int = 0,
+        lr_scheduler_min_lr: float = 0.0,
     ):
         super().__init__()
         self.model = model
@@ -126,22 +169,22 @@ class Trainer(object):
         self.patience = patience
         self.min_delta = min_delta
         self.early_stopping = early_stopping
+        self.warmup_epochs = warmup_epochs
         self.validation_kwargs = validation_kwargs
         self.batch_size = batch_size
         self.gradient_accumulate_every = gradient_accumulate_every
         self.train_dataset = train_dataset
         self.val_dataset = val_dataset
         self.logdir = results_folder
-        self.n_reference = n_reference
         self.method = method
         self.exp_name = exp_name
         self.device = device
 
 
-        self.num_batches_per_epoch = max(ceil(len(train_dataset) / (batch_size * gradient_accumulate_every)), 
-        min_num_batches_per_epoch)
+        self.num_steps_per_epoch = max(ceil(len(train_dataset) / (batch_size * gradient_accumulate_every)), 
+        min_num_steps_per_epoch)
 
-        print(f"[ utils/training ] Number of batches per epoch: {self.num_batches_per_epoch}")
+        print(f"[ utils/training ] Number of steps per epoch: {self.num_steps_per_epoch}")
 
         self.val_num_batches = ceil(len(val_dataset) / (val_batch_size))
 
@@ -161,18 +204,31 @@ class Trainer(object):
             generator=generator
         ))
         if val_dataset is not None:
-            self.dataloader_val = cycle(torch.utils.data.DataLoader(
+            self.dataloader_val = torch.utils.data.DataLoader(
                 self.val_dataset, 
-                batch_size=batch_size, 
+                batch_size=val_batch_size, 
                 num_workers=num_workers, 
-                shuffle=True, 
+                shuffle=False, 
                 pin_memory=True,
                 generator=generator
-            ))
+            )
         else:
             self.dataloader_val = None
 
         self.optimizer = torch.optim.Adam(model.parameters(), lr=train_lr)
+        
+        # Initialize learning rate scheduler
+        self.use_lr_scheduler = use_lr_scheduler
+        if self.use_lr_scheduler:
+            self.lr_scheduler = WarmupCosineDecayScheduler(
+                self.optimizer,
+                warmup_steps=lr_scheduler_warmup_steps,
+                total_steps=num_epochs * self.num_steps_per_epoch,
+                base_lr=train_lr,
+                min_lr=lr_scheduler_min_lr
+            )
+        else:
+            self.lr_scheduler = None
 
         self.reset_parameters()
         self.step = 0
@@ -191,6 +247,19 @@ class Trainer(object):
             return
         self.ema.update_model_average(self.ema_model, self.model)
 
+        # sync buffers too
+        for b, mb in zip(self.model.buffers(), self.ema_model.buffers()):
+            mb.data.copy_(b.data)
+
+    @contextmanager
+    def swap_to_ema(self):
+        backup = copy.deepcopy(self.model.state_dict())
+        try:
+            self.model.load_state_dict(self.ema_model.state_dict())
+            yield
+        finally:
+            self.model.load_state_dict(backup)
+
     #-----------------------------------------------------------------------------#
     #------------------------------------ api ------------------------------------#
     #-----------------------------------------------------------------------------#
@@ -203,47 +272,6 @@ class Trainer(object):
         process.start()
         # We don't join, let it run in the background
 
-    def train_one_epoch(self, store_losses: bool = True):
-        timer = Timer()
-        batch_count = 0
-
-        self.model.train()
-        while batch_count < self.num_batches_per_epoch:
-            train_losses = defaultdict(lambda : 0)
-            for _ in range(self.gradient_accumulate_every):
-                batch = next(self.dataloader_train)
-                batch = batch_to_device(batch, device=self.device)
-
-                loss, infos = self.model.loss(*batch)
-                loss = loss / self.gradient_accumulate_every
-                loss.backward()
-
-                train_losses['train_loss'] += loss.item()
-
-                for key, val in infos.items():
-                    train_losses[key] += val
-
-                batch_count += 1
-
-            if store_losses:
-                self.add_train_losses(train_losses)
-
-            self.optimizer.step()
-            self.optimizer.zero_grad()
-
-            if self.step % self.update_ema_every == 0:
-                self.step_ema()
-
-            if self.step % self.log_freq == 0:
-                info_items = infos.items()
-                if info_items:
-                    infos_str = ' | ' + ' | '.join([f'{key}: {val:8.4f}' for key, val in info_items])
-                else:
-                    infos_str = ''
-                print(f'{self.step}: {train_losses["train_loss"]:8.6f}{infos_str} | t: {timer():8.4f}', flush=True)
-
-            self.step += 1
-
     def save_model(self, label, save_path=None):
         '''
             saves model and ema to disk;
@@ -251,8 +279,18 @@ class Trainer(object):
         data = {
             'step': self.step,
             'model': self.model.state_dict(),
-            'ema': self.ema_model.state_dict()
+            'ema': self.ema_model.state_dict(),
+            'optimizer': self.optimizer.state_dict(),
         }
+        if self.lr_scheduler is not None:
+            data['lr_scheduler'] = {
+                'warmup_steps': self.lr_scheduler.warmup_steps,
+                'total_steps': self.lr_scheduler.total_steps,
+                'base_lr': self.lr_scheduler.base_lr,
+                'min_lr': self.lr_scheduler.min_lr,
+                'current_step': self.lr_scheduler.current_step,
+            }
+
         if save_path is None:
             save_path = self.logdir
         model_state_name = f'{label}.pt'
@@ -320,87 +358,161 @@ class Trainer(object):
         self.model.load_state_dict(data['model'])
         self.ema_model.load_state_dict(data['ema'])
 
+    def train_one_epoch(self, store_losses: bool = True):
+        timer = Timer()
+        steps_start = self.step
+
+        self.model.train()
+        while (self.step - steps_start) < self.num_steps_per_epoch:
+            train_losses = defaultdict(lambda : 0)
+            infos = defaultdict(lambda : 0)
+            for _ in range(self.gradient_accumulate_every):
+                batch = next(self.dataloader_train)
+                batch = batch_to_device(batch, device=self.device)
+
+                loss, batch_infos = self.model.loss(*batch)
+                loss = loss / self.gradient_accumulate_every
+                loss.backward()
+
+                train_losses['train_loss'] += loss.item()
+
+                for key, val in batch_infos.items():
+                    infos[key] += val / self.gradient_accumulate_every
+                    train_losses[key] += val / self.gradient_accumulate_every
+
+            if store_losses:
+                self.add_train_losses(train_losses)
+
+            self.optimizer.step()
+            self.optimizer.zero_grad()
+
+            
+
+            if self.step % self.update_ema_every == 0:
+                self.step_ema()
+
+            if self.step % self.log_freq == 0:
+                info_items = infos.items()
+                if info_items:
+                    infos_str = ' | ' + ' | '.join([f'{key}: {val:8.4f}' for key, val in info_items])
+                else:
+                    infos_str = ''
+                print(f'{self.step}: {train_losses["train_loss"]:8.6f}{infos_str} | t: {timer():8.4f}', flush=True)
+
+            self.step += 1
+
+            if self.lr_scheduler is not None:
+                self.lr_scheduler.step(self.step)
+
     def train(self, reraise_keyboard_interrupt: bool = False):
-        best_val_loss = float('inf')
-        no_improve_counter = 0
+        best_val = float('inf')
+        best_epoch = -1
+
+        recent_improvements = deque(maxlen=self.patience)
 
         print(f"\nTraining for {self.num_epochs} epochs\n")
 
         try:
-            for i in range(self.num_epochs):
-                print(f"Epoch {i} / {self.num_epochs} | {self.method} | {self.exp_name}")
-                self.train_one_epoch()  
-
-                val_loss = self.validate()
-
-                # Save model if it's the best so far (any improvement, no matter how small)
-                if val_loss < best_val_loss:
-                    old_best = best_val_loss
-                    best_val_loss = val_loss
-                    self.save_model('best')
-                    
-                    # Check if this improvement is meaningful for early stopping
-                    if old_best - val_loss > self.min_delta:
-                        no_improve_counter = 0
-                        print(f"Validation Loss: {val_loss:8.6f} | New best validation loss!")
-                    else:
-                        no_improve_counter += 1
-                        print(f"Validation Loss: {val_loss:8.6f} | New best validation loss! (but minimal improvement, counter: {no_improve_counter})")
+            for epoch in range(1, self.num_epochs + 1):
+                # Update learning rate if scheduler is enabled
+                if self.lr_scheduler is not None:
+                    current_lr = self.optimizer.param_groups[0]['lr']
+                    print(f"Epoch {epoch}/{self.num_epochs} | LR: {current_lr:.6e} | {self.method} | {self.exp_name}")
                 else:
-                    no_improve_counter += 1
-                    print(f"Validation Loss: {val_loss:8.6f} | Current best: {best_val_loss:8.6f} | No improvement for {no_improve_counter} epoch(s).")
+                    print(f"Epoch {epoch}/{self.num_epochs} | {self.method} | {self.exp_name}")
 
-                if self.early_stopping and no_improve_counter >= self.patience:
-                    print("Early stopping triggered due to convergence.")
+                self.train_one_epoch()
+
+                val = self.validate()
+
+                if not (val == val) or val in (float('inf'), -float('inf')):
+                    print(f"Validation returned non-finite value ({val}); stopping early.")
                     break
-            
 
-                if i % self.save_freq == 0:
-                    self.save_model(f'state_{i}_epochs')
+                improvement = 0.0
+                if best_val != float('inf') and abs(best_val) > 1e-12:
+                    improvement = (best_val - val) / abs(best_val)
+
+                if val < best_val:
+                    pos_impr = max(improvement, 0.0) if best_val != float('inf') else 0.0
+                    recent_improvements.append(pos_impr)
+
+                    old_best = best_val
+                    best_val = val
+                    best_epoch = epoch
+                    self.save_model('best')
+
+                    window_gain = sum(recent_improvements)
+                    print(
+                        f"Validation: {val:8.6f} | New best (Δ={old_best - val:+.6g} raw; "
+                        f"window_gain={window_gain:.3g} over last ≤{self.patience} epoch(s); "
+                        f"target ≥ {self.min_delta})"
+                    )
+                else:
+                    recent_improvements.append(0.0)
+                    window_gain = sum(recent_improvements)
+                    print(
+                        f"Validation: {val:8.6f} | Best: {best_val:8.6f} (epoch {best_epoch}) | "
+                        f"window_gain={window_gain:.3g} over last ≤{self.patience} epoch(s); target ≥ {self.min_delta}"
+                    )
+
+                if (epoch % self.save_freq) == 0:
+                    self.save_model(f"state_{epoch}_epochs")
+
+                if self.early_stopping and epoch > self.warmup_epochs:
+                    if len(recent_improvements) == self.patience:
+                        window_gain = sum(recent_improvements)
+                        if window_gain < self.min_delta:
+                            print(
+                                f"Early stopping: cumulative gain over the last {self.patience} epochs "
+                                f"is {window_gain:.3g} < required {self.min_delta}. "
+                                f"Best @ epoch {best_epoch} with val={best_val:8.6f}"
+                            )
+                            break
+            else:
+                print(f"Finished all epochs. Best @ epoch {best_epoch} with val={best_val:8.6f}")
+
+            self.save_model("final")
 
         except KeyboardInterrupt:
-            print("Keyboard interrupt. Training stopped.")
+            print("Training interrupted by user.")
+            self.save_model("interrupted")
             if reraise_keyboard_interrupt:
-                raise KeyboardInterrupt
-
-        self.save_model('final')
+                raise
+        
         self.save_losses()
-
-        print(f"\nTraining complete. Best validation loss: {best_val_loss:.6f}")
+        print(f"\nTraining complete. Best validation loss: {best_val:.6f}")
 
     def validate(self, store_losses: bool = True):
         if self.dataloader_val is None:
             return None
         val_losses = defaultdict(lambda : 0.0)  # Initialize with float 0.0
+        num_batches = 0
         self.model.eval()
-        with torch.no_grad():
-            for i in range(self.val_num_batches):
-                try:
-                    batch = next(self.dataloader_val)
-                    batch = batch_to_device(batch, device=self.device)
-            
-                    loss, infos = self.model.validation_loss(*batch, **self.validation_kwargs)
-                    
-                    # Check if loss is valid
-                    if torch.isnan(loss) or torch.isinf(loss):
-                        print(f"Warning: Invalid validation loss detected (NaN/Inf) at batch {i}. Skipping.")
-                        continue
+        with torch.no_grad(), self.swap_to_ema():
+            for i, batch in enumerate(self.dataloader_val):
+                batch = batch_to_device(batch, device=self.device)
+        
+                loss, infos = self.model.validation_loss(*batch, **self.validation_kwargs)
+                
+                # Check if loss is valid
+                if torch.isnan(loss) or torch.isinf(loss):
+                    print(f"Warning: Invalid validation loss detected (NaN/Inf) at batch {i}. Skipping.")
+                    continue
 
-                    val_losses['val_loss'] += loss.item() / self.val_num_batches
+                val_losses['val_loss'] += loss.item()
+                num_batches += 1
 
-                    for key, val in infos.items():
-                        # Handle potential tensor values in infos
-                        value_item = val.item() if hasattr(val, 'item') else val
-                        if isinstance(value_item, (float, int)):
-                            val_losses[key] += value_item / self.val_num_batches
-                        else:
-                            print(f"Warning: Skipping non-scalar info value for key '{key}' in validation: {value_item}")
-                            
-                except StopIteration:
-                    print("Warning: Validation dataloader exhausted before reaching val_num_batches.")
-                    # Adjust val_num_batches if it happened early, to normalize correctly
-                    if i == 0: return float('inf')  # Avoid division by zero if no batches ran
-                    break  # Exit loop
+                for key, val in infos.items():
+                    # Handle potential tensor values in infos
+                    value_item = val.item() if hasattr(val, 'item') else val
+                    if isinstance(value_item, (float, int)):
+                        val_losses[key] += value_item
+                    else:
+                        print(f"Warning: Skipping non-scalar info value for key '{key}' in validation: {value_item}")
+        
+        for key in val_losses.keys():
+            val_losses[key] /= num_batches
 
         if store_losses:
             self.add_val_losses(val_losses)
