@@ -79,7 +79,7 @@ base = {
 
         #---------------------------- training ----------------------------#
         "num_epochs": 100,
-        "min_num_batches_per_epoch": 1e4,
+        "min_num_steps_per_epoch": 1e4,
         "save_freq": 1e5,
         "log_freq": 1e3,
         "batch_size": 32,
@@ -87,7 +87,6 @@ base = {
         "gradient_accumulate_every": 2,
         "ema_decay": 0.995,
         "save_parallel": False,
-        "n_reference": 8,
         "device": "cuda",
         "seed": 42,
 

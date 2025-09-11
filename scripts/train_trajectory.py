@@ -130,7 +130,7 @@ trainer_class_loader = utils.ClassLoader(
     utils.Trainer,
     savepath=(args.savepath, "trainer_config.pkl"),
     batch_size=args.batch_size,
-    min_num_batches_per_epoch=args.min_num_batches_per_epoch,
+    min_num_steps_per_epoch=args.min_num_steps_per_epoch,
     train_lr=args.learning_rate,
     gradient_accumulate_every=args.gradient_accumulate_every,
     validation_kwargs=args.validation_kwargs,
@@ -138,18 +138,21 @@ trainer_class_loader = utils.ClassLoader(
     num_epochs=args.num_epochs,
     patience=args.patience,
     min_delta=args.min_delta,
+    warmup_epochs=args.warmup_epochs,
     early_stopping=args.early_stopping,
     ema_decay=args.ema_decay,
     save_freq=args.save_freq,
     log_freq=args.log_freq,
     save_parallel=args.save_parallel,
     results_folder=args.savepath,
-    n_reference=args.n_reference,
     method=args.method,
     exp_name=args.exp_name,
     num_workers=args.num_workers,
     device=args.device,
     seed=args.seed,
+    use_lr_scheduler=args.use_lr_scheduler,
+    lr_scheduler_warmup_steps=args.lr_scheduler_warmup_steps,
+    lr_scheduler_min_lr=args.lr_scheduler_min_lr,
 )
 
 # # -----------------------------------------------------------------------------#
@@ -168,8 +171,8 @@ trainer: utils.Trainer = trainer_class_loader(gen_model, train_dataset, val_data
 
 args.observation_dim = observation_dim
 args.dataset_size = len(train_dataset)
-args.num_batches_per_epoch = trainer.num_batches_per_epoch
-args.num_steps_per_epoch = ceil(trainer.num_batches_per_epoch / trainer.gradient_accumulate_every)
+args.num_batches_per_epoch = trainer.num_steps_per_epoch
+args.num_steps_per_epoch = ceil(trainer.num_steps_per_epoch / trainer.gradient_accumulate_every)
 
 # # -----------------------------------------------------------------------------#
 # # ------------------------ test forward & backward pass -----------------------#
