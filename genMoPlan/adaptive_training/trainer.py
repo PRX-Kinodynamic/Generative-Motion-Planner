@@ -210,13 +210,16 @@ class AdaptiveTrainer:
             save_parallel=self.args.save_parallel,
             results_folder=self.logdir,
             method=self.args.method,
-            exp_name=self.args.exp_name,
+            exp_name=f'{self.args.dataset}/{self.args.exp_name}',
             num_workers=self.args.num_workers,
             device=self.args.device,
             seed=self.args.seed,
             use_lr_scheduler=self.args.use_lr_scheduler,
             lr_scheduler_warmup_steps=self.args.lr_scheduler_warmup_steps,
             lr_scheduler_min_lr=self.args.lr_scheduler_min_lr,
+            useAdamW=self.args.useAdamW,
+            optimizer_kwargs=self.args.optimizer_kwargs,
+            clip_grad_norm=getattr(self.args, "clip_grad_norm", None),
         )
 
     def _add_mean_uncertainty(self, mean_uncertainty: float):

@@ -7,7 +7,6 @@ import torch
 from genMoPlan.models.temporal.base import TemporalModel
 
 from ..helpers import (
-    get_loss_weights,
     Losses
 )
 
@@ -23,13 +22,12 @@ class GenerativeModel(nn.Module, ABC):
         history_length,
         clip_denoised=False,
         loss_type="l2",
-        loss_weights=None,
-        loss_discount=1.0,
         action_indices=None,
         has_global_query=False,
         has_local_query=False,
         manifold=None,
         val_seed=42,
+        state_names=None,
         **kwargs,
     ):
         super().__init__()
@@ -43,9 +41,8 @@ class GenerativeModel(nn.Module, ABC):
         self.action_indices = action_indices
         self.has_global_query = has_global_query
         self.has_local_query = has_local_query
-        self.register_buffer("loss_weights", get_loss_weights(output_dim, prediction_length, loss_discount, loss_weights))
         self.manifold = manifold
-        self.loss_fn = Losses[loss_type](history_length, action_indices, manifold=manifold)
+        self.loss_fn = Losses[loss_type](history_length, action_indices, manifold=manifold, state_names=state_names)
         self.val_seed = val_seed
 
     @abstractmethod

@@ -64,6 +64,7 @@ if args.val_dataset_size is not None:
         is_history_conditioned=args.is_history_conditioned,
         is_validation=True,
         read_trajectory_fn=args.read_trajectory_fn,
+        perform_final_state_evaluation=args.perform_final_state_evaluation,
         **args.safe_get("dataset_kwargs", {}),
     )
 
@@ -115,13 +116,12 @@ gen_model_class_loader = utils.ClassLoader(
     history_length=args.history_length,
     clip_denoised=args.clip_denoised,
     loss_type=args.loss_type,
-    loss_weights=args.loss_weights,
-    loss_discount=args.loss_discount,
     action_indices=args.action_indices,
     has_local_query=args.has_local_query,
     has_global_query=args.has_global_query,
     manifold=manifold,
     val_seed=args.val_seed,
+    state_names=args.state_names,
     **args.method_kwargs,
     device=args.device,
 )
@@ -146,13 +146,20 @@ trainer_class_loader = utils.ClassLoader(
     save_parallel=args.save_parallel,
     results_folder=args.savepath,
     method=args.method,
-    exp_name=args.exp_name,
+    exp_name=f'{args.dataset}/{args.exp_name}',
     num_workers=args.num_workers,
     device=args.device,
     seed=args.seed,
     use_lr_scheduler=args.use_lr_scheduler,
     lr_scheduler_warmup_steps=args.lr_scheduler_warmup_steps,
     lr_scheduler_min_lr=args.lr_scheduler_min_lr,
+    useAdamW=args.useAdamW,
+    optimizer_kwargs=args.optimizer_kwargs,
+    clip_grad_norm=args.safe_get("clip_grad_norm", None),
+    eval_freq=args.eval_freq,
+    eval_batch_size=args.eval_batch_size,
+    eval_seed=args.eval_seed,
+    perform_final_state_evaluation=args.perform_final_state_evaluation,
 )
 
 # # -----------------------------------------------------------------------------#
@@ -186,6 +193,8 @@ loss, _ = gen_model.loss(*batch)
 loss.backward()
 print("✓")
 
+trainer.evaluate_final_states()
+
 # -----------------------------------------------------------------------------#
 # ------------------------------ profile model --------------------------------#
 # -----------------------------------------------------------------------------#
@@ -212,6 +221,9 @@ trainer_class_loader.save()
 # # -----------------------------------------------------------------------------#
 torch.set_num_threads(args.num_workers)
 trainer.train()
+
+if args.no_inference:
+    exit()
 
 
 # -----------------------------------------------------------------------------#
