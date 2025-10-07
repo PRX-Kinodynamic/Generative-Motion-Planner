@@ -51,8 +51,6 @@ class Diffusion(GenerativeModel):
         history_length,
         clip_denoised=False,
         loss_type="l2",
-        loss_weights=None,
-        loss_discount=1.0,
         action_indices=None,
         has_local_query=False,
         has_global_query=False,
@@ -70,8 +68,6 @@ class Diffusion(GenerativeModel):
             history_length=history_length,
             clip_denoised=clip_denoised,
             loss_type=loss_type,
-            loss_weights=loss_weights,
-            loss_discount=loss_discount,
             action_indices=action_indices,
             has_local_query=has_local_query,
             has_global_query=has_global_query,
@@ -177,10 +173,10 @@ class Diffusion(GenerativeModel):
         assert noise.shape == x_recon.shape
 
         if self.predict_epsilon:
-            loss, info = self.loss_fn(x_recon, noise, self.loss_weights)
+            loss, info = self.loss_fn(x_recon, noise)
         else:
             apply_conditioning(x_recon, cond)
-            loss, info = self.loss_fn(x_recon, x_target, self.loss_weights)
+            loss, info = self.loss_fn(x_recon, x_target)
 
         return loss, info
     

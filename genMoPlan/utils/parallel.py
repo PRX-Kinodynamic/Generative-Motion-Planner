@@ -21,7 +21,7 @@ def parallelize(func, args_list, kwargs=None, num_processes=None, show_progress=
         List of results from the function calls
     """
     if num_processes is None:
-        num_processes = mp.cpu_count()
+        num_processes = mp.cpu_count() - 1
     
     if kwargs is None:
         kwargs = {}

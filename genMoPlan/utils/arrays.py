@@ -36,13 +36,13 @@ def to_device(x, device=DEVICE):
         raise RuntimeError(f"Unrecognized type in `to_device`: {type(x)}")
 
 
-def batchify(batch):
+def batchify(batch, device=DEVICE):
     """
     convert a single dataset item to a batch suitable for passing to a model by
             1) converting np arrays to torch tensors and
             2) and ensuring that everything has a batch dimension
     """
-    fn = lambda x: to_torch(x[None])
+    fn = lambda x: to_torch(x[None], device=device)
 
     batched_vals = []
     for field in batch._fields:

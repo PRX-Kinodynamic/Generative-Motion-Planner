@@ -982,7 +982,7 @@ class ROAEstimator:
         """
         Predicts the attractor for each start state based on label probabilities.
 
-        A label is assigned if its probability exceeds `attractor_prob_threshold`.
+        A label is assigned if its probability is greater than or equal to `attractor_prob_threshold`.
         If no label meets the threshold, it is marked as uncertain/separatrix.
 
         **Required attributes:**

@@ -1,4 +1,5 @@
 import warnings
+import numpy as np
 
 import torch
 
@@ -29,8 +30,6 @@ class FlowMatching(GenerativeModel):
         history_length,
         clip_denoised=False,
         loss_type="l2",
-        loss_weights=None,
-        loss_discount=1.0,
         action_indices=None,
         has_local_query=False,
         has_global_query=False,
@@ -52,8 +51,6 @@ class FlowMatching(GenerativeModel):
             history_length=history_length,
             clip_denoised=clip_denoised,
             loss_type=loss_type,
-            loss_weights=loss_weights,
-            loss_discount=loss_discount,
             action_indices=action_indices,
             has_local_query=has_local_query,
             has_global_query=has_global_query,
@@ -108,7 +105,7 @@ class FlowMatching(GenerativeModel):
 
         solver_args.append(self.transformed_model)
 
-        self.solver = solver(*solver_args)
+        self.solver: Solver = solver(*solver_args)
 
     # --------------------------------------- vector field ----------------------------------------#
 
@@ -153,7 +150,7 @@ class FlowMatching(GenerativeModel):
 
         path_sample = self.path.sample(t=t, x_0=x_noisy, x_1=x_target)
 
-        loss, info = self.loss_fn(self.vector_field(x=path_sample.x_t, t=path_sample.t, global_query=global_query, local_query=local_query), path_sample.dx_t, loss_weights=self.loss_weights, ignore_manifold=True)
+        loss, info = self.loss_fn(self.vector_field(x=path_sample.x_t, t=path_sample.t, global_query=global_query, local_query=local_query), path_sample.dx_t, ignore_manifold=True)
 
         return loss, info
 
@@ -180,7 +177,7 @@ class FlowMatching(GenerativeModel):
             Sample: An object containing the generated trajectories and optional intermediate chains
         """
 
-        device = self.loss_weights.device
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         assert n_intermediate_steps >= 0
 
@@ -213,6 +210,7 @@ class FlowMatching(GenerativeModel):
             time_grid=T, 
             method=integration_method, 
             return_intermediates=return_chain,
+            proju=False,
             **model_extras
         )
 
@@ -241,6 +239,38 @@ class FlowMatching(GenerativeModel):
 
         sol = self.conditional_sample(cond, x.shape, global_query=global_query, local_query=local_query, verbose=False, return_chain=False, seed=self.val_seed, **sample_kwargs)
 
-        loss, info = self.loss_fn(sol.trajectories, x, loss_weights=self.loss_weights)
+        pred_final_state = sol.trajectories[..., -1, :]
+        target_final_state = x[..., -1, :]
+
+        final_state_loss, _ = self.loss_fn(pred_final_state, target_final_state)
+
+        loss, info = self.loss_fn(sol.trajectories, x)
+
+        info["final_state_loss"] = final_state_loss
 
         return loss, info
+
+    def evaluate_final_states(self, start_states, cond, global_query=None, local_query=None, max_path_length=None, **sample_kwargs):
+        assert max_path_length is not None, "max_path_length must be provided for final state evaluation"
+
+        batch_size, dim = start_states.shape
+
+        num_inference_steps = np.ceil((max_path_length - self.history_length) / self.prediction_length).astype(int)
+        
+        if not self.has_local_query:
+            local_query = None
+        if not self.has_global_query:
+            global_query = None
+
+        x = start_states
+
+        for _ in range(num_inference_steps):
+            sol = self.conditional_sample(cond, (batch_size, self.prediction_length, dim), global_query=global_query, local_query=local_query, return_chain=False, **sample_kwargs).trajectories
+
+            x = sol[:, -1, :]
+
+        final_state_loss, final_state_info = self.loss_fn(x, start_states)
+
+        return final_state_loss, final_state_info
+
+

@@ -13,30 +13,34 @@ import genMoPlan.utils as utils
 
 class WeightedLoss(nn.Module):
 
-    def __init__(self, history_length=1, action_indices=None, manifold=None):
+    def __init__(self, history_length=1, action_indices=None, manifold=None, state_names=None):
         super().__init__()
         self.history_length = history_length
         self.action_indices = action_indices
         self.manifold = manifold
+        self.state_names = state_names
 
-    def forward(self, pred, targ, loss_weights, ignore_manifold=False):
+    def forward(self, pred, targ, ignore_manifold=False):
         """
         pred, targ : tensor
             [ batch_size x horizon x output_dim ]
         """
-        loss = self._loss(pred, targ, ignore_manifold)
-        weighted_loss = (loss * loss_weights).mean()
+        loss = self._loss(pred, targ, ignore_manifold) # [ batch_size x horizon x output_dim ]
+
+        if loss.ndim == 3:
+            statewise_loss = loss.mean(axis=(0, 1))
+        else:
+            statewise_loss = loss.mean(axis=0)
+
         info = {}
 
-        if self.history_length > 1:
-            info["cond_loss"] = (loss[:, :self.history_length]).mean()
-        else:
-            info["cond_loss"] = loss[:, 0].mean()
+        if self.state_names is not None:
+            for i, state_name in enumerate(self.state_names):
+                info[f"{state_name}_loss"] = statewise_loss[i]
 
-        if self.action_indices is not None:
-            info["action_loss"] = loss[:, :, self.action_indices].mean()
+        mean_loss = statewise_loss.mean()
 
-        return weighted_loss, info
+        return mean_loss, info
 
 
 class ValueLoss(nn.Module):
@@ -96,28 +100,3 @@ Losses = {
     "value_l1": ValueL1,
     "value_l2": ValueL2,
 }
-
-
-def get_loss_weights(output_dim, prediction_length, discount, weights_dict):
-    '''
-        sets loss coefficients for trajectory
-
-        discount   : float
-            multiplies t^th timestep of trajectory loss by discount**t
-        weights_dict    : dict
-            { i: c } multiplies dimension i of observation loss by c
-    '''
-
-    dim_weights = torch.ones(output_dim, dtype=torch.float32)
-
-    ## set loss coefficients for dimensions of observation
-    if weights_dict is None: weights_dict = {}
-    for ind, w in weights_dict.items():
-        dim_weights[ind] *= w
-
-    ## decay loss with trajectory timestep: discount**t
-    discounts = discount ** torch.arange(prediction_length, dtype=torch.float)
-    discounts = discounts / discounts.mean()
-    loss_weights = torch.einsum('h,t->ht', discounts, dim_weights)
-
-    return loss_weights

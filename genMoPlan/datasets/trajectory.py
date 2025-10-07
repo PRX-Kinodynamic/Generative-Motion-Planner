@@ -3,8 +3,9 @@ import numpy as np
 from typing import List, Optional, Callable
 
 from genMoPlan.datasets.normalization import *
-from genMoPlan.datasets.utils import EMPTY_DICT, apply_padding, make_indices, DataSample, NONE_TENSOR
+from genMoPlan.datasets.utils import EMPTY_DICT, apply_padding, compute_actual_length, make_indices, DataSample, NONE_TENSOR, FinalStateDataSample
 from genMoPlan.utils import load_trajectories
+from genMoPlan.utils.arrays import batchify
 
 class TrajectoryDataset(torch.utils.data.Dataset):
     normed_trajectories = None
@@ -27,6 +28,7 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         use_history_padding: bool = False,
         is_history_conditioned: bool = True, # Otherwise it is provided as a query that is not predicted by the model
         is_validation: bool = False,
+        perform_final_state_evaluation: bool = False,
         **kwargs,
     ):
         self.horizon_length = horizon_length
@@ -36,6 +38,9 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         self.use_history_padding = use_history_padding
         self.is_history_conditioned = is_history_conditioned
         self.observation_dim = observation_dim
+
+        if perform_final_state_evaluation:
+            assert is_validation, "perform_final_state_evaluation is only supported for validation dataset"
 
         trajectories = self._load_data(
             dataset,
@@ -61,6 +66,9 @@ class TrajectoryDataset(torch.utils.data.Dataset):
             trajectory_normalizer, 
             normalizer_params
         )
+
+        if perform_final_state_evaluation:
+            self.eval_data = self._prepare_evaluation_data(self.normed_trajectories)
 
     def _load_data(
         self, 
@@ -121,6 +129,30 @@ class TrajectoryDataset(torch.utils.data.Dataset):
             traj_start_idx = traj_end_idx
         
         return normed_trajectories
+
+    
+    def _prepare_evaluation_data(self, trajectories):
+        history_end = compute_actual_length(self.history_length, self.stride)
+
+        histories = []
+        final_states = []
+
+        for trajectory in trajectories:
+            history = trajectory[:history_end:self.stride]
+            final_state = trajectory[-1]
+
+            histories.append(history)
+            final_states.append(final_state)
+
+        histories = torch.stack(histories)
+        final_states = torch.stack(final_states)
+
+        conditions = {}
+
+        for i in range(histories[0].shape[0]):
+            conditions[i] = histories[:, i]
+
+        return FinalStateDataSample(conditions=conditions, final_states=final_states)
 
     def get_conditions(self, history):
         """

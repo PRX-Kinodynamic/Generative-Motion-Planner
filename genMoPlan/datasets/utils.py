@@ -11,6 +11,7 @@ EMPTY_DICT = {}
 
 Index = namedtuple("Index", "path_ind history_start history_end horizon_start horizon_end")
 DataSample = namedtuple("DataSample", "trajectory conditions global_query local_query", defaults=(EMPTY_DICT, NONE_TENSOR, NONE_TENSOR))
+FinalStateDataSample = namedtuple("FinalStateDataSample", "conditions final_states", defaults=(EMPTY_DICT, NONE_TENSOR))
 
 def compute_actual_length(length, stride):
     return 1 + (length - 1) * stride
