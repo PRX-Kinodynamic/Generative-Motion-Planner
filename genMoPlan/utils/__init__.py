@@ -88,9 +88,9 @@ def load_roa_labels(
     if os.path.exists(roa_labels_fpath):
             with open(roa_labels_fpath, "r") as f:
                 for line in f:
-                    line_data = line.strip().split(' ')
+                    line_data = line.strip().split(',')
                     start_states.append([np.float32(value) for value in line_data[:-1]])
-                    expected_labels.append(int(line_data[-1]))
+                    expected_labels.append(int(float(line_data[-1])))
     else:
         raise FileNotFoundError(f"File {roa_labels_fpath} not found")
 
