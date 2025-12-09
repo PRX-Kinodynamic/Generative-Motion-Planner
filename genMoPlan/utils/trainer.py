@@ -622,7 +622,7 @@ class Trainer(object):
 
                     window_gain = sum(recent_improvements)
                     print(
-                        f"Validation: {val:8.6f} | Final state dist: {final_state_val:8.6f} | New val best (Δ={old_best - val:+.6g} raw; "
+                        f"Validation: {val:8.6f} | New val best (Δ={old_best - val:+.6g} raw | Final state dist: {final_state_val:8.6f} | "
                         f"Val window_gain={window_gain:.3g} over last ≤{self.patience} epoch(s); "
                         f"target ≥ {self.min_delta})"
                     )
@@ -630,7 +630,7 @@ class Trainer(object):
                     recent_improvements.append(0.0)
                     window_gain = sum(recent_improvements)
                     print(
-                        f"Validation: {val:8.6f} | Final state dist: {final_state_val:8.6f} | Best: {best_val:8.6f} (epoch {best_epoch}) | "
+                        f"Validation: {val:8.6f} | Best: {best_val:8.6f} (epoch {best_epoch}) | Final state dist: {final_state_val:8.6f} | "
                         f"Val window_gain={window_gain:.3g} over last ≤{self.patience} epoch(s); target ≥ {self.min_delta}"
                     )
 
@@ -670,11 +670,9 @@ class Trainer(object):
         num_batches = 0
 
         for i in range(0, num_evals, self.val_batch_size):
-            batch_x = eval_data.final_states[i:i+self.val_batch_size]
-            batch_conditions = {}
-            for key in eval_data.conditions.keys():
-                batch_conditions[key] = eval_data.conditions[key][i:i+self.val_batch_size]
-            loss, infos = self.model.evaluate_final_states(batch_x, batch_conditions, **self.validation_kwargs)
+            batch_start_states = eval_data.histories[i:i+self.val_batch_size]
+            batch_final_states = eval_data.final_states[i:i+self.val_batch_size]
+            loss, infos = self.model.evaluate_final_states(batch_start_states, batch_final_states, get_conditions=self.val_dataset.get_conditions, **self.validation_kwargs)
             eval_losses['final_state_loss'] += loss.item()
             for key, val in infos.items():
                 infos[key] += val
@@ -692,9 +690,6 @@ class Trainer(object):
 
         return eval_losses.get('final_state_loss', float('inf')), eval_losses
             
-
-
-
     def validate(self, store_losses: bool = True):
         if self.dataloader_val is None:
             return None
