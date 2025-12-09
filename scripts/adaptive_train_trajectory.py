@@ -45,6 +45,7 @@ gen_model_class_loader = utils.ClassLoader(
     has_global_query=args.has_global_query,
     manifold=manifold,
     val_seed=args.val_seed,
+    use_history_mask=args.use_history_mask,
     **args.method_kwargs,
     device=args.device,
 )
