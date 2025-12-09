@@ -1,3 +1,5 @@
+from typing import Optional
+
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -12,7 +14,6 @@ import genMoPlan.utils as utils
 
 
 class WeightedLoss(nn.Module):
-
     def __init__(self, history_length=1, action_indices=None, manifold=None, state_names=None):
         super().__init__()
         self.history_length = history_length
@@ -20,17 +21,22 @@ class WeightedLoss(nn.Module):
         self.manifold = manifold
         self.state_names = state_names
 
-    def forward(self, pred, targ, ignore_manifold=False):
+    def forward(self, pred, targ, ignore_manifold=False, loss_weights=None):
         """
         pred, targ : tensor
             [ batch_size x horizon x output_dim ]
         """
-        loss = self._loss(pred, targ, ignore_manifold) # [ batch_size x horizon x output_dim ]
+        raw_loss = self._loss(pred, targ, ignore_manifold) # [ batch_size x horizon x output_dim ]
 
-        if loss.ndim == 3:
-            statewise_loss = loss.mean(axis=(0, 1))
+        if loss_weights is not None:
+            weighted_loss = raw_loss * loss_weights
         else:
-            statewise_loss = loss.mean(axis=0)
+            weighted_loss = raw_loss
+
+        if weighted_loss.ndim == 3:
+            statewise_loss = raw_loss.mean(axis=(0, 1))
+        else:
+            statewise_loss = raw_loss.mean(axis=0)
 
         info = {}
 
@@ -38,7 +44,10 @@ class WeightedLoss(nn.Module):
             for i, state_name in enumerate(self.state_names):
                 info[f"{state_name}_loss"] = statewise_loss[i]
 
-        mean_loss = statewise_loss.mean()
+        mean_loss = weighted_loss.mean()
+
+        info["raw_loss"] = raw_loss.mean()
+        info["weighted_loss"] = weighted_loss.mean()
 
         return mean_loss, info
 
@@ -100,3 +109,28 @@ Losses = {
     "value_l1": ValueL1,
     "value_l2": ValueL2,
 }
+
+
+def generate_next_history_loss_weights(
+    *,
+    history_length: Optional[int] = None,
+    prediction_length: Optional[int] = None,
+    lambda_next_history: Optional[float] = None,
+    **kwargs,
+) -> torch.Tensor:
+    assert history_length is not None, "history_length is required"
+    assert prediction_length is not None, "prediction_length is required"
+    assert lambda_next_history is not None, "lambda_next_history is required"
+
+    weights = torch.ones(1, prediction_length, 1)
+
+    weights[:, -history_length:] = lambda_next_history
+
+    return weights
+
+
+LossWeightTypes = {
+    "none": None,
+    "next_history": generate_next_history_loss_weights,
+}
+

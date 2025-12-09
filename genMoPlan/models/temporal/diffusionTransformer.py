@@ -208,8 +208,6 @@ class DiffusionTransformerBlock(nn.Module):
 
 class TemporalDiffusionTransformer(TemporalModel):
     """Transformer for temporal diffusion with FiLM conditioning.
-
-    Args mirror `TemporalUnet` for compatibility.
     """
 
     def __init__(
@@ -274,6 +272,7 @@ class TemporalDiffusionTransformer(TemporalModel):
                 )
 
         self.input_projection = nn.Linear(input_dim, hidden_dim)
+        self.mask_token = nn.Parameter(torch.zeros(1))
         self.use_positional_encoding = use_positional_encoding
         if use_positional_encoding:
             self.positional_encoding = nn.Parameter(
@@ -344,7 +343,7 @@ class TemporalDiffusionTransformer(TemporalModel):
             if hasattr(layer, "_zero_init_modulation"):
                 layer._zero_init_modulation()
 
-    def forward(self, x, global_query=None, local_query=None, time=None):
+    def forward(self, x, global_query=None, local_query=None, time=None, mask=None):
         """Forward pass through the Diffusion Transformer.
 
         Args:
@@ -352,10 +351,16 @@ class TemporalDiffusionTransformer(TemporalModel):
             global_query (torch.Tensor): [batch, global_query_length, global_query_dim] or None
             local_query (torch.Tensor): [batch, prediction_length, local_query_dim] or None
             time (torch.Tensor): [batch] or [batch, ...] timestep indices
+            mask (torch.Tensor): [batch, prediction_length] binary mask in {0,1}. If provided,
+                positions with 0 replace the entire input vector at that timestep with a learned
+                scalar token before input projection.
 
         Returns:
             torch.Tensor: Output shape [batch, prediction_length, output_dim].
         """
+
+        if getattr(self, "expect_mask", False) and mask is None:
+            raise ValueError("Mask expected but not provided")
 
         t = self.time_mlp(time)
 
@@ -366,6 +371,16 @@ class TemporalDiffusionTransformer(TemporalModel):
         q_local = None
         if self.use_local_query and local_query is not None:
             q_local = self.local_query_processor(local_query)
+
+        if mask is not None:
+            if mask.dim() != 2 or mask.shape != x.shape[:2]:
+                raise ValueError(
+                    f"mask must have shape [batch, prediction_length]={x.shape[:2]}, got {tuple(mask.shape)}"
+                )
+            mask = mask.to(dtype=x.dtype, device=x.device)
+            mask_unsq = mask.unsqueeze(-1)
+            masked_fill_value = self.mask_token.to(dtype=x.dtype, device=x.device).view(1, 1, 1)
+            x = mask_unsq * x + (1.0 - mask_unsq) * masked_fill_value
 
         x = self.input_projection(x)
         if self.use_positional_encoding:
