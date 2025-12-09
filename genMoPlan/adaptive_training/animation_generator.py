@@ -26,7 +26,7 @@ class AnimationGenerator:
         if not path.exists(roa_file_path):
             raise FileNotFoundError(f"ROA data file not found at: {roa_file_path}")
 
-        data = np.loadtxt(roa_file_path)
+        data = np.loadtxt(roa_file_path, delimiter=',')
 
         # Expects format: <index> <state_1> <state_2> ... <state_n> <label>
         # For 2D, we expect 1 (index) + 2 (state dims) + 1 (label) = 4 columns
