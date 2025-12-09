@@ -275,14 +275,16 @@ class ManifoldWrapper:
         centers, x_projs = [], []
         for i, x_i in enumerate(x_split):
             mtype = self.manifold_types[i]
-        if mtype == ManifoldType.SPHERE:
-            c_i, x_i_proj = self._sphere_wrap_params(x_i)
-        elif mtype in (ManifoldType.FLAT_TORUS, ManifoldType.EUCLIDEAN):
-            c_i, x_i_proj = self._zero_center_params(x_i)
-        else:
-            raise ValueError(f"Unsupported manifold type: {mtype}")
-        centers.append(c_i)
-        x_projs.append(x_i_proj)
+
+            if mtype == ManifoldType.SPHERE:
+                c_i, x_i_proj = self._sphere_wrap_params(x_i)
+            elif mtype in (ManifoldType.FLAT_TORUS, ManifoldType.EUCLIDEAN):
+                c_i, x_i_proj = self._zero_center_params(x_i)
+            else:
+                raise ValueError(f"Unsupported manifold type: {mtype}")
+
+            centers.append(c_i)
+            x_projs.append(x_i_proj)
 
         return torch.cat(centers, dim=-1), torch.cat(x_projs, dim=-1)
 

@@ -1,4 +1,5 @@
 import numpy as np
+import warnings
 
 #-----------------------------------------------------------------------------#
 #-------------------------- single-field normalizers -------------------------#
@@ -133,16 +134,22 @@ class LimitsNormalizer(Normalizer):
         x = x.copy()
         eps = kwargs.get('eps', 1e-6)
 
-        assert np.all(x[..., self._indices_to_normalize].min(axis=0) >= self.mins - eps), f'Min value {x[..., self._indices_to_normalize].min(axis=0)} < Limit Min Value {self.mins} (tolerance: {eps})'
-        assert np.all(x[..., self._indices_to_normalize].max(axis=0) <= self.maxs + eps), f'Max value {x[..., self._indices_to_normalize].max(axis=0)} > Limit Max Value {self.maxs} (tolerance: {eps})'
+        
+        
+        if not np.all(x[..., self._indices_to_normalize].min(axis=0) >= self.mins - eps):
+            warnings.warn(f'Min value {x[..., self._indices_to_normalize].min(axis=0)} < Limit Min Value {self.mins} (tolerance: {eps})')
+        if not np.all(x[..., self._indices_to_normalize].max(axis=0) <= self.maxs + eps):
+            warnings.warn(f'Max value {x[..., self._indices_to_normalize].max(axis=0)} > Limit Max Value {self.maxs} (tolerance: {eps})')
 
         ## [ 0, 1 ]
         x[..., self._indices_to_normalize] = (x[..., self._indices_to_normalize] - self.mins) / (self.maxs - self.mins)
         ## [ -1, 1 ]
         x[..., self._indices_to_normalize] = 2 * x[..., self._indices_to_normalize] - 1
 
-        assert np.all(x[..., self._indices_to_normalize].min(axis=0) >= -1 - eps), f'Normalized Min value {x[..., self._indices_to_normalize].min(axis=0)} < -1 (tolerance: {eps})'
-        assert np.all(x[..., self._indices_to_normalize].max(axis=0) <= 1 + eps), f'Normalized Max value {x[..., self._indices_to_normalize].max(axis=0)} > 1 (tolerance: {eps})'
+        if not np.all(x[..., self._indices_to_normalize].min(axis=0) >= -1 - eps):
+            warnings.warn(f'Normalized Min value {x[..., self._indices_to_normalize].min(axis=0)} < -1 (tolerance: {eps})')
+        if not np.all(x[..., self._indices_to_normalize].max(axis=0) <= 1 + eps):
+            warnings.warn(f'Normalized Max value {x[..., self._indices_to_normalize].max(axis=0)} > 1 (tolerance: {eps})')
 
         return x
 

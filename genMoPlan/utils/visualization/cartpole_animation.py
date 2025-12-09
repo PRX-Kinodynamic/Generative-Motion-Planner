@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import animation
 from matplotlib.patches import Rectangle, Circle
+from tqdm import tqdm  # type: ignore
 
 def generate_cartpole_animation(trajectory_states, out_path):
     states = np.asarray(trajectory_states)
@@ -117,6 +118,14 @@ def generate_cartpole_animation(trajectory_states, out_path):
         ],
     )
 
-    ani.save(out_path, writer=writer, dpi=dpi)
+    pbar = tqdm(total=len(states), desc='Saving animation', unit='frame')
+
+    def _progress(_i, _n):
+        pbar.update(1)
+
+    try:
+        ani.save(out_path, writer=writer, dpi=dpi, progress_callback=_progress)
+    finally:
+        pbar.close()
     plt.close(fig)
     print(f"Saved animation to {out_path}")
