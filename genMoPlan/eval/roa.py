@@ -1,66 +1,22 @@
-import gc
-import glob
-import multiprocessing
 import os
 from os import path
 import json
 import numpy as np
-import torch
 import warnings
 import matplotlib.pyplot as plt
-from typing import Optional
+from typing import Any, Optional
 
-from tqdm import tqdm
-
-from genMoPlan.utils import JSONArgs, plot_trajectories, get_data_trajectories_path, get_method_name, load_inference_params, load_roa_labels, get_trajectory_attractor_labels
-
-def _load_final_states(file_path):
-    # Ignores the labels column
-
-    final_states = []
-    start_states = []
-    start_dim = 0
-    final_dim = 0
-    final_start = None
-    has_attractor_labels = False
-
-    try:
-        with open(file_path, "r") as f:
-            for line in f:
-                line_data = line.strip().split(' ')
-                if 'label' in line_data:
-                    has_attractor_labels = True
-                    continue
-                
-                if line[0] == "#" or line[0] == "s":
-                    for i in range(len(line_data)):
-                        if line_data[i].startswith("start"):
-                            start_dim += 1
-                        elif line_data[i].startswith("final"):
-                            final_dim += 1
-
-                    if has_attractor_labels:
-                        final_start = start_dim + 1
-                    else:
-                        final_start = start_dim
-
-                    
-                    continue
-
-                start_states.append([np.float32(value) for value in line_data[0:start_dim]])
-                final_states.append([np.float32(value) for value in line_data[final_start:final_start + final_dim]])
-
-        return np.array(final_states, dtype=np.float32)
-    except Exception as e:
-        print(f"[ utils/roa ] Error loading final states from {file_path}: {e}")
-        return None
-
-def _get_latest_timestamp(model_path, final_state_directory):
-    if not os.path.exists(model_path) or len(os.listdir(model_path)) == 0:
-        return None
-    
-    timestamps = [path.basename(d) for d in glob.glob(path.join(model_path, final_state_directory, "*"))]
-    return max(timestamps)
+from genMoPlan.utils import (
+    JSONArgs,
+    plot_trajectories,
+    get_data_trajectories_path,
+    get_method_name,
+    load_inference_params,
+    load_roa_labels,
+    get_trajectory_attractor_labels,
+    compute_actual_length,
+)
+from genMoPlan.utils.trajectory_generator import TrajectoryGenerator
 
 class ROAEstimator:
     SUCCESS_COLOR_MAP = "tab10_r"
@@ -71,14 +27,12 @@ class ROAEstimator:
 
     model_state_name: str = "best.pt"
     model_path: str = None
-    gen_traj_path: str = None
     results_path: str = None
     traj_plot_path: str = None
     method_name: str = None
-    _timestamp: str = None
+    _trajectory_generator: TrajectoryGenerator = None
     
     dataset: str = None
-    model: torch.nn.Module = None
     model_args: JSONArgs = None
     batch_size: int = None
     horizon_length: int = None
@@ -134,21 +88,30 @@ class ROAEstimator:
         self.inference_params = load_inference_params(self.dataset)
 
         if model_path is not None:
-            self._load_model(model_state_name, self.inference_params)
-            self.method_name = get_method_name(self.model_args)
-            self.horizon_length = self.model_args["horizon_length"]
-            self.history_length = self.model_args["history_length"]
+            self._trajectory_generator = TrajectoryGenerator(
+                dataset=self.dataset,
+                model_path=self.model_path,
+                model_state_name=model_state_name,
+                inference_params=self.inference_params,
+                device=self.device,
+                verbose=self.verbose,
+                default_batch_size=self.batch_size,
+            )
+            self.model_args = self.trajectory_generator.model_args
+            self.method_name = self.trajectory_generator.method_name
+            self.horizon_length = self.trajectory_generator.horizon_length
+            self.history_length = self.trajectory_generator.history_length
+            self.stride = self.trajectory_generator.stride
+        else:
+            self.method_name = None
+            self.model_args = None
+            self.horizon_length = None
+            self.history_length = None
+            self.stride = 1
 
         self._load_params()
 
        
-    def _load_model(self, model_state_name: str, inference_params: dict):
-        from genMoPlan.utils import load_model
-
-        load_ema = self.inference_params["load_ema"] if "load_ema" in self.inference_params else False
-
-        self.model, self.model_args = load_model(self.model_path, self.device, model_state_name, verbose=self.verbose, inference_params=inference_params, load_ema=load_ema)
-    
     def _load_params(self):
         self.n_runs = self._orig_n_runs if self._orig_n_runs is not None else self.inference_params["n_runs"]
         self._expected_n_runs = self.n_runs
@@ -156,30 +119,43 @@ class ROAEstimator:
 
         self._attractor_dist_threshold = self.inference_params["attractor_dist_threshold"]
         self._attractor_prob_threshold = self.inference_params["attractor_prob_threshold"]
-        self.attractors = self.inference_params["attractors"]
+        
         self.invalid_label = self.inference_params["invalid_label"]
         self.max_path_length = self.inference_params["max_path_length"]
         self.final_state_directory = self.inference_params["final_state_directory"]
-        self.labels_set = set(list(self.attractors.values()))
-        self.labels_array = np.array([*self.labels_set, self.invalid_label])    
 
-        self.conditional_sample_kwargs = self.inference_params[self.method_name] if self.method_name in self.inference_params else {}
-
+        if self.trajectory_generator is not None:
+            self.conditional_sample_kwargs = dict(self.trajectory_generator.conditional_sample_kwargs or {})
+        else:
+            self.conditional_sample_kwargs = (
+                self.inference_params[self.method_name]
+                if self.method_name in self.inference_params
+                else {}
+            )
+        self.ground_truth_filter_fn = self.inference_params["ground_truth_filter_fn"] if "ground_truth_filter_fn" in self.inference_params else None
+        self.attractors = self.inference_params["attractors"] if "attractors" in self.inference_params else None
         self.attractor_classification_fn = self.inference_params["attractor_classification_fn"] if "attractor_classification_fn" in self.inference_params else get_trajectory_attractor_labels
+
+        self.labels_set = set(list(self.attractors.values())) if self.attractors is not None else set(self.inference_params["attractor_labels"])
+        self.labels_array = np.array([*self.labels_set, self.invalid_label])    
+        
+        assert self.attractors is not None or self.attractor_classification_fn is not None, "Either attractors or attractor classification function must be provided"
+
+    @property
+    def trajectory_generator(self) -> TrajectoryGenerator:
+        if self._trajectory_generator is None:
+            raise ValueError("Trajectory generation requires `model_path` to be provided.")
+        return self._trajectory_generator
 
     @property
     def timestamp(self):
-        return self._timestamp
+        if self.trajectory_generator is None:
+            return None
+        return self.trajectory_generator.timestamp
     
     @timestamp.setter
     def timestamp(self, value):
-        self._timestamp = value
-        self.gen_traj_path = path.join(self.model_path, self.final_state_directory, self._timestamp)
-
-        if not os.path.exists(self.gen_traj_path):
-            os.makedirs(self.gen_traj_path)
-
-        self._save_inference_params(self.gen_traj_path)
+        self.trajectory_generator.timestamp = value
  
     # === Helper methods ===
 
@@ -238,78 +214,6 @@ class ROAEstimator:
         if self.verbose:
             print(f"[ utils/roa ] Inference params saved in {json_fpath}")
 
-    def _generate_single_run_trajs(
-            self,
-            run_idx,
-            discard_trajectories,
-            save,
-        ):
-        from genMoPlan.utils import generate_trajectories
-
-        results = generate_trajectories(
-            self.model, 
-            self.model_args, 
-            self.start_states, 
-            max_path_length=self.max_path_length, 
-            device=self.device,
-            horizon_length=self.horizon_length,
-            verbose=self.verbose, 
-            batch_size=self.batch_size, 
-            only_return_final_states=discard_trajectories,
-            conditional_sample_kwargs=self.conditional_sample_kwargs,
-            post_process_fns=self.inference_params["post_process_fns"],
-            post_process_fn_kwargs=self.inference_params["post_process_fn_kwargs"],
-        )
-        
-        if discard_trajectories:
-            final_states = results
-            generated_trajs = None
-        else:
-            final_states = results[:, -1].copy()
-            generated_trajs = results
-
-        assert final_states.shape == self.start_states.shape
-
-        if save:
-            self._save_single_run_data(run_idx, final_states)
-                
-        if not discard_trajectories:
-            self.trajectories.append(generated_trajs)
-        else:
-            del generated_trajs
-
-        gc.collect()
-        
-        try:
-            params = list(self.model.parameters())
-            if params and params[0].device.type == "cuda" and hasattr(torch, 'cuda') and torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except Exception as e:
-            warnings.warn(f"Error clearing CUDA cache: {e}")
-
-        self.final_states.append(final_states)
-    
-    def _save_single_run_data(self, run_idx, final_states):
-        file_path = path.join(self.gen_traj_path, f"final_states_run_{run_idx}.txt")
-        with open(file_path, "w") as f:
-            f.write("# ")
-            for i in range(self.start_states.shape[1]):
-                f.write(f"start_{i} ")
-            for i in range(final_states.shape[1]):
-                f.write(f"final_{i} ")
-            f.write("\n")
-            
-            for start_point_idx in range(self.start_states.shape[0]):
-                for i in range(self.start_states.shape[1]):
-                    f.write(f"{self.start_states[start_point_idx, i]} ")
-                    
-                for i in range(final_states.shape[1]):
-                    f.write(f"{final_states[start_point_idx, i]} ")
-                
-                f.write("\n")
-
-        print(f"[ utils/roa ] Final states saved in {file_path}")
-        
     def _save_predicted_labels(self):
         if self.predicted_labels is None:
             raise ValueError("No predicted labels available")
@@ -347,11 +251,22 @@ class ROAEstimator:
     def set_batch_size(self, batch_size: int):
         self.batch_size = batch_size
         self.inference_params["batch_size"] = batch_size
+        if self.trajectory_generator is not None:
+            self.trajectory_generator.set_batch_size(batch_size)
 
     def set_horizon_and_max_path_lengths(self, horizon_length: Optional[int] = None, *, max_path_length: Optional[int] = None, num_inference_steps: Optional[int] = None):
         if horizon_length is not None:
             self.horizon_length = horizon_length
             self.inference_params["horizon_length"] = horizon_length
+
+        if self.trajectory_generator is not None:
+            self.trajectory_generator.set_horizon_and_max_path_lengths(
+                horizon_length=horizon_length,
+                max_path_length=max_path_length,
+                num_inference_steps=num_inference_steps,
+            )
+            self.max_path_length = self.trajectory_generator.max_path_length
+            return
 
         if max_path_length is None and num_inference_steps is None:
             return
@@ -361,10 +276,12 @@ class ROAEstimator:
         
         if max_path_length is not None:
             self.max_path_length = max_path_length
-            self.inference_params["max_path_length"] = max_path_length
         else:
-            self.max_path_length = (num_inference_steps * self.horizon_length) + self.history_length
-            self.inference_params["max_path_length"] = self.max_path_length
+            actual_hist = compute_actual_length(self.history_length, getattr(self, "stride", 1))
+            actual_horz = compute_actual_length(self.horizon_length, getattr(self, "stride", 1))
+            self.max_path_length = actual_hist + (num_inference_steps * actual_horz)
+
+        self.inference_params["max_path_length"] = self.max_path_length
 
     def reset(self, for_analysis: bool = False):
         """
@@ -417,19 +334,22 @@ class ROAEstimator:
         **Required attributes:**
             - `final_states`
             - `start_states`
-            - `gen_traj_path`
         """
         if self.verbose:
             print(f"[ utils/roa ] Saving final states")
         if self.final_states is None:
             raise ValueError("No final states available")
-        
-        for run_idx in range(self.final_states.shape[1]):
-            final_states = self.final_states[:, run_idx, :]
+        if self.start_states is None:
+            raise ValueError("Start states must be available to save final states.")
 
-            self._save_single_run_data(run_idx, final_states)
-        
-        print(f"[ utils/roa ] Final states saved in {self.gen_traj_path}")
+        generator = self.trajectory_generator
+        final_states_run_first = self.final_states.transpose(1, 0, 2)
+        generator.save_final_states(
+            start_states=self.start_states,
+            final_states=final_states_run_first,
+            timestamp=self.timestamp,
+            metadata_n_runs=self._expected_n_runs,
+        )
 
     
     def plot_trajectories(self):
@@ -721,7 +641,13 @@ class ROAEstimator:
         if self.verbose:
             print('[ scripts/estimate_roa ] Loading ground truth')
         
-        self.start_states, self.expected_labels = load_roa_labels(self.dataset)
+        start_states, expected_labels = load_roa_labels(self.dataset)
+
+        if self.ground_truth_filter_fn is not None and self.model_args is not None:
+            start_states, expected_labels = self.ground_truth_filter_fn(start_states, expected_labels, self.model_args)
+
+        self.start_states = start_states
+        self.expected_labels = expected_labels
 
         if self.num_batches is not None:
             self.set_batch_size(self.start_states.shape[0] // self.num_batches)
@@ -738,77 +664,69 @@ class ROAEstimator:
         Generates trajectories from `start_states` using the loaded model.
 
         This method is one of the ways to populate `final_states`.
-
-        **Required attributes:**
-            - `start_states`: Must be loaded or set before calling this.
-            - `model`, `model_args`: Loaded during `__init__`.
-            - `n_runs`, `max_path_length`, etc.: Loaded from inference params.
-
-        **Set/Modified attributes:**
-            - `final_states`: The final state of each generated trajectory.
-            - `trajectories`: (if `discard_trajectories=False`) The full generated trajectories.
-            - `timestamp`: (if `save=True`) Generated if not already set.
-
-        Returns:
-            np.ndarray: The final states of the generated trajectories.
         """
-        from genMoPlan.utils.progress import ETAIterator
+        generator = self.trajectory_generator
 
-        if self._timestamp is None and save:
-            from genMoPlan.utils import generate_timestamp
+        if self.start_states is None:
+            raise ValueError("Start states must be loaded before generating trajectories.")
 
-            self.timestamp = generate_timestamp()
+        if self.n_runs is None:
+            raise ValueError("Number of runs (`n_runs`) must be defined before generation.")
 
-        start_idx = 0
-        merge_prev_data = False
-        prev_final_states = None
-        n_runs_to_generate = self.n_runs
+        existing_runs = 0 if self.final_states is None else self.final_states.shape[1]
+        runs_needed = self._expected_n_runs - existing_runs
 
-        if self.final_states is not None:
-            start_idx = self.n_runs
-            merge_prev_data = True
-            prev_final_states = self.final_states.copy()
-            n_runs_to_generate = self._expected_n_runs - self.n_runs
-            print(f"[ utils/roa ] Continuing from run {start_idx + 1}/{start_idx + self.n_runs}")
-
-            if not discard_trajectories:
-                warnings.warn("Continuing from previous data, cannot load previous trajectories. Stored trajectories will only contain new data.")
-
-        total_trajectories = self.start_states.shape[0] * n_runs_to_generate
-        
-        if total_trajectories > 1e4 and not discard_trajectories:
-            warnings.warn(f"Generating and storing {total_trajectories} trajectories may consume a lot of memory.")
-        
-        if not discard_trajectories:
-            self.trajectories = []
-
-        self.final_states = []
-
-        run_range = range(start_idx, start_idx + n_runs_to_generate)
-        eta_iter = ETAIterator(iter(run_range), n_runs_to_generate)
-        
-        for run_idx in eta_iter:
+        if runs_needed <= 0:
             if self.verbose:
-                print(f"[ utils/roa ] Run {run_idx+1}/{start_idx + n_runs_to_generate} (Remaining Time: {eta_iter.eta_formatted})")
-            
-            self._generate_single_run_trajs(
-                run_idx, discard_trajectories, save
+                print(f"[ utils/roa ] Skipping generation; already have {existing_runs} runs.")
+            return self.final_states
+
+        if existing_runs > 0:
+            if self.verbose:
+                print(f"[ utils/roa ] Continuing from run {existing_runs + 1}/{self._expected_n_runs}")
+        if existing_runs > 0 and not discard_trajectories:
+            warnings.warn(
+                "Continuing from previous data, cannot retain previously generated trajectories. "
+                "Stored trajectories will only contain newly generated data."
             )
 
+        total_trajectories = self.start_states.shape[0] * runs_needed
+        if total_trajectories > 1e4 and not discard_trajectories:
+            warnings.warn(
+                f"Generating and storing {total_trajectories} trajectories may consume a lot of memory."
+            )
+
+        final_state_runs, trajectory_runs = generator.generate_multiple_runs(
+            start_states=self.start_states,
+            n_runs=runs_needed,
+            batch_size=self.batch_size,
+            discard_trajectories=discard_trajectories,
+            save=save,
+            run_offset=existing_runs,
+            metadata_n_runs=self._expected_n_runs,
+            max_path_length=self.max_path_length,
+            horizon_length=self.horizon_length,
+            conditional_sample_kwargs=self.conditional_sample_kwargs,
+            post_process_fns=self.inference_params["post_process_fns"],
+            post_process_fn_kwargs=self.inference_params["post_process_fn_kwargs"],
+            verbose=self.verbose,
+        )
+
+        generated_final_states = final_state_runs.transpose(1, 0, 2)
+
+        if existing_runs > 0 and self.final_states is not None:
+            self.final_states = np.concatenate([self.final_states, generated_final_states], axis=1)
+        else:
+            self.final_states = generated_final_states
+
         if not discard_trajectories:
-            self.trajectories = np.array(self.trajectories, dtype=np.float32) # (n_runs, num_start_states, path_length, dim)
-            self.trajectories = np.transpose(self.trajectories, (1, 0, 2, 3)) # (num_start_states, n_runs, path_length, dim)
-        
-        self.final_states = np.array(self.final_states, dtype=np.float32) # (n_runs, num_start_states, dim)
-        self.final_states = np.transpose(self.final_states, (1, 0, 2)) # (num_start_states, n_runs, dim)
+            if trajectory_runs is None:
+                raise ValueError("Expected trajectories but none were returned.")
+            self.trajectories = trajectory_runs.transpose(1, 0, 2, 3)
+        elif existing_runs == 0:
+            self.trajectories = None
 
-        if merge_prev_data:
-            self.final_states = np.concatenate([prev_final_states, self.final_states], axis=1)
-            self.n_runs = self._expected_n_runs
-
-
-        assert self.final_states.shape[1] == self.n_runs
-
+        self.n_runs = self.final_states.shape[1]
         return self.final_states
        
     def load_final_states(self, timestamp: str = None, parallel=True) -> None:
@@ -831,49 +749,15 @@ class ROAEstimator:
             - `n_runs`
             - `timestamp`
         """
-        if timestamp is None:
-            self.timestamp = _get_latest_timestamp(self.model_path, self.final_state_directory)
+        final_states_run_first, loaded_runs, resolved_timestamp = self.trajectory_generator.load_saved_final_states(
+            expected_runs=self._expected_n_runs,
+            timestamp=timestamp,
+            parallel=parallel,
+        )
 
-        all_final_states = []
-        
-        n_runs = self.n_runs
-        self.n_runs = 0
-
-        file_paths_to_load = [path.join(self.gen_traj_path, f"final_states_run_{run_idx}.txt") for run_idx in range(n_runs)]
-        file_paths = []
-
-        for file_path in file_paths_to_load:
-            if os.path.exists(file_path):
-                file_paths.append(file_path)
-                self.n_runs += 1
-            else:
-                print(f"[ utils/roa ] Will load {self.n_runs} runs since file {file_path} not found. ")
-                break
-
-        if self.n_runs == 0:
-            raise ValueError("No final states found")
-
-        if not parallel:
-            iter = tqdm(file_paths, desc="Loading final states") if self.verbose else file_paths
-            for file_path in iter:
-                final_states = _load_final_states(file_path)
-               
-                all_final_states.append(final_states)
-        else: 
-            with multiprocessing.Pool(processes=multiprocessing.cpu_count()) as pool:
-                if self.verbose:
-                    iter = tqdm(pool.imap(_load_final_states, file_paths), 
-                                   total=len(file_paths), 
-                                   desc="Loading final states")
-                else:
-                    iter = pool.imap(_load_final_states, file_paths)
-
-                results = list(iter)
-
-            for final_states in results:
-                all_final_states.append(final_states)
-                
-        self.final_states = np.array(all_final_states, dtype=np.float32).transpose(1, 0, 2)
+        self.final_states = final_states_run_first.transpose(1, 0, 2)
+        self.n_runs = loaded_runs
+        self.timestamp = resolved_timestamp
 
         if self.n_runs != self._expected_n_runs:
             warnings.warn(f"Loaded {self.n_runs} runs instead of {self._expected_n_runs}")
