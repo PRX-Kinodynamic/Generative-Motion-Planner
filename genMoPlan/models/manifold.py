@@ -65,11 +65,11 @@ class ProductFeatureLayer(nn.Module):
 class ProjectToTangent(nn.Module):
     """Projects a vector field onto the tangent plane at the input."""
 
-    def __init__(self, model: nn.Module, manifold: ManifoldWrapper, input_dim: int, n_fourier_features: int = 1):
+    def __init__(self, model: nn.Module, manifold: ManifoldWrapper, input_dim: int, n_fourier_features: int = 1, use_history_mask: bool = False):
         super().__init__()
         self.model = model
         self.manifold = manifold
-        
+        self.use_history_mask = use_history_mask
 
         if self.manifold.manifold_type == ManifoldType.SPHERE:
             self.manifold_features_layer = IdentityFeatureLayer(input_dim)
@@ -80,9 +80,12 @@ class ProjectToTangent(nn.Module):
         else:
             raise ValueError(f"Unsupported manifold type: {self.manifold.manifold_type}")
         
-    def forward(self, x, global_query, local_query, t):
+    def forward(self, x, global_query, local_query, t, mask=None):
         x = self.manifold.projx(x)
         manifold_features = self.manifold_features_layer(x)
-        v = self.model(manifold_features, global_query, local_query, t)
+        if self.use_history_mask:
+            v = self.model(manifold_features, global_query, local_query, t, mask=mask)
+        else:
+            v = self.model(manifold_features, global_query, local_query, t)
         v = self.manifold.proju(x, v)
         return v

@@ -180,6 +180,7 @@ class Parser(Tap):
     dataset: str = None
     method: Optional[str] = None
     variations: List[str] = []
+    no_inference: bool = False
 
     def __init__(self, **kwargs):
         super().__init__()

@@ -1,3 +1,5 @@
+from typing import Optional
+
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -12,31 +14,42 @@ import genMoPlan.utils as utils
 
 
 class WeightedLoss(nn.Module):
-
-    def __init__(self, history_length=1, action_indices=None, manifold=None):
+    def __init__(self, history_length=1, action_indices=None, manifold=None, state_names=None):
         super().__init__()
         self.history_length = history_length
         self.action_indices = action_indices
         self.manifold = manifold
+        self.state_names = state_names
 
-    def forward(self, pred, targ, loss_weights, ignore_manifold=False):
+    def forward(self, pred, targ, ignore_manifold=False, loss_weights=None):
         """
         pred, targ : tensor
             [ batch_size x horizon x output_dim ]
         """
-        loss = self._loss(pred, targ, ignore_manifold)
-        weighted_loss = (loss * loss_weights).mean()
+        raw_loss = self._loss(pred, targ, ignore_manifold) # [ batch_size x horizon x output_dim ]
+
+        if loss_weights is not None:
+            weighted_loss = raw_loss * loss_weights
+        else:
+            weighted_loss = raw_loss
+
+        if weighted_loss.ndim == 3:
+            statewise_loss = raw_loss.mean(axis=(0, 1))
+        else:
+            statewise_loss = raw_loss.mean(axis=0)
+
         info = {}
 
-        if self.history_length > 1:
-            info["cond_loss"] = (loss[:, :self.history_length]).mean()
-        else:
-            info["cond_loss"] = loss[:, 0].mean()
+        if self.state_names is not None:
+            for i, state_name in enumerate(self.state_names):
+                info[f"{state_name}_loss"] = statewise_loss[i]
 
-        if self.action_indices is not None:
-            info["action_loss"] = loss[:, :, self.action_indices].mean()
+        mean_loss = weighted_loss.mean()
 
-        return weighted_loss, info
+        info["raw_loss"] = raw_loss.mean()
+        info["weighted_loss"] = weighted_loss.mean()
+
+        return mean_loss, info
 
 
 class ValueLoss(nn.Module):
@@ -98,26 +111,26 @@ Losses = {
 }
 
 
-def get_loss_weights(output_dim, prediction_length, discount, weights_dict):
-    '''
-        sets loss coefficients for trajectory
+def generate_next_history_loss_weights(
+    *,
+    history_length: Optional[int] = None,
+    prediction_length: Optional[int] = None,
+    lambda_next_history: Optional[float] = None,
+    **kwargs,
+) -> torch.Tensor:
+    assert history_length is not None, "history_length is required"
+    assert prediction_length is not None, "prediction_length is required"
+    assert lambda_next_history is not None, "lambda_next_history is required"
 
-        discount   : float
-            multiplies t^th timestep of trajectory loss by discount**t
-        weights_dict    : dict
-            { i: c } multiplies dimension i of observation loss by c
-    '''
+    weights = torch.ones(1, prediction_length, 1)
 
-    dim_weights = torch.ones(output_dim, dtype=torch.float32)
+    weights[:, -history_length:] = lambda_next_history
 
-    ## set loss coefficients for dimensions of observation
-    if weights_dict is None: weights_dict = {}
-    for ind, w in weights_dict.items():
-        dim_weights[ind] *= w
+    return weights
 
-    ## decay loss with trajectory timestep: discount**t
-    discounts = discount ** torch.arange(prediction_length, dtype=torch.float)
-    discounts = discounts / discounts.mean()
-    loss_weights = torch.einsum('h,t->ht', discounts, dim_weights)
 
-    return loss_weights
+LossWeightTypes = {
+    "none": None,
+    "next_history": generate_next_history_loss_weights,
+}
+

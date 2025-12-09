@@ -5,14 +5,17 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-def get_data_trajectories_path() -> str:
+def get_data_trajectories_path(dataset: str = None) -> str:
     """Return the path to the data_trajectories directory.
 
     The path is determined by the DATA_TRAJECTORIES_PATH environment variable. If the
     variable is not set, the function falls back to the default relative path
     'data_trajectories'.
     """
-    return os.getenv("DATA_TRAJECTORIES_PATH", "data_trajectories")
+    if dataset is None:
+        return os.getenv("DATA_TRAJECTORIES_PATH", "data_trajectories")
+    else:
+        return os.path.join(os.getenv("DATA_TRAJECTORIES_PATH", "data_trajectories"), dataset)
 
 # ---------------------------- experiments ----------------------------#
 def get_experiments_path() -> str:

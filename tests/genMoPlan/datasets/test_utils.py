@@ -1,5 +1,6 @@
 import pytest
-from genMoPlan.datasets.utils import make_indices, compute_actual_length, apply_padding
+from genMoPlan.datasets.utils import make_indices, apply_padding
+from genMoPlan.utils.data_processing import compute_actual_length
 import torch
 
 
@@ -136,11 +137,10 @@ class TestMakeIndices:
         # - horizon_length=2 means indices at 3,5 (length 3)
         expected_indices = [
             # (path_idx, history_start, history_end, horizon_start, horizon_end)
-            (0, 0, 3, 3, 6),  # History at [0,2], horizon at [3,5]
-            (0, 1, 4, 4, 7),  # History at [1,3], horizon at [4,6]
-            (0, 2, 5, 5, 8),  # History at [2,4], horizon at [5,7]
-            (0, 3, 6, 6, 9),  # History at [3,5], horizon at [6,8]
-            (0, 4, 7, 7, 10),  # History at [4,6], horizon at [7,9]
+            (0, 0, 3, 4, 7),  # History at [0,2], horizon at [4,6]
+            (0, 1, 4, 5, 8),  # History at [1,3], horizon at [5,7]
+            (0, 2, 5, 6, 9),  # History at [2,4], horizon at [6,8]
+            (0, 3, 6, 7, 10),  # History at [3,5], horizon at [7,9]
         ]
         
         assert indices == expected_indices

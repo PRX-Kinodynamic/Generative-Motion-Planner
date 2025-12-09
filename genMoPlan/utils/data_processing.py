@@ -310,3 +310,6 @@ def shift_to_zero_center_angles(
 
     else:
         raise ValueError(f"Unsupported data type: {type(data_or_trajectories)}")
+
+def compute_actual_length(length, stride):
+    return 1 + (length - 1) * stride

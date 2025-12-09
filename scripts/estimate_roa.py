@@ -4,7 +4,6 @@ from genMoPlan.eval.roa import ROAEstimator
 from genMoPlan.utils import expand_model_paths
 
 def estimate_roa(
-    dataset, 
     model_state_name, 
     model_path,
     n_runs=None, 
@@ -18,6 +17,19 @@ def estimate_roa(
     attractor_dist_threshold=None,
     attractor_prob_threshold=None,
 ):
+
+    dataset = None
+
+    path_splits = model_path.split('/')
+
+    for i, splits in enumerate(path_splits):
+        if splits == 'experiments':
+            dataset = path_splits[i+1]
+            break
+
+    if dataset is None:
+        raise ValueError(f"Dataset not found in model path: {model_path}")
+
     if '#' in model_path:
         model_path = model_path.replace('#', '*')
         model_path = expand_model_paths(model_path)[0]
@@ -55,9 +67,12 @@ def estimate_roa(
     roa_estimator.predict_attractor_labels(save=True)
 
     if not no_img:
-        roa_estimator.plot_attractor_probabilities()
-        roa_estimator.plot_predicted_attractor_labels()
-        roa_estimator.plot_roas(plot_separatrix=True)
+        try:
+            roa_estimator.plot_attractor_probabilities()
+            roa_estimator.plot_predicted_attractor_labels()
+            roa_estimator.plot_roas(plot_separatrix=True)
+        except Exception as e:
+            pass
 
     roa_estimator.compute_classification_results(save=True)
 
@@ -66,10 +81,6 @@ def estimate_roa(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Visualize model trajectories")
     
-    parser.add_argument(
-        "--dataset", type=str, required=True, help="Dataset name"
-    )
-
     parser.add_argument("--model_path", type=str, help="Experiment path")
 
     parser.add_argument(
@@ -155,7 +166,6 @@ if __name__ == "__main__":
         for model_path in args.model_paths:
             print(f"\n\n[ scripts/estimate_roa ] Estimating ROA for {model_path}\n\n")
             estimate_roa(
-                dataset=args.dataset, 
                 model_state_name=args.model_state_name, 
                 model_path=model_path, 
                 n_runs=args.n_runs, 
@@ -171,7 +181,6 @@ if __name__ == "__main__":
             )
     else:
         estimate_roa(
-            dataset=args.dataset, 
             model_state_name=args.model_state_name, 
             model_path=args.model_path, 
             n_runs=args.n_runs, 

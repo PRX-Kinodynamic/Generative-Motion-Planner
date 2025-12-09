@@ -43,8 +43,6 @@ def attractor_classification_fn(final_states: np.ndarray, attractors: dict, attr
     if verbose:
         print("[ config/double_integrator_1d_bang_bang ] Getting attractor labels for trajectories")
 
-    breakpoint()
-
     predicted_labels = np.zeros_like(final_states[:, 0])
     predicted_labels.fill(invalid_label)
 
@@ -126,8 +124,6 @@ base = {
         "action_indices": None,
         "angle_indices": [],
         "loss_type": "l2",
-        "loss_weights": None,
-        "loss_discount": 1,
         "clip_denoised": False,
         "observation_dim": 2,
         "has_local_query": False,
@@ -145,7 +141,6 @@ base = {
             },
             "plan": None,
         },
-        "sample_granularity": 0.04,
         "plan_preprocess_fns": None,    
         "trajectory_preprocess_fns": [],
         "preprocess_kwargs": {
@@ -156,6 +151,7 @@ base = {
         },
         "use_history_padding": False,
         "use_horizon_padding": True,
+        "use_history_mask": False,
         "use_plan": False,
         "train_dataset_size": None,
         "is_history_conditioned": True,
@@ -176,6 +172,9 @@ base = {
         "batch_size": 64,
         "num_workers": 4,
         "learning_rate": 2e-4,
+        "useAdamW": False,
+        "optimizer_kwargs": {},
+        "clip_grad_norm": None,
         "gradient_accumulate_every": 1,
         "ema_decay": 0.995,
         "save_parallel": False,

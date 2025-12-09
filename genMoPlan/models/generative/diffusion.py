@@ -25,7 +25,10 @@ def default_sample_fn(model, x, global_query, local_query, t, generator=None, **
 
     then sample noise from a normal distribution
     """
-    model_mean, _, model_log_variance = model.p_mean_variance(x=x, global_query=global_query, local_query=local_query, t=t)
+    # Thread through optional extras like masks to the model step
+    model_mean, _, model_log_variance = model.p_mean_variance(
+        x=x, global_query=global_query, local_query=local_query, t=t, **kwargs
+    )
     model_std = torch.exp(0.5 * model_log_variance)
 
     # no noise when t == 0
@@ -51,8 +54,6 @@ class Diffusion(GenerativeModel):
         history_length,
         clip_denoised=False,
         loss_type="l2",
-        loss_weights=None,
-        loss_discount=1.0,
         action_indices=None,
         has_local_query=False,
         has_global_query=False,
@@ -60,6 +61,7 @@ class Diffusion(GenerativeModel):
         sort_by_values=False,
         n_timesteps=100,
         predict_epsilon=True,
+        use_history_mask: bool = False,
         **kwargs,
     ):
         super().__init__(
@@ -70,17 +72,19 @@ class Diffusion(GenerativeModel):
             history_length=history_length,
             clip_denoised=clip_denoised,
             loss_type=loss_type,
-            loss_weights=loss_weights,
-            loss_discount=loss_discount,
             action_indices=action_indices,
             has_local_query=has_local_query,
             has_global_query=has_global_query,
+            use_history_mask=use_history_mask,
             **kwargs
         )
         
         self.sort_by_values = sort_by_values
         self.predict_epsilon = predict_epsilon
         self.n_timesteps = int(n_timesteps)
+        # Explicitly disallow mask usage with classic diffusion
+        if use_history_mask:
+            raise NotImplementedError("use_history_mask is not supported for Diffusion; use Flow Matching instead")
 
         if self.manifold is not None:
             raise NotImplementedError("Manifold is not implemented yet for diffusion model")
@@ -148,7 +152,7 @@ class Diffusion(GenerativeModel):
 
         return sample
 
-    def compute_loss(self, x_target, cond, global_query=None, local_query=None, seed=None):
+    def compute_loss(self, x_target, cond, global_query=None, local_query=None, seed=None, mask=None):
         """
         Get a normal distribution of noise and sample a noisy x by adding a scaled noise to a scaled x_start
         Apply conditioning to the noisy x
@@ -163,6 +167,9 @@ class Diffusion(GenerativeModel):
         else:
             generator = None
 
+        if getattr(self, "use_mask", False) and mask is None:
+            raise ValueError("Mask expected but not provided")
+
         batch_size = len(x_target)
         t = torch.randint(0, self.n_timesteps, (batch_size,), device=x_target.device, generator=generator).long()
 
@@ -172,15 +179,19 @@ class Diffusion(GenerativeModel):
         
         apply_conditioning(x_noisy, cond)
 
-        x_recon = self.model(x_noisy, global_query, local_query, t)
+        # Only pass mask if provided and supported
+        if mask is not None:
+            x_recon = self.model(x_noisy, global_query, local_query, t, mask=mask)
+        else:
+            x_recon = self.model(x_noisy, global_query, local_query, t)
 
         assert noise.shape == x_recon.shape
 
         if self.predict_epsilon:
-            loss, info = self.loss_fn(x_recon, noise, self.loss_weights)
+            loss, info = self.loss_fn(x_recon, noise)
         else:
             apply_conditioning(x_recon, cond)
-            loss, info = self.loss_fn(x_recon, x_target, self.loss_weights)
+            loss, info = self.loss_fn(x_recon, x_target)
 
         return loss, info
     
@@ -220,7 +231,7 @@ class Diffusion(GenerativeModel):
         )
         return posterior_mean, posterior_variance, posterior_log_variance_clipped
     
-    def p_mean_variance(self, x, global_query, local_query, t):
+    def p_mean_variance(self, x, global_query, local_query, t, mask=None, **kwargs):
         """
         Reconstructs x by getting an output from the model and then either subtracting the noise and returning the output directly as x_con
 
@@ -229,7 +240,14 @@ class Diffusion(GenerativeModel):
         Then gets the mean, variance and log variance of the posterior distribution and returns them
         """
 
-        model_output = self.model(x, global_query=global_query, local_query=local_query, time=t)
+        # Pass mask to temporal model if provided and supported; otherwise fall back
+        if mask is None:
+            model_output = self.model(x, global_query=global_query, local_query=local_query, time=t)
+        else:
+            try:
+                model_output = self.model(x, global_query=global_query, local_query=local_query, time=t, mask=mask)
+            except TypeError:
+                model_output = self.model(x, global_query=global_query, local_query=local_query, time=t)
 
         x_recon = self.predict_start_from_noise(x, t=t, model_output=model_output)
 

@@ -16,7 +16,8 @@ from .setup import *
 from .timer import *
 from .trainer import *
 from .trajectory import *
-
+from .trajectory_generator import *
+from .visualization import *
 
 
 def generate_timestamp():
@@ -78,7 +79,6 @@ def get_non_angular_indices(angle_indices: List[int], dimensions: int) -> List[i
 
 def load_roa_labels(
     dataset: str, 
-    
 ) -> np.ndarray:
     roa_labels_fpath = path.join(get_data_trajectories_path(), dataset, "roa_labels.txt")
 
@@ -88,9 +88,9 @@ def load_roa_labels(
     if os.path.exists(roa_labels_fpath):
             with open(roa_labels_fpath, "r") as f:
                 for line in f:
-                    line_data = line.strip().split(' ')[1:]
-                    start_states.append([np.float32(line_data[0]), np.float32(line_data[1])])
-                    expected_labels.append(int(line_data[2]))
+                    line_data = line.strip().split(',')
+                    start_states.append([np.float32(value) for value in line_data[:-1]])
+                    expected_labels.append(int(float(line_data[-1])))
     else:
         raise FileNotFoundError(f"File {roa_labels_fpath} not found")
 

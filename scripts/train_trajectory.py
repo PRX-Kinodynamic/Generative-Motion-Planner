@@ -34,6 +34,7 @@ train_dataset_class_loader = utils.ClassLoader(
     dataset_size=args.train_dataset_size,
     use_history_padding=args.use_history_padding,
     use_horizon_padding=args.use_horizon_padding,
+    use_history_mask=args.use_history_mask,
     use_plan=args.use_plan,
     is_history_conditioned=args.is_history_conditioned,
     read_trajectory_fn=args.read_trajectory_fn,
@@ -60,10 +61,12 @@ if args.val_dataset_size is not None:
         dataset_size=args.val_dataset_size,
         use_history_padding=args.use_history_padding,
         use_horizon_padding=args.use_horizon_padding,
+        use_history_mask=args.use_history_mask,
         use_plan=args.use_plan,
         is_history_conditioned=args.is_history_conditioned,
         is_validation=True,
         read_trajectory_fn=args.read_trajectory_fn,
+        perform_final_state_evaluation=args.perform_final_state_evaluation,
         **args.safe_get("dataset_kwargs", {}),
     )
 
@@ -115,13 +118,15 @@ gen_model_class_loader = utils.ClassLoader(
     history_length=args.history_length,
     clip_denoised=args.clip_denoised,
     loss_type=args.loss_type,
-    loss_weights=args.loss_weights,
-    loss_discount=args.loss_discount,
     action_indices=args.action_indices,
     has_local_query=args.has_local_query,
     has_global_query=args.has_global_query,
     manifold=manifold,
     val_seed=args.val_seed,
+    state_names=args.state_names,
+    loss_weight_type=args.loss_weight_type,
+    loss_weight_kwargs=args.loss_weight_kwargs,
+    use_history_mask=args.use_history_mask,
     **args.method_kwargs,
     device=args.device,
 )
@@ -146,13 +151,20 @@ trainer_class_loader = utils.ClassLoader(
     save_parallel=args.save_parallel,
     results_folder=args.savepath,
     method=args.method,
-    exp_name=args.exp_name,
+    exp_name=f'{args.dataset}/{args.exp_name}',
     num_workers=args.num_workers,
     device=args.device,
     seed=args.seed,
     use_lr_scheduler=args.use_lr_scheduler,
     lr_scheduler_warmup_steps=args.lr_scheduler_warmup_steps,
     lr_scheduler_min_lr=args.lr_scheduler_min_lr,
+    useAdamW=args.useAdamW,
+    optimizer_kwargs=args.optimizer_kwargs,
+    clip_grad_norm=args.safe_get("clip_grad_norm", None),
+    eval_freq=args.eval_freq,
+    eval_batch_size=args.eval_batch_size,
+    eval_seed=args.eval_seed,
+    perform_final_state_evaluation=args.perform_final_state_evaluation,
 )
 
 # # -----------------------------------------------------------------------------#
@@ -193,7 +205,7 @@ print("✓")
 
 gen_model.eval()
 sample = train_dataset[0]
-print(f"[ scripts/train_trajectory ] Forward pass time: {timeit.timeit(lambda: gen_model.forward(cond=sample.conditions, global_query=sample.global_query, local_query=sample.local_query), number=10) / 10} seconds")
+print(f"[ scripts/train_trajectory ] Forward pass time: {timeit.timeit(lambda: gen_model.forward(cond=sample.conditions, global_query=sample.global_query, local_query=sample.local_query, mask=sample.mask), number=10) / 10} seconds")
 gen_model.train()
 
 # -----------------------------------------------------------------------------#
@@ -213,24 +225,27 @@ trainer_class_loader.save()
 torch.set_num_threads(args.num_workers)
 trainer.train()
 
+if args.no_inference:
+    exit()
+
 
 # -----------------------------------------------------------------------------#
 # ------------------------------visualize trajectories-------------------------#
 # -----------------------------------------------------------------------------#
-
-try:
-    visualize_generated_trajectories(
-        args.dataset,
-        num_trajs=1000,
-        model_paths=args.savepath,
-        model_state_name="best.pt",
-    )
-except Exception as e:
-    print(f"Error visualizing trajectories: {e}")
-    print(f"Error type: {type(e).__name__}")
-    print(f"Error traceback:")
-    import traceback
-    traceback.print_exc()
+if observation_dim <= 2:
+    try:
+        visualize_generated_trajectories(
+            args.dataset,
+            num_trajs=1000,
+            model_paths=args.savepath,
+            model_state_name="best.pt",
+        )
+    except Exception as e:
+        print(f"Error visualizing trajectories: {e}")
+        print(f"Error type: {type(e).__name__}")
+        print(f"Error traceback:")
+        import traceback
+        traceback.print_exc()
 
 
 # -----------------------------------------------------------------------------#
@@ -239,7 +254,6 @@ except Exception as e:
 
 try:
     estimate_roa(
-        dataset=args.dataset,
         model_state_name="best.pt",
         model_path=args.savepath,
     )

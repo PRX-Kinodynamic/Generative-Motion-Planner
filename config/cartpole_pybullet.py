@@ -1,11 +1,50 @@
 import socket
-from flow_matching.utils.manifolds import FlatTorus, Euclidean, Product
+from flow_matching.utils.manifolds import FlatTorus, Euclidean, Product, Sphere
 import numpy as np
-from genMoPlan.utils import watch, handle_angle_wraparound, augment_unwrapped_state_data, watch_dict, process_angles, get_experiments_path, shift_to_zero_center_angles
+
+from genMoPlan.utils import watch, watch_dict, shift_to_zero_center_angles, handle_angle_wraparound, augment_unwrapped_state_data, process_angles, get_experiments_path
 
 is_arrakis = 'arrakis' in socket.gethostname()
 
-max_batch_size = int(1e6) if is_arrakis else int(266e3)
+max_batch_size = int(2.5e5) if is_arrakis else int(1e4)
+
+
+max_path_length = 613
+
+state_names = ["x", "theta", "x_dot", "theta_dot"]
+
+# Based on initial_state_bounds from dataset_description.json
+mins = [-6.0, -np.pi, -5.0, -5.0]
+maxs = [6.0, np.pi, 5.0, 5.0]
+
+manifold_mins = mins.copy()
+manifold_maxs = maxs.copy()
+
+manifold_mins[1] = None
+manifold_maxs[1] = None
+
+manifold = Product(
+    input_dim=4,
+    manifolds=[
+        (Euclidean(), 1),
+        (FlatTorus(), 1),
+        (Euclidean(), 2)
+    ],
+)
+
+angle_indices = [1]
+
+def attractor_classification_fn(final_states: np.ndarray, attractors: dict, attractor_dist_threshold: float, invalid_label: int = -1, verbose: bool = True):
+    if verbose:
+        print("[ config/cartpole_pybullet ] Getting attractor labels for trajectories")
+
+    final_norms = np.linalg.norm(final_states, axis=1)
+    predicted_labels = np.zeros_like(final_norms)
+
+    predicted_labels[final_norms <= attractor_dist_threshold] = 1
+    predicted_labels[final_norms > attractor_dist_threshold] = 0
+
+    return predicted_labels
 
 def read_trajectory(sequence_path):
     with open(sequence_path, "r") as f:
@@ -17,7 +56,7 @@ def read_trajectory(sequence_path):
         line = line.strip()
         if line == "":
             if i < len(lines) - 1:
-                raise ValueError(f"[ config/pendulum_lqr_50k ] Empty line found at {sequence_path} at line {i}")
+                raise ValueError(f"[ config/cartpole_pybullet ] Empty line found at {sequence_path} at line {i}")
             else:
                 break
 
@@ -25,21 +64,25 @@ def read_trajectory(sequence_path):
 
         state = [s for s in state if s != ""]
 
-        if len(state) < 2:
-            raise ValueError(f"[ config/pendulum_lqr_50k ] Trajectory at {sequence_path} has less than 2 states at line {i}")
+        if len(state) < 4:
+            raise ValueError(f"[ config/cartpole_pybullet ] Trajectory at {sequence_path} has less than 4 states at line {i}")
 
-        state = state[:2]
+        state = state[:4]
 
-        state = [float(s) for s in state]
+        state = np.array([float(s) for s in state])
+
+        state[1] = state[1] % (2 * np.pi) # wrap angle to [0, 2pi]
+        if state[1] > np.pi:
+            state[1] -= 2 * np.pi
 
         trajectory.append(state)
 
     return np.array(trajectory, dtype=np.float32)
 
-# ------------------------ base ------------------------#
+def ground_truth_filter_fn(start_states: np.ndarray, expected_labels: np.ndarray, model_args):
+    train_dataset_size = model_args.train_dataset_size
+    return start_states[train_dataset_size:], expected_labels[train_dataset_size:]
 
-## automatically make experiment names for planning
-## by labelling folders with these args
 
 exp_args_to_watch = [
     ("history_length", "HILEN"),
@@ -57,47 +100,48 @@ results_args_to_watch = [
 
 logbase = get_experiments_path()
 
+
 base = {
     "inference": {
         "results_name": watch_dict(results_args_to_watch),
-        "attractors": {
-            (-2.1, 0): 0,
-            (2.1, 0): 0,
-            (0, 0): 1,
-        },
+        "attractor_classification_fn": attractor_classification_fn,
         "invalid_label": -1,
         "n_runs": 20,
         "batch_size": max_batch_size,
-        "attractor_dist_threshold": 0.075,
+        "attractor_dist_threshold": 1,
         "attractor_prob_threshold": 0.6,
-        "max_path_length": 502,
         "flow_matching": {
-            "n_timesteps": 5,
+            "n_timesteps": 10,
             "integration_method": "euler",
         },
         "post_process_fns": [
             process_angles,
         ],
         "post_process_fn_kwargs": {
-            "angle_indices": [0],
+            "angle_indices": angle_indices,
         },
         "final_state_directory": "final_states",
         "generated_trajectory_directory": "generated_trajectories",
         "manifold_unwrap_fns": [shift_to_zero_center_angles],
         "manifold_unwrap_kwargs": {
-            "angle_indices": [0],
+            "angle_indices": angle_indices,
         },
         "load_ema": True,
+        # "ground_truth_filter_fn": ground_truth_filter_fn,
+        "attractor_labels": [0, 1],
+        "max_path_length": max_path_length,
     },
 
     "base": {
         "action_indices": None,
-        "angle_indices": [0],
+        "angle_indices": angle_indices,
         "loss_type": "l2",
         "clip_denoised": False,
-        "observation_dim": 2,
+        "observation_dim": 4,
         "has_local_query": False,
         "has_global_query": False,
+        "state_names": state_names,
+        "max_path_length": max_path_length,
 
         #-------------------------------- dataset --------------------------------#
         "loader": "datasets.TrajectoryDataset",
@@ -106,24 +150,24 @@ base = {
         "plan_normalizer": None,
         "normalizer_params": {
             "trajectory": {
-                "mins": [-2*np.pi, -2*np.pi],
-                "maxs": [2*np.pi, 2*np.pi],
+                "mins": mins,
+                "maxs": maxs,
             },
             "plan": None,
         },
-        "plan_preprocess_fns": None,    
+        "plan_preprocess_fns": None,
         "trajectory_preprocess_fns": [
             handle_angle_wraparound,
             augment_unwrapped_state_data,
         ],
         "preprocess_kwargs": {
             "trajectory": {
-                "angle_indices": [0],
+                "angle_indices": angle_indices,
             },
             "plan": None,
         },
         "use_history_padding": False,
-        "use_horizon_padding": True,
+        "use_horizon_padding": False,
         "use_history_mask": False,
         "use_plan": False,
         "train_dataset_size": None,
@@ -142,6 +186,7 @@ base = {
         "min_num_steps_per_epoch": 0,
         "save_freq": 20, # epochs
         "log_freq": 1e2, # steps
+
         "batch_size": 1024,
         "num_workers": 4,
         "learning_rate": 1e-4,
@@ -160,12 +205,18 @@ base = {
         #---------------------------- early stopping-------------------------#
         "patience": 10,
         "warmup_epochs": 5,
-        "early_stopping": True,
+        "early_stopping": False,
 
         #---------------------------- validation ----------------------------#
         "val_dataset_size": 100,
         "val_batch_size": max_batch_size,
         "val_seed": 42,
+
+        #-------------------------------evaluation--------------------------#
+        "perform_final_state_evaluation": True,
+        "eval_freq": 10, # epochs
+        "eval_batch_size": max_batch_size,
+        "eval_seed": 42,
     },
 
     "diffusion": {
@@ -175,7 +226,7 @@ base = {
         "horizon_length": 31,
         "history_length": 1,
         "stride": 1,
-        
+
         "model_kwargs": {
             "base_hidden_dim": 32,
             "hidden_dim_mult": (1, 2, 4, 8),
@@ -195,27 +246,21 @@ base = {
     "flow_matching": {
         "method_name": "flow_matching",
         "method": "models.generative.FlowMatching",
-        "manifold": Product(
-            input_dim=2,
-            manifolds=[
-                (FlatTorus(), 1),
-                (Euclidean(), 1),
-            ],
-        ),
-        "manifold_unwrap_fns": [shift_to_zero_center_angles],
+        "manifold": manifold,
+        "manifold_unwrap_fns": [],
         "manifold_unwrap_kwargs": {
-            "angle_indices": [0],
+            "angle_indices": angle_indices,
         },
         "trajectory_preprocess_fns": [],
         "preprocess_kwargs": {},
         "normalizer_params": {
             "trajectory": {
-                "mins": [None, -2*np.pi],
-                "maxs": [None, 2*np.pi],
+                "mins": manifold_mins,
+                "maxs": manifold_maxs,
             },
             "plan": None,
         },
-        "horizon_length": 31,
+        "horizon_length": 15,
         "history_length": 1,
         "stride": 1,
         "model": "models.temporal.TemporalUnet",
@@ -236,41 +281,14 @@ base = {
         "validation_kwargs": {
             "n_timesteps": 5,
             "integration_method": "euler",
+            "max_path_length": max_path_length,
         },
     }
-}
-
-# ------------------------ overrides ------------------------#
-
-fewer_steps = {
-    "n_diffusion_steps": 5,
-}
-
-one_step = {
-    "n_diffusion_steps": 1,
-}
-
-long_horizon = {
-    "horizon_length": 80,
-}
-
-longer_horizon = {
-    "horizon_length": 160,
 }
 
 data_lim_10 = {
     "train_dataset_size": 10,
     "num_epochs": 200000,
-}
-
-data_lim_25 = {
-    "train_dataset_size": 25,
-    "num_epochs": 80000,
-}
-
-data_lim_50 = {
-    "train_dataset_size": 50,
-    "num_epochs": 40000,
 }
 
 data_lim_100 = {
@@ -288,137 +306,38 @@ data_lim_1000 = {
     "num_epochs": 2000,
 }
 
-data_lim_2000 = {
-    "train_dataset_size": 2000,
-    "num_epochs": 1000,
+data_lim_20000 = {
+    "train_dataset_size": 20000,
+    "num_epochs": 2000,
 }
 
-data_lim_3500 = {
-    "train_dataset_size": 3500,
-    "num_epochs": 550,
-}
-
-data_lim_5000 = {
-    "train_dataset_size": 5000,
-    "num_epochs": 400,
-}
-
-non_manifold = {
-    "manifold": None,
-    "manifold_unwrap_fns": [],
-    "manifold_unwrap_kwargs": {},
-    "trajectory_preprocess_fns": [
-        handle_angle_wraparound,
-        augment_unwrapped_state_data,
-    ],
-    "preprocess_kwargs": {
-        "trajectory": {
-            "angle_indices": [0],
-        },
-        "plan": None,
-    },
-    "trajectory_normalizer": "LimitsNormalizer",
-    "plan_normalizer": None,
-    "normalizer_params": {
-        "trajectory": {
-            "mins": [-2*np.pi, -2*np.pi],
-            "maxs": [2*np.pi, 2*np.pi],
-        },
-        "plan": None,
-    },
-    "method_kwargs": {
-        "scheduler": "CondOTScheduler",
-        "path": "AffineProbPath",
-        "solver": "ODESolver",
-        "n_fourier_features": 1,
+larger_hidden_dim = {
+    "model_kwargs": {
+        "base_hidden_dim": 64,
     },
 }
 
-adaptive_training = {
-    "prefix": "adaptive_training/",
-    "num_epochs": 20,
-    "device": "cuda",
-    "seed": 42,
-    "min_delta": 1e-2,
-    "patience": 10,
-    "warmup_epochs": 5,
-    "early_stopping": True,
-    "adaptive_training_kwargs": {
-        "n_runs": 10,
-        "num_inference_steps": 17,
-        "sampling_batch_size": max_batch_size,
-        "conditional_sample_kwargs": {
-            "n_timesteps": 5,
-            "integration_method": "euler",
-        },
-        "post_process_fns": [
-            process_angles,
-        ],
-        "post_process_fn_kwargs": {
-            "angle_indices": [0],
-        },
-        "combiner": "adaptive_training.ConcatCombiner",
-        "combiner_kwargs": {},
-        "animate_plots": True,
-        "uncertainty_kwargs": {
-            "inference_normalization_params": {
-                "mins": [-np.pi, -2*np.pi],
-                "maxs": [np.pi, 2*np.pi],
-            },
-        },
-        "sampler": "adaptive_training.WeightedDiscreteSampler",
-        "sampler_kwargs": {},
-        "init_size": 20,
-        "step_size": 20,
-        "val_size": 40,
-        "max_iters": 30,
-        "filter_seen": False,
-    },
-}
-
-small_dataset = {
-    "adaptive_training_kwargs": {
-        "init_size": 10,
-        "step_size": 10,
-    }
-}
-
-uncertainty_variance = {
-    "adaptive_training_kwargs": {
-        "uncertainty": "adaptive_training.FinalStateVariance",
-        "stop_uncertainty": 0.001,
-    }
-}
-uncertainty_std = {
-    "adaptive_training_kwargs": {
-        "uncertainty": "adaptive_training.FinalStateStd",
-        "stop_uncertainty": 0.01,
-    }
-}
-
-adaptive_training_test = {
-    "adaptive_training_kwargs": {
-        "n_runs": 10,
-        "num_inference_steps": 17,
-        "max_iters": 1,
-    }
+lr_test = {
+    "learning_rate": 1e-3,
+    "lr_scheduler_warmup_steps": 300,
+    "lr_scheduler_min_lr": 2e-4,
 }
 
 dit_test = {
     "model": "models.temporal.TemporalDiffusionTransformer",
     "model_kwargs": {
-        "hidden_dim": 256,
+        "hidden_dim": 128,
         "num_layers": 4,
         "num_heads": 4,
         "feedforward_dim": None,
-        "dropout": 0.0,
+        "dropout": 0.01,
         "time_embed_dim": None,
         "global_query_embed_dim": None,
         "local_query_embed_dim": None,
         "use_positional_encoding": True,
     },
 
-    "lr_scheduler_warmup_steps": 2000,
+    "lr_scheduler_warmup_steps": 500,
     "learning_rate": 2.5e-4,
     "lr_scheduler_min_lr": 2e-5,
     "ema_decay": 0.999,
@@ -429,6 +348,65 @@ dit_test = {
     },
     "clip_grad_norm": 1.0,
 
-    "val_batch_size": int(1e4),
+    "val_batch_size": int(6e4) if is_arrakis else int(1e4),
 }
 
+stride_10 = {
+    "stride": 10,
+}
+
+stride_30 = {
+    "stride": 30,
+}
+
+epochs_1000 = {
+    "num_epochs": 1000,
+}
+
+epochs_500 = {
+    "num_epochs": 500,
+}
+
+next_history_loss_weight = {
+    "loss_weight_type": "next_history",
+    "loss_weight_kwargs": {
+        "lambda_next_history": 2.0,
+    },
+}
+
+next_history_loss_weight_5 = {
+    "loss_weight_type": "next_history",
+    "loss_weight_kwargs": {
+        "lambda_next_history": 5.0,
+    },
+}
+
+history_mask_2 = {
+    "use_history_mask": True,
+    "use_horizon_padding": False,
+    "history_length": 2,
+    "final_state_evaluation": False,
+}
+
+history_padding_2 = {
+    "use_history_padding": True,
+    "use_history_mask": False,
+    "use_horizon_padding": False,
+    "history_length": 2,
+    "final_state_evaluation": False,
+}
+
+history_mask_5 = {
+    "use_history_mask": True,
+    "use_horizon_padding": False,
+    "history_length": 5,
+    "final_state_evaluation": False,
+}
+
+history_padding_5 = {
+    "use_history_padding": True,
+    "use_history_mask": False,
+    "use_horizon_padding": False,
+    "history_length": 5,
+    "final_state_evaluation": False,
+}

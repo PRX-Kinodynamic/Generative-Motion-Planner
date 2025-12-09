@@ -3,26 +3,38 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-from genMoPlan.utils.parallel import parallelize_toggle
+from genMoPlan.utils import parallelize_toggle, compute_actual_length
 
 
 NONE_TENSOR = torch.zeros(0, dtype=torch.float32, device='cpu')
 EMPTY_DICT = {}
 
 Index = namedtuple("Index", "path_ind history_start history_end horizon_start horizon_end")
-DataSample = namedtuple("DataSample", "trajectory conditions global_query local_query", defaults=(EMPTY_DICT, NONE_TENSOR, NONE_TENSOR))
+DataSample = namedtuple(
+    "DataSample",
+    "trajectory conditions global_query local_query mask",
+    defaults=(EMPTY_DICT, NONE_TENSOR, NONE_TENSOR, NONE_TENSOR),
+)
+FinalStateDataSample = namedtuple("FinalStateDataSample", "histories final_states", defaults=(NONE_TENSOR, NONE_TENSOR))
 
-def compute_actual_length(length, stride):
-    return 1 + (length - 1) * stride
 
-def _make_indices_for_single_trajectory(i, traj_length, actual_history_length, actual_horizon_length, stride, use_history_padding, use_horizon_padding):
-    min_history_elements = 1 if use_history_padding else actual_history_length
+def _make_indices_for_single_trajectory(i, traj_length, actual_history_length, actual_horizon_length, stride, use_history_padding, use_horizon_padding, use_history_mask, history_padding_anywhere, history_padding_k):
+    # If masking is enabled, allow shorter histories down to at least 1 actual element
+    min_history_elements = 1 if (use_history_padding or use_history_mask) else actual_history_length
     min_horizon_elements = 0 if use_horizon_padding else actual_horizon_length
 
     if min_history_elements + min_horizon_elements > traj_length:
         return None
 
-    max_history_end = traj_length - min_horizon_elements
+    # Ensure there is room for a full horizon sampled at `stride` starting
+    # right after the last history element (which is at index `history_end - 1`).
+    # The first horizon index is `history_end + stride - 1`, so we must reserve
+    # an additional `(stride - 1)` positions beyond `min_horizon_elements`.
+    if use_horizon_padding:
+        # When padding is enabled, allow history to reach the end; horizon may be empty and padded.
+        max_history_end = traj_length - min_horizon_elements
+    else:
+        max_history_end = traj_length - min_horizon_elements - (stride - 1)
     min_history_end = min_history_elements
 
     unique_indices = set()
@@ -30,28 +42,95 @@ def _make_indices_for_single_trajectory(i, traj_length, actual_history_length, a
     traj_indices = []
     
     for history_end in range(min_history_end, max_history_end + 1):
-        history_start = max(0, history_end - actual_history_length)
         horizon_start = history_end + stride - 1
         horizon_end = min(horizon_start + actual_horizon_length, traj_length)
 
-        history_indices = tuple(range(history_start, history_end, stride))
-        horizon_indices = tuple(range(horizon_start, horizon_end, stride))
+        if use_history_mask:
+            # Generate all possible provided-history counts k in [1, min(history_length, ceil(history_end/stride))]
+            max_k = min((actual_history_length + stride - 1) // stride, (history_end + stride - 1) // stride)
+            # Ensure at least one element available
+            max_k = max(1, max_k)
+            for k in range(1, max_k + 1):
+                s_lower = history_end - k * stride
+                if s_lower < 0:
+                    # Not enough frames to have exactly k provided points
+                    continue
+                history_start = s_lower
 
-        index_key = (history_indices, horizon_indices)
+                history_indices = tuple(range(history_start, history_end, stride))
+                # Skip if empty (should not happen since k>=1)
+                if len(history_indices) == 0:
+                    continue
+                horizon_indices = tuple(range(horizon_start, horizon_end, stride))
 
-        if index_key in unique_indices:
-            continue
+                index_key = (history_indices, horizon_indices)
+                if index_key in unique_indices:
+                    continue
+                unique_indices.add(index_key)
+                traj_indices.append(Index(i, history_start, history_end, horizon_start, horizon_end))
+        else:
+            # Always include the base (full-length when available) history window
+            history_start = max(0, history_end - actual_history_length)
+            history_indices = tuple(range(history_start, history_end, stride))
+            horizon_indices = tuple(range(horizon_start, horizon_end, stride))
+            index_key = (history_indices, horizon_indices)
+            if index_key not in unique_indices:
+                unique_indices.add(index_key)
+                traj_indices.append(Index(i, history_start, history_end, horizon_start, horizon_end))
 
-        unique_indices.add(index_key)
-        
-        traj_indices.append(Index(i, history_start, history_end, horizon_start, horizon_end))
+            # Optionally add additional shorter histories anywhere when padding is enabled
+            if use_history_padding and history_padding_anywhere:
+                # Determine maximum k (number of provided history points) allowed at this history_end
+                max_k_allowed_by_history = (actual_history_length + stride - 1) // stride
+                max_k_available = (history_end + stride - 1) // stride
+                max_k = max(1, min(max_k_allowed_by_history, max_k_available))
+
+                # Resolve which k values to emit based on configuration
+                if isinstance(history_padding_k, str):
+                    if history_padding_k == "k1":
+                        k_values = [1]
+                    elif history_padding_k == "all":
+                        k_values = list(range(1, max_k + 1))
+                    else:
+                        # Unknown string -> default to k1
+                        k_values = [1]
+                elif isinstance(history_padding_k, int):
+                    k_values = [history_padding_k]
+                else:
+                    # Expecting an iterable of ints
+                    try:
+                        k_values = list(history_padding_k)
+                    except Exception:
+                        k_values = [1]
+
+                # Clamp and filter k values
+                k_values = [k for k in k_values if isinstance(k, int) and 1 <= k <= max_k]
+                if len(k_values) == 0:
+                    k_values = [1]
+
+                for k in k_values:
+                    s_lower = history_end - k * stride
+                    if s_lower < 0:
+                        continue
+                    history_start_k = s_lower
+                    history_indices_k = tuple(range(history_start_k, history_end, stride))
+                    if len(history_indices_k) == 0:
+                        continue
+                    horizon_indices_k = horizon_indices  # same horizon for a given history_end
+                    index_key_k = (history_indices_k, horizon_indices_k)
+                    if index_key_k in unique_indices:
+                        continue
+                    unique_indices.add(index_key_k)
+                    traj_indices.append(Index(i, history_start_k, history_end, horizon_start, horizon_end))
 
     return traj_indices
     
 
-def make_indices(path_lengths, history_length, use_history_padding, horizon_length, use_horizon_padding, stride, parallel=True):
+def make_indices(path_lengths, history_length, use_history_padding, horizon_length, use_horizon_padding, stride, use_history_mask=False, parallel=True, history_padding_anywhere=True, history_padding_k="k1"):
     if use_history_padding and use_horizon_padding:
         raise ValueError("Cannot use both history and horizon padding")
+    if use_history_padding and use_history_mask:
+        raise ValueError("Cannot use both history padding and history mask")
 
     indices = []
     skip_count = 0
@@ -62,7 +141,18 @@ def make_indices(path_lengths, history_length, use_history_padding, horizon_leng
     print(f"[ datasets/utils ] Actual history length: {actual_history_length}, Actual horizon length: {actual_horizon_length}")
 
     args_list = [
-        (i, traj_length, actual_history_length, actual_horizon_length, stride, use_history_padding, use_horizon_padding)
+        (
+            i,
+            traj_length,
+            actual_history_length,
+            actual_horizon_length,
+            stride,
+            use_history_padding,
+            use_horizon_padding,
+            use_history_mask,
+            history_padding_anywhere,
+            history_padding_k,
+        )
         for i, traj_length in enumerate(path_lengths)
     ]
 

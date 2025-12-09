@@ -8,6 +8,9 @@ from enum import Enum, auto
 import copy
 
 def _determine_manifold_type(manifold):
+    if isinstance(manifold, ManifoldWrapper):
+        manifold = manifold._manifold
+
     if isinstance(manifold, Sphere):
         return ManifoldType.SPHERE
     elif isinstance(manifold, FlatTorus):
@@ -195,14 +198,31 @@ class ManifoldWrapper:
         else:
             raise ValueError(f"Unsupported manifold type: {manifold_type}")
     
+    def compute_loss_dim(self, input_dim: int, manifold: Manifold = None):
+        if manifold is None:
+            manifold = self._manifold
+
+        manifold_type = _determine_manifold_type(manifold)
+
+        if manifold_type == ManifoldType.FLAT_TORUS or manifold_type == ManifoldType.EUCLIDEAN:
+            return input_dim
+
+        if manifold_type == ManifoldType.SPHERE:
+            return 1
+
+        if manifold_type == ManifoldType.PRODUCT:
+            return sum(self.compute_loss_dim(manifold.dimensions[i], m) for i, m in enumerate(manifold.manifolds))
+
+        raise ValueError(f"Unsupported manifold type: {manifold_type}")
+    
     def _sphere_wrap_params(self, x):
-        batch_shape = x.shape[:-1]
-        center = torch.zeros(*batch_shape, x.shape[-1] + 1, device=x.device, dtype=x.dtype)
-        center[..., -1] = 1.0
-        
-        u = torch.zeros(*batch_shape, x.shape[-1] + 1, device=x.device, dtype=x.dtype)
-        u[..., :-1] = x / 2
-        
+        """
+        x is already an ambient (d+1)-dim unit vector on S^d (or close).
+        Return center = normalized x on the sphere, and u = 0 so that
+        expmap(center, 0) = center (no change).
+        """
+        center = self.projx(x)                 # ensure exact unit norm on S^d
+        u = torch.zeros_like(center)           # zero tangent step
         return center, u
     
     def _zero_center_params(self, x):
@@ -211,70 +231,62 @@ class ManifoldWrapper:
     
     def _product_wrap_params(self, x):
         x_split = self._manifold.split(x)
-        centers = []
-        x_projs = []
-        
-        # Determine total output dimension
+
+        # Total dims: spheres are already ambient (d+1) on input; no +1 here.
         total_center_dim = 0
         total_x_dim = 0
-        
         for i, x_i in enumerate(x_split):
-            if self.manifold_types[i] == ManifoldType.SPHERE:
-                # Sphere adds an extra dimension
-                total_center_dim += x_i.shape[-1] + 1
-                total_x_dim += x_i.shape[-1] + 1
-            else:
-                # FlatTorus and Euclidean keep same dimensions
-                total_center_dim += x_i.shape[-1]
-                total_x_dim += x_i.shape[-1]
-                
-        # Process each component manifold
-        current_center_idx = 0
-        current_x_idx = 0
-        
-        # Pre-allocate output tensors if all batch dimensions match
+            total_center_dim += x_i.shape[-1]
+            total_x_dim += x_i.shape[-1]
+
+        # Fast path if batch shapes align
         if all(x_i.shape[:-1] == x_split[0].shape[:-1] for x_i in x_split):
             batch_shape = x_split[0].shape[:-1]
-            center_out = torch.zeros(*batch_shape, total_center_dim, device=x.device, dtype=x.dtype)
-            x_out = torch.zeros(*batch_shape, total_x_dim, device=x.device, dtype=x.dtype)
-            
+            device, dtype = x.device, x.dtype
+
+            center_out = torch.zeros(*batch_shape, total_center_dim, device=device, dtype=dtype)
+            x_out      = torch.zeros(*batch_shape, total_x_dim,     device=device, dtype=dtype)
+
+            ci = xi = 0
             for i, x_i in enumerate(x_split):
-                if self.manifold_types[i] == ManifoldType.SPHERE:
-                    # Handle Sphere case
-                    raise NotImplementedError("Sphere wrap params not implemented")
-                    c_i, x_i_proj = self._sphere_wrap_params(x_i)
+                mtype = self.manifold_types[i]
+
+                if mtype == ManifoldType.SPHERE:
+                    # Input is already a unit vector in ℝ^{d+1}
+                    c_i, x_i_proj = self._sphere_wrap_params(x_i)  # both (..., d+1)
                     dim = c_i.shape[-1]
-                    center_out[..., current_center_idx:current_center_idx+dim] = c_i
-                    x_out[..., current_x_idx:current_x_idx+dim] = x_i_proj
-                    current_center_idx += dim
-                    current_x_idx += dim
-                elif self.manifold_types[i] == ManifoldType.FLAT_TORUS or self.manifold_types[i] == ManifoldType.EUCLIDEAN:
-                    # Handle FlatTorus case
+
+                elif mtype in (ManifoldType.FLAT_TORUS, ManifoldType.EUCLIDEAN):
+                    # Zero center; identity tangent
+                    c_i, x_i_proj = self._zero_center_params(x_i)
                     dim = x_i.shape[-1]
-                    # For FlatTorus, center is zeros and x is unchanged
-                    # center_out zeros are already set from initialization
-                    x_out[..., current_x_idx:current_x_idx+dim] = x_i
-                    current_center_idx += dim
-                    current_x_idx += dim
+
                 else:
-                    raise ValueError(f"Unsupported manifold type: {self.manifold_types[i]}")
-            
+                    raise ValueError(f"Unsupported manifold type: {mtype}")
+
+                center_out[..., ci:ci+dim] = c_i
+                x_out     [..., xi:xi+dim] = x_i_proj
+                ci += dim
+                xi += dim
+
             return center_out, x_out
-        else:
-            # Fall back to list-based approach if batch dimensions don't match
-            for i, x_i in enumerate(x_split):
-                if self.manifold_types[i] == ManifoldType.SPHERE:
-                    raise NotImplementedError("Sphere wrap params not implemented")
-                    center_i, x_i_proj = self._sphere_wrap_params(x_i)
-                elif self.manifold_types[i] == ManifoldType.FLAT_TORUS or self.manifold_types[i] == ManifoldType.EUCLIDEAN:
-                    center_i, x_i_proj = self._zero_center_params(x_i)
-                else:
-                    raise ValueError(f"Unsupported manifold type: {self.manifold_types[i]}")
-                
-                centers.append(center_i)
-                x_projs.append(x_i_proj)
-            
-            return torch.cat(centers, dim=-1), torch.cat(x_projs, dim=-1)
+
+        # Fallback: handle different batch shapes
+        centers, x_projs = [], []
+        for i, x_i in enumerate(x_split):
+            mtype = self.manifold_types[i]
+
+            if mtype == ManifoldType.SPHERE:
+                c_i, x_i_proj = self._sphere_wrap_params(x_i)
+            elif mtype in (ManifoldType.FLAT_TORUS, ManifoldType.EUCLIDEAN):
+                c_i, x_i_proj = self._zero_center_params(x_i)
+            else:
+                raise ValueError(f"Unsupported manifold type: {mtype}")
+
+            centers.append(c_i)
+            x_projs.append(x_i_proj)
+
+        return torch.cat(centers, dim=-1), torch.cat(x_projs, dim=-1)
 
     def wrap(self, x):
         if self._only_zero_center:
