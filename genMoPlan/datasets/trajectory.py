@@ -2,10 +2,13 @@ import torch
 import numpy as np
 from typing import List, Optional, Callable
 
+from tqdm import tqdm
+
 from genMoPlan.datasets.normalization import *
-from genMoPlan.datasets.utils import EMPTY_DICT, apply_padding, compute_actual_length, make_indices, DataSample, NONE_TENSOR, FinalStateDataSample
-from genMoPlan.utils import load_trajectories
+from genMoPlan.datasets.utils import EMPTY_DICT, apply_padding, make_indices, DataSample, NONE_TENSOR, FinalStateDataSample
+from genMoPlan.utils import load_trajectories, compute_actual_length
 from genMoPlan.utils.arrays import batchify
+
 
 class TrajectoryDataset(torch.utils.data.Dataset):
     normed_trajectories = None
@@ -26,6 +29,9 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         fnames: Optional[List[str]] = None,
         use_horizon_padding: bool = False,
         use_history_padding: bool = False,
+        use_history_mask: bool = False,
+        history_padding_anywhere: bool = True,
+        history_padding_k = "k1",
         is_history_conditioned: bool = True, # Otherwise it is provided as a query that is not predicted by the model
         is_validation: bool = False,
         perform_final_state_evaluation: bool = False,
@@ -36,6 +42,9 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         self.stride = stride
         self.use_horizon_padding = use_horizon_padding
         self.use_history_padding = use_history_padding
+        self.use_history_mask = use_history_mask
+        self.history_padding_anywhere = history_padding_anywhere
+        self.history_padding_k = history_padding_k
         self.is_history_conditioned = is_history_conditioned
         self.observation_dim = observation_dim
 
@@ -55,8 +64,18 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         traj_lengths = [len(trajectory) for trajectory in trajectories]
         
         self.indices = make_indices(
-            traj_lengths, self.history_length, self.use_history_padding, self.horizon_length, self.use_horizon_padding, self.stride
+            traj_lengths,
+            self.history_length,
+            self.use_history_padding,
+            self.horizon_length,
+            self.use_horizon_padding,
+            self.stride,
+            use_history_mask=self.use_history_mask,
+            history_padding_anywhere=self.history_padding_anywhere,
+            history_padding_k=self.history_padding_k,
         )
+
+        
 
         self.n_episodes = len(trajectories)
         self.traj_lengths = traj_lengths
@@ -69,6 +88,7 @@ class TrajectoryDataset(torch.utils.data.Dataset):
 
         if perform_final_state_evaluation:
             self.eval_data = self._prepare_evaluation_data(self.normed_trajectories)
+
 
     def _load_data(
         self, 
@@ -147,21 +167,19 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         histories = torch.stack(histories)
         final_states = torch.stack(final_states)
 
-        conditions = {}
-
-        for i in range(histories[0].shape[0]):
-            conditions[i] = histories[:, i]
-
-        return FinalStateDataSample(conditions=conditions, final_states=final_states)
+        return FinalStateDataSample(histories=histories, final_states=final_states)
 
     def get_conditions(self, history):
         """
         conditions on current observation for planning
         """
-        if self.is_history_conditioned:
-            return dict(enumerate(history))
-        else:
+        if not self.is_history_conditioned:
             return EMPTY_DICT
+        
+        if history.ndim == 2: # history_length x observation_dim
+            return dict(enumerate(history))
+        else: # batch_size x history_length x observation_dim
+            return dict(enumerate(history.transpose(1, 0)))
 
     def get_global_query(self, history):
         """
@@ -196,8 +214,23 @@ class TrajectoryDataset(torch.utils.data.Dataset):
 
         assert len(history) > 0, "History is empty"
 
+        mask = NONE_TENSOR
+
         if self.use_history_padding:
             history = apply_padding(history, self.history_length, pad_left=True)
+        elif self.use_history_mask:
+            # Left-pad with zeros up to history_length and create missing-mask (1 for missing, 0 for provided)
+            provided = len(history)
+            pad = self.history_length - provided
+            if pad > 0:
+                zeros = torch.zeros((pad, history.shape[-1]), dtype=history.dtype, device=history.device)
+                history = torch.cat([zeros, history], dim=0)
+            # Build mask for full prediction length (history + horizon)
+            hist_missing = torch.zeros((self.history_length,), dtype=torch.float32, device=history.device)
+            if pad > 0:
+                hist_missing[:pad] = 1.0
+            hor_missing = torch.zeros((self.horizon_length,), dtype=torch.float32, device=history.device)
+            mask = torch.cat([hist_missing, hor_missing], dim=0)
 
         if self.use_horizon_padding:
             if len(horizon) > 0:
@@ -205,7 +238,7 @@ class TrajectoryDataset(torch.utils.data.Dataset):
             else:
                 pad_value = history[-1]
 
-            horizon =apply_padding(horizon, self.horizon_length, pad_left=False, pad_value=pad_value)
+            horizon = apply_padding(horizon, self.horizon_length, pad_left=False, pad_value=pad_value)
 
         assert len(history) == self.history_length, f"History length is {len(history)}, expected {self.history_length}"
         assert len(horizon) == self.horizon_length, f"Horizon length is {len(horizon)}, expected {self.horizon_length}"
@@ -216,9 +249,11 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         global_query = self.get_global_query(history)
 
         data_sample = DataSample(
-            trajectory=trajectory, 
-            conditions=conditions, 
-            global_query=global_query, 
+            trajectory=trajectory,
+            conditions=conditions,
+            global_query=global_query,
+            local_query=NONE_TENSOR,
+            mask=mask,
         )
 
         return data_sample
