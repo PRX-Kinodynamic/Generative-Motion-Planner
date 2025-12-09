@@ -16,8 +16,8 @@ from .setup import *
 from .timer import *
 from .trainer import *
 from .trajectory import *
+from .trajectory_generator import *
 from .visualization import *
-
 
 
 def generate_timestamp():
