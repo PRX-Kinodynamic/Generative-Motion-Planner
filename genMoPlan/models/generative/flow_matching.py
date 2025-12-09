@@ -1,8 +1,8 @@
 import warnings
+import numpy as np
+from typing import Callable
 
 import torch
-
-from genMoPlan.utils.arrays import torch_randn_like
 
 try:
     from flow_matching.path.scheduler import *
@@ -15,6 +15,7 @@ except ImportError:
 
 
 from genMoPlan.models.helpers import apply_conditioning
+from genMoPlan.utils.arrays import torch_randn_like
 
 from .base import GenerativeModel, Sample
 
@@ -29,8 +30,6 @@ class FlowMatching(GenerativeModel):
         history_length,
         clip_denoised=False,
         loss_type="l2",
-        loss_weights=None,
-        loss_discount=1.0,
         action_indices=None,
         has_local_query=False,
         has_global_query=False,
@@ -52,8 +51,6 @@ class FlowMatching(GenerativeModel):
             history_length=history_length,
             clip_denoised=clip_denoised,
             loss_type=loss_type,
-            loss_weights=loss_weights,
-            loss_discount=loss_discount,
             action_indices=action_indices,
             has_local_query=has_local_query,
             has_global_query=has_global_query,
@@ -89,6 +86,7 @@ class FlowMatching(GenerativeModel):
                 manifold=self.manifold,
                 input_dim=self.input_dim,
                 n_fourier_features=n_fourier_features,
+                use_history_mask=self.use_mask,
             )
         else:
             solver_args = []
@@ -108,20 +106,24 @@ class FlowMatching(GenerativeModel):
 
         solver_args.append(self.transformed_model)
 
-        self.solver = solver(*solver_args)
+        self.solver: Solver = solver(*solver_args)
 
     # --------------------------------------- vector field ----------------------------------------#
 
-    def vector_field(self, x=None, t=None, global_query=None, local_query=None):
+    def vector_field(self, x=None, t=None, global_query=None, local_query=None, mask=None):
         if x is None or t is None:
             raise ValueError("x and t must be provided")
+        if getattr(self, "use_mask", False) and mask is None:
+            raise ValueError("Mask expected but not provided")
         
         if t.ndim == 0:
             batch_size = x.shape[0]
             t = t.unsqueeze(0).repeat(batch_size)
 
-        # The model expects parameters in the order: (x, global_query, local_query, t)
-        vector_field = self.model(x, global_query, local_query, t)
+        # The model expects parameters in the order: (x, global_query, local_query, t, mask)
+        # Require mask if experiment expects it
+
+        vector_field = self.model(x, global_query, local_query, t, mask=mask) if mask is not None else self.model(x, global_query, local_query, t)
 
         # Zero out the vector field for the history portion
         if self.history_length > 0:
@@ -131,10 +133,15 @@ class FlowMatching(GenerativeModel):
 
     # ------------------------------------------ training ------------------------------------------#
 
-    def compute_loss(self, x_target, cond, global_query=None, local_query=None, seed=None):
+    def compute_loss(self, x_target, cond, global_query=None, local_query=None, seed=None, mask=None):
         """
         Choose a random timestep t and calculate the loss for the model
         """
+        if getattr(self, "use_mask", False) and mask is None:
+            raise ValueError("Mask expected by FlowMatching but not provided")
+        if not getattr(self, "use_mask", False):
+            mask = None
+
         if seed is not None:
             generator = torch.Generator(device=x_target.device).manual_seed(seed)
         else:
@@ -153,7 +160,12 @@ class FlowMatching(GenerativeModel):
 
         path_sample = self.path.sample(t=t, x_0=x_noisy, x_1=x_target)
 
-        loss, info = self.loss_fn(self.vector_field(x=path_sample.x_t, t=path_sample.t, global_query=global_query, local_query=local_query), path_sample.dx_t, loss_weights=self.loss_weights, ignore_manifold=True)
+        loss, info = self.loss_fn(
+            self.vector_field(x=path_sample.x_t, t=path_sample.t, global_query=global_query, local_query=local_query, mask=mask),
+            path_sample.dx_t,
+            ignore_manifold=True,
+            loss_weights=self.loss_weights,
+        )
 
         return loss, info
 
@@ -161,7 +173,7 @@ class FlowMatching(GenerativeModel):
     # ------------------------------------------ inference ------------------------------------------#
 
     @torch.no_grad()
-    def conditional_sample(self, cond, shape, global_query=None, local_query=None, n_timesteps=5, integration_method="euler", return_chain=False, n_intermediate_steps=0, seed=None, **kwargs) -> Sample:
+    def conditional_sample(self, cond, shape, global_query=None, local_query=None, n_timesteps=5, integration_method="euler", return_chain=False, n_intermediate_steps=0, seed=None, mask=None, **kwargs) -> Sample:
         """
         Generate samples by running the flow matching ODE solver from noise to target.
         
@@ -174,15 +186,20 @@ class FlowMatching(GenerativeModel):
             integration_method: Integration method to use ("midpoint", "euler", etc.)
             return_chain: Whether to return intermediate states in the sampling chain
             n_intermediate_steps: Number of intermediate steps to save (if return_chain=True)
+            mask: Optional mask to apply to the samples
             **kwargs: Additional arguments passed to the solver
             
         Returns:
             Sample: An object containing the generated trajectories and optional intermediate chains
         """
 
-        device = self.loss_weights.device
+        device = next(self.parameters()).device
 
         assert n_intermediate_steps >= 0
+        if getattr(self, "use_mask", False) and mask is None:
+            raise ValueError("Mask expected but not provided")
+        if not getattr(self, "use_mask", False):
+            mask = None
 
         if n_intermediate_steps == 0 and return_chain:
             warnings.warn("n_intermediate_steps is 0 and return_chain is True, this will return only the noisy and final samples")
@@ -202,10 +219,13 @@ class FlowMatching(GenerativeModel):
             x_noisy = self.manifold.wrap(x_noisy)
 
         model_extras = {}
+
         if global_query is not None:
             model_extras['global_query'] = global_query
         if local_query is not None:
             model_extras['local_query'] = local_query
+        if mask is not None:
+            model_extras['mask'] = mask
 
         sol = self.solver.sample(
             x_init=x_noisy, 
@@ -233,14 +253,79 @@ class FlowMatching(GenerativeModel):
     
     # ------------------------------------------ validation ------------------------------------------#
 
-    def validation_loss(self, x, cond, global_query=None, local_query=None, **sample_kwargs):
+    def validation_loss(self, x, cond, global_query=None, local_query=None, mask=None, **sample_kwargs):
         if not self.has_local_query:
             local_query = None
         if not self.has_global_query:
             global_query = None
 
-        sol = self.conditional_sample(cond, x.shape, global_query=global_query, local_query=local_query, verbose=False, return_chain=False, seed=self.val_seed, **sample_kwargs)
+        sol = self.conditional_sample(
+            cond,
+            x.shape,
+            global_query=global_query,
+            local_query=local_query,
+            verbose=False,
+            return_chain=False,
+            seed=self.val_seed,
+            mask=mask,
+            **sample_kwargs,
+        )
+
+        pred_final_state = sol.trajectories[..., -1, :]
+        target_final_state = x[..., -1, :]
+
+        final_state_loss, _ = self.loss_fn(pred_final_state, target_final_state)
 
         loss, info = self.loss_fn(sol.trajectories, x, loss_weights=self.loss_weights)
 
+        info["final_state_loss"] = final_state_loss
+
         return loss, info
+
+    def evaluate_final_states(self, start_states: torch.Tensor, target_final_states: torch.Tensor, global_query: torch.Tensor =None, local_query: torch.Tensor =None, max_path_length: int =None, get_conditions: Callable =None, **sample_kwargs):
+        """
+        Evaluate the final states of the model given the start states and the target final states.
+
+        Args:
+            start_states: The start states to evaluate the final states from. (batch_size, history_length, dim)
+            target_final_states: The target final states to evaluate the final states from. (batch_size, dim)
+            global_query: The global query to use for the model.
+            local_query: The local query to use for the model.
+            max_path_length: The maximum path length to use for the model.
+            get_conditions: The function to get the conditions for the model.
+            **sample_kwargs: Additional arguments passed to the conditional sample method.
+
+        Returns:
+            final_state_loss: The loss for the final states.
+            final_state_info: The information for the final states.
+        """
+
+        assert max_path_length is not None, "max_path_length must be provided for final state evaluation"
+        assert get_conditions is not None, "get_conditions must be provided for final state evaluation"
+
+        batch_size = target_final_states.shape[0]
+
+        num_inference_steps = np.ceil((max_path_length - self.history_length) / self.prediction_length).astype(int)
+
+        assert num_inference_steps > 0, "num_inference_steps must be greater than 0"
+        
+        if not self.has_local_query:
+            local_query = None
+        if not self.has_global_query:
+            global_query = None
+
+        cond = get_conditions(start_states)
+
+        for _ in range(num_inference_steps):
+            sol = self.conditional_sample(cond, (batch_size, self.prediction_length, self.input_dim), global_query=global_query, local_query=local_query, return_chain=False, **sample_kwargs)
+
+            final_states = sol.trajectories[:, -self.history_length:, :] 
+
+            cond = get_conditions(final_states) # Start states for the next horizon
+
+        pred_final_states = sol.trajectories[:, -1, :] 
+
+        final_state_loss, final_state_info = self.loss_fn(pred_final_states, target_final_states)
+
+        return final_state_loss, final_state_info
+

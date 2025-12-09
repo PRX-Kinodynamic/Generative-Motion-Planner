@@ -2,6 +2,7 @@ from os import path
 
 from typing import Tuple
 import torch
+from torch import nn
 
 from genMoPlan.models.generative.base import GenerativeModel
 from genMoPlan.utils import JSONArgs, import_class
@@ -71,8 +72,6 @@ def load_model(
         history_length=model_args.history_length,
         clip_denoised=model_args.clip_denoised,
         loss_type=model_args.loss_type,
-        loss_weights=model_args.loss_weights,
-        loss_discount=model_args.loss_discount,
         action_indices=model_args.action_indices,
         has_local_query=model_args.has_local_query,
         has_global_query=model_args.has_global_query,
@@ -99,3 +98,57 @@ def get_normalizer_params(model_args, normalizer_type: str = "trajectory"):
 
     return normalizer_params
 
+
+def get_parameter_groups(model: nn.Module, weight_decay: float):
+    decay, no_decay = set(), set()
+    whitelist_weight_modules = (nn.Linear, nn.Conv1d)
+    blacklist_weight_modules = (nn.LayerNorm, nn.Embedding)
+
+    for module_name, module in model.named_modules():
+        for param_name, param in module.named_parameters(recurse=False):
+            if not param.requires_grad:
+                continue
+            full_name = f"{module_name}.{param_name}" if module_name else param_name
+
+            # --- module-type rules ---
+            if isinstance(module, whitelist_weight_modules) and param_name == "weight":
+                decay.add(full_name); continue
+            if isinstance(module, blacklist_weight_modules):
+                no_decay.add(full_name); continue
+
+            # --- generic rules ---
+            if param_name.endswith("bias"):
+                no_decay.add(full_name); continue
+
+            # --- special cases in your model ---
+            # learned absolute PE
+            if "positional_encoding" in full_name:
+                no_decay.add(full_name); continue
+            # LayerScale scalars
+            if full_name.endswith("alpha_attn") or full_name.endswith("alpha_ff"):
+                no_decay.add(full_name); continue
+
+            # PyTorch MultiheadAttention internals
+            # in_proj_weight should decay; in_proj_bias should not
+            if full_name.endswith("in_proj_weight") or full_name.endswith("out_proj.weight"):
+                decay.add(full_name); continue
+            if full_name.endswith("in_proj_bias") or full_name.endswith("out_proj.bias"):
+                no_decay.add(full_name); continue
+
+            # default: decay
+            decay.add(full_name)
+
+    # sanity: no overlaps
+    intersect = decay & no_decay
+    if len(intersect) > 0:
+        raise ValueError(f"param group conflict: {intersect}")
+
+    # map names to tensors
+    param_dict = {n: p for n, p in model.named_parameters()}
+    decay_params = [param_dict[n] for n in sorted(list(decay))]
+    no_decay_params = [param_dict[n] for n in sorted(list(no_decay))]
+
+    return [
+        {"params": decay_params, "weight_decay": weight_decay},
+        {"params": no_decay_params, "weight_decay": 0.0},
+    ]

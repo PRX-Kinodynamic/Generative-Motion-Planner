@@ -13,6 +13,7 @@ from genMoPlan.adaptive_training.dataset_combiner import *
 from genMoPlan.adaptive_training.animation_generator import AnimationGenerator
 from genMoPlan.adaptive_training.video_generator import generate_iteration_evolution_videos
 from genMoPlan.eval.roa import ROAEstimator
+from genMoPlan.utils.trajectory_generator import TrajectoryGenerator
 from genMoPlan.models.generative.base import GenerativeModel
 from genMoPlan.datasets.trajectory import TrajectoryDataset
 from genMoPlan import utils
@@ -96,6 +97,15 @@ class AdaptiveTrainer:
         self.uncertainty = self._initialize_uncertainty(uncertainty, uncertainty_kwargs)
 
         self.roa_estimator, self.roa_labels = self._initialize_roa_estimator()
+        self.trajectory_generator = TrajectoryGenerator(
+            dataset=self.args.dataset,
+            model=self.model,
+            model_args=self.args,
+            inference_params=utils.load_inference_params(self.args.dataset),
+            device=self.args.device,
+            verbose=True,
+            default_batch_size=self.sampling_batch_size,
+        )
 
         if self.animate_plots:
             self.animation_generator = AnimationGenerator(
@@ -210,13 +220,16 @@ class AdaptiveTrainer:
             save_parallel=self.args.save_parallel,
             results_folder=self.logdir,
             method=self.args.method,
-            exp_name=self.args.exp_name,
+            exp_name=f'{self.args.dataset}/{self.args.exp_name}',
             num_workers=self.args.num_workers,
             device=self.args.device,
             seed=self.args.seed,
             use_lr_scheduler=self.args.use_lr_scheduler,
             lr_scheduler_warmup_steps=self.args.lr_scheduler_warmup_steps,
             lr_scheduler_min_lr=self.args.lr_scheduler_min_lr,
+            useAdamW=self.args.useAdamW,
+            optimizer_kwargs=self.args.optimizer_kwargs,
+            clip_grad_norm=getattr(self.args, "clip_grad_norm", None),
         )
 
     def _add_mean_uncertainty(self, mean_uncertainty: float):
@@ -326,19 +339,17 @@ class AdaptiveTrainer:
         final_states = np.zeros((num_start_states, self.n_runs, dim))
 
         for i in tqdm(range(self.n_runs), desc=f"Generating final states {self.n_runs} runs"):
-            run_final_states = utils.generate_trajectories(
-                self.model, 
-                self.args, 
-                self._all_start_points, 
-                self.args.device,
-                num_inference_steps=self.num_inference_steps,
-                verbose=True,
+            run_final_states = self.trajectory_generator.generate_trajectories(
+                self._all_start_points,
                 batch_size=self.sampling_batch_size,
+                max_path_length=None,
+                num_inference_steps=self.num_inference_steps,
                 conditional_sample_kwargs=self.conditional_sample_kwargs,
                 only_return_final_states=True,
                 post_process_fns=self.post_process_fns,
                 post_process_fn_kwargs=self.post_process_fn_kwargs,
                 horizon_length=self.args.horizon_length,
+                verbose=True,
             )
             final_states[:, i, :] = run_final_states
 

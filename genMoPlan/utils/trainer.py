@@ -5,7 +5,7 @@ import math
 from math import ceil
 import os
 import copy
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 import torch
@@ -15,10 +15,7 @@ import matplotlib.pyplot as plt
 
 from .arrays import batch_to_device
 from .timer import Timer
-from .model import GenerativeModel
-
-
-
+from .model import GenerativeModel, get_parameter_groups
 
 
 def cycle(dl):
@@ -155,6 +152,13 @@ class Trainer(object):
         use_lr_scheduler: bool = False,
         lr_scheduler_warmup_steps: int = 0,
         lr_scheduler_min_lr: float = 0.0,
+        useAdamW: bool = False,
+        optimizer_kwargs: dict = None,
+        clip_grad_norm: Optional[float] = None,
+        eval_freq: int = 10,
+        eval_batch_size: int = 32,
+        eval_seed: int = 42,
+        perform_final_state_evaluation: bool = False,
     ):
         super().__init__()
         self.model = model
@@ -179,6 +183,11 @@ class Trainer(object):
         self.method = method
         self.exp_name = exp_name
         self.device = device
+        self.val_batch_size = val_batch_size
+        self.eval_freq = eval_freq
+        self.eval_batch_size = eval_batch_size
+        self.eval_seed = eval_seed
+        self.perform_final_state_evaluation = perform_final_state_evaluation
 
 
         self.num_steps_per_epoch = max(ceil(len(train_dataset) / (batch_size * gradient_accumulate_every)), 
@@ -186,9 +195,11 @@ class Trainer(object):
 
         print(f"[ utils/training ] Number of steps per epoch: {self.num_steps_per_epoch}")
 
-        self.val_num_batches = ceil(len(val_dataset) / (val_batch_size))
-
-        print(f"[ utils/training ] Number of validation batches: {self.val_num_batches}")
+        if val_dataset is not None:
+            self.val_num_batches = ceil(len(val_dataset) / (val_batch_size))
+            print(f"[ utils/training ] Number of validation batches: {self.val_num_batches}")
+        else:
+            self.val_num_batches = 0
 
         # Create CUDA generator for DataLoader
         generator = torch.Generator(device=device)
@@ -215,7 +226,9 @@ class Trainer(object):
         else:
             self.dataloader_val = None
 
-        self.optimizer = torch.optim.Adam(model.parameters(), lr=train_lr)
+        self.optimizer = self.get_optimizer(model, train_lr, optimizer_kwargs, useAdamW)
+
+        self.clip_grad_norm = clip_grad_norm
         
         # Initialize learning rate scheduler
         self.use_lr_scheduler = use_lr_scheduler
@@ -235,8 +248,29 @@ class Trainer(object):
 
         self.train_losses = defaultdict(lambda : [])
         self.val_losses = defaultdict(lambda : [])
+        self.eval_losses = defaultdict(lambda : [])
+        self._train_losses_saved_counts = {}
+        self._val_losses_saved_counts = {}
+        self._eval_losses_saved_counts = {}
 
         os.makedirs(self.logdir, exist_ok=True)
+        
+    def get_optimizer(self, model, train_lr, optimizer_kwargs, useAdamW=False):
+        if optimizer_kwargs is None:
+            optimizer_kwargs = {}
+
+        # remove global weight_decay so per-group values take effect
+        optimizer_kwargs = dict(optimizer_kwargs)  # shallow copy
+        weight_decay = optimizer_kwargs.pop("weight_decay", 0.0)
+
+        param_groups = get_parameter_groups(model, weight_decay=weight_decay)
+
+        if useAdamW:
+            optimizer = torch.optim.AdamW(param_groups, lr=train_lr, **optimizer_kwargs)
+        else:
+            optimizer = torch.optim.Adam(param_groups, lr=train_lr, **optimizer_kwargs)
+
+        return optimizer
 
     def reset_parameters(self):
         self.ema_model.load_state_dict(self.model.state_dict())
@@ -281,6 +315,10 @@ class Trainer(object):
             'model': self.model.state_dict(),
             'ema': self.ema_model.state_dict(),
             'optimizer': self.optimizer.state_dict(),
+            'num_epochs': self.num_epochs,
+            'num_steps_per_epoch': self.num_steps_per_epoch,
+            'epoch': self.step // max(1, self.num_steps_per_epoch),
+            'total_planned_steps': self.num_epochs * self.num_steps_per_epoch,
         }
         if self.lr_scheduler is not None:
             data['lr_scheduler'] = {
@@ -312,6 +350,19 @@ class Trainer(object):
             filepath = os.path.join(self.logdir, 'train_loss_plot.png')
             self._plot_in_background(self.train_losses, filepath, 'Training Loss')
 
+    def add_eval_losses(self, losses):
+        for key, loss in losses.items():
+            # Ensure loss is a scalar float or int before appending
+            if isinstance(loss, (float, int)):
+                self.eval_losses[key].append(loss)
+            elif hasattr(loss, 'item'):  # Handle tensors
+                self.eval_losses[key].append(loss.item())
+            else:
+                print(f"Warning: Skipping non-scalar loss value for key '{key}' in eval_losses: {loss}")
+
+        filepath = os.path.join(self.logdir, 'eval_loss_plot.png')
+        self._plot_in_background(self.eval_losses, filepath, 'Evaluation Loss')
+
     def add_val_losses(self, losses):
         for key, loss in losses.items():
             # Ensure loss is a scalar float or int before appending
@@ -329,23 +380,123 @@ class Trainer(object):
         '''
             saves train and validation losses to disk
         '''
+        # Train losses: append only new entries
         for key in self.train_losses.keys():
-            train_losses = np.array(self.train_losses[key])
+            losses = self.train_losses[key]
             savepath = os.path.join(self.logdir, f'train_losses_{key}.txt')
-            with open(savepath, 'w') as f:
-                f.write(f'Step\tLoss\n')
-                for i, loss in enumerate(train_losses):
-                    f.write(f'{i}\t{loss:8.8f}\n')
+            os.makedirs(self.logdir, exist_ok=True)
+            file_exists = os.path.exists(savepath)
 
+            start_idx = self._train_losses_saved_counts.get(key, 0)
+
+            mode = 'a' if file_exists else 'w'
+            with open(savepath, mode) as f:
+                if not file_exists:
+                    f.write('Step\tLoss\n')
+                for i in range(start_idx, len(losses)):
+                    f.write(f'{i}\t{float(losses[i]):8.8f}\n')
+            self._train_losses_saved_counts[key] = len(losses)
+
+        # Val losses: append only new entries
         for key in self.val_losses.keys():
-            val_losses = np.array(self.val_losses[key])
+            losses = self.val_losses[key]
             savepath = os.path.join(self.logdir, f'val_losses_{key}.txt')
-            with open(savepath, 'w') as f:
-                f.write(f'Epoch\tLoss\n')
-                for i, loss in enumerate(val_losses):
-                    f.write(f'{i}\t{loss:8.8f}\n')
+            os.makedirs(self.logdir, exist_ok=True)
+            file_exists = os.path.exists(savepath)
+
+            start_idx = self._val_losses_saved_counts.get(key, 0)
+
+            mode = 'a' if file_exists else 'w'
+            with open(savepath, mode) as f:
+                if not file_exists:
+                    f.write('Epoch\tLoss\n')
+                for i in range(start_idx, len(losses)):
+                    f.write(f'{i}\t{float(losses[i]):8.8f}\n')
+            self._val_losses_saved_counts[key] = len(losses)
+
+        # Eval losses: append only new entries
+        for key in self.eval_losses.keys():
+            losses = self.eval_losses[key]
+            savepath = os.path.join(self.logdir, f'eval_losses_{key}.txt')
+            os.makedirs(self.logdir, exist_ok=True)
+            file_exists = os.path.exists(savepath)
+            start_idx = self._eval_losses_saved_counts.get(key, 0)
+            mode = 'a' if file_exists else 'w'
+            with open(savepath, mode) as f:
+                if not file_exists:
+                    f.write('Epoch\tLoss\n')
+                for i in range(start_idx, len(losses)):
+                    f.write(f'{i}\t{float(losses[i]):8.8f}\n')
+            self._eval_losses_saved_counts[key] = len(losses)
 
         print(f'[ utils/training ] Saved losses to {self.logdir}', flush=True)
+
+    def load_losses(self):
+        """Load previously saved loss curves so plots continue on resume."""
+        try:
+            # Train losses
+            for fname in os.listdir(self.logdir):
+                if fname.startswith('train_losses_') and fname.endswith('.txt'):
+                    key = fname[len('train_losses_'):-4]
+                    values = []
+                    with open(os.path.join(self.logdir, fname), 'r') as f:
+                        lines = f.readlines()[1:]
+                        for line in lines:
+                            parts = line.strip().split()
+                            if len(parts) >= 2:
+                                try:
+                                    values.append(float(parts[1]))
+                                except Exception:
+                                    pass
+                    self.train_losses[key] = values
+                    self._train_losses_saved_counts[key] = len(values)
+
+            # Val losses
+            for fname in os.listdir(self.logdir):
+                if fname.startswith('val_losses_') and fname.endswith('.txt'):
+                    key = fname[len('val_losses_'):-4]
+                    values = []
+                    with open(os.path.join(self.logdir, fname), 'r') as f:
+                        lines = f.readlines()[1:]
+                        for line in lines:
+                            parts = line.strip().split()
+                            if len(parts) >= 2:
+                                try:
+                                    values.append(float(parts[1]))
+                                except Exception:
+                                    pass
+                    self.val_losses[key] = values
+                    self._val_losses_saved_counts[key] = len(values)
+
+            # Eval losses
+            for fname in os.listdir(self.logdir):
+                if fname.startswith('eval_losses_') and fname.endswith('.txt'):
+                    key = fname[len('eval_losses_'):-4]
+                    values = []
+                    with open(os.path.join(self.logdir, fname), 'r') as f:
+                        lines = f.readlines()[1:]
+                        for line in lines:
+                            parts = line.strip().split()
+                            if len(parts) >= 2:
+                                try:
+                                    values.append(float(parts[1]))
+                                except Exception:
+                                    pass
+                    self.eval_losses[key] = values
+                    self._eval_losses_saved_counts[key] = len(values)
+
+            # Re-render current plots in background (if any data present)
+            if any(len(v) > 0 for v in self.train_losses.values()):
+                filepath = os.path.join(self.logdir, 'train_loss_plot.png')
+                self._plot_in_background(self.train_losses, filepath, 'Training Loss')
+            if any(len(v) > 0 for v in self.val_losses.values()):
+                filepath = os.path.join(self.logdir, 'val_loss_plot.png')
+                self._plot_in_background(self.val_losses, filepath, 'Validation Loss')
+            if any(len(v) > 0 for v in self.eval_losses.values()):
+                filepath = os.path.join(self.logdir, 'eval_loss_plot.png')
+                self._plot_in_background(self.eval_losses, filepath, 'Evaluation Loss')
+        except Exception as e:
+            print(f"Warning: Could not load prior losses: {e}")
 
     def load(self, model_state_name: str = 'best.pt'):
         '''
@@ -357,6 +508,12 @@ class Trainer(object):
         self.step = data['step']
         self.model.load_state_dict(data['model'])
         self.ema_model.load_state_dict(data['ema'])
+        # Restore epoch metadata if present
+        self.num_epochs = data.get('num_epochs', self.num_epochs)
+        # Do not forcibly override num_steps_per_epoch if it changed due to config, but use if present
+        self.num_steps_per_epoch = data.get('num_steps_per_epoch', self.num_steps_per_epoch)
+        # Preload prior losses to keep plots cumulative across resumes
+        self.load_losses()
 
     def train_one_epoch(self, store_losses: bool = True):
         timer = Timer()
@@ -383,6 +540,8 @@ class Trainer(object):
             if store_losses:
                 self.add_train_losses(train_losses)
 
+            if self.clip_grad_norm is not None:
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_grad_norm)
             self.optimizer.step()
             self.optimizer.zero_grad()
 
@@ -414,16 +573,35 @@ class Trainer(object):
 
         try:
             for epoch in range(1, self.num_epochs + 1):
+                # Stop if we've already reached the planned total steps (especially on resume)
+                planned_total_steps = (
+                    self.lr_scheduler.total_steps if self.lr_scheduler is not None else self.num_epochs * self.num_steps_per_epoch
+                )
+                if self.step >= planned_total_steps:
+                    print(f"Reached planned total steps ({planned_total_steps}); stopping.")
+                    break
                 # Update learning rate if scheduler is enabled
                 if self.lr_scheduler is not None:
                     current_lr = self.optimizer.param_groups[0]['lr']
-                    print(f"Epoch {epoch}/{self.num_epochs} | LR: {current_lr:.6e} | {self.method} | {self.exp_name}")
+                    print(f"Epoch {epoch}/{self.num_epochs} | LR: {current_lr:.6e} | {self.exp_name}")
                 else:
-                    print(f"Epoch {epoch}/{self.num_epochs} | {self.method} | {self.exp_name}")
+                    print(f"Epoch {epoch}/{self.num_epochs} | {self.exp_name}")
 
                 self.train_one_epoch()
 
-                val = self.validate()
+                val, final_state_val = self.validate()
+
+                if self.perform_final_state_evaluation and (epoch % self.eval_freq) == 0:
+                    final_state_eval_loss, final_state_eval_loss_infos = self.evaluate_final_states()
+
+                    if final_state_eval_loss_infos:
+                        infos_str = ' | ' + ' | '.join([f'{key}: {val:8.4f}' for key, val in final_state_eval_loss_infos.items()])
+                    else:
+                        infos_str = ''
+
+                    print(f"Final state evaluation:\n{infos_str}")
+
+                    
 
                 if not (val == val) or val in (float('inf'), -float('inf')):
                     print(f"Validation returned non-finite value ({val}); stopping early.")
@@ -444,16 +622,16 @@ class Trainer(object):
 
                     window_gain = sum(recent_improvements)
                     print(
-                        f"Validation: {val:8.6f} | New best (Δ={old_best - val:+.6g} raw; "
-                        f"window_gain={window_gain:.3g} over last ≤{self.patience} epoch(s); "
+                        f"Validation: {val:8.6f} | New val best (Δ={old_best - val:+.6g} raw | Final state dist: {final_state_val:8.6f} | "
+                        f"Val window_gain={window_gain:.3g} over last ≤{self.patience} epoch(s); "
                         f"target ≥ {self.min_delta})"
                     )
                 else:
                     recent_improvements.append(0.0)
                     window_gain = sum(recent_improvements)
                     print(
-                        f"Validation: {val:8.6f} | Best: {best_val:8.6f} (epoch {best_epoch}) | "
-                        f"window_gain={window_gain:.3g} over last ≤{self.patience} epoch(s); target ≥ {self.min_delta}"
+                        f"Validation: {val:8.6f} | Best: {best_val:8.6f} (epoch {best_epoch}) | Final state dist: {final_state_val:8.6f} | "
+                        f"Val window_gain={window_gain:.3g} over last ≤{self.patience} epoch(s); target ≥ {self.min_delta}"
                     )
 
                 if (epoch % self.save_freq) == 0:
@@ -483,6 +661,35 @@ class Trainer(object):
         self.save_losses()
         print(f"\nTraining complete. Best validation loss: {best_val:.6f}")
 
+    def evaluate_final_states(self, store_losses: bool = True):
+        eval_data = batch_to_device(self.val_dataset.eval_data, device=self.device)
+        num_evals = eval_data.final_states.shape[0]
+
+        eval_losses = defaultdict(lambda : 0.0)
+        infos = defaultdict(lambda : 0.0)
+        num_batches = 0
+
+        for i in range(0, num_evals, self.val_batch_size):
+            batch_start_states = eval_data.histories[i:i+self.val_batch_size]
+            batch_final_states = eval_data.final_states[i:i+self.val_batch_size]
+            loss, infos = self.model.evaluate_final_states(batch_start_states, batch_final_states, get_conditions=self.val_dataset.get_conditions, **self.validation_kwargs)
+            eval_losses['final_state_loss'] += loss.item()
+            for key, val in infos.items():
+                infos[key] += val
+            num_batches += 1
+
+        final_infos = {}
+
+        for key in infos.keys():
+            final_infos['final_state_' + key] = infos[key] / num_batches
+        eval_losses['final_state_loss'] /= num_batches
+        eval_losses.update(final_infos)
+
+        if store_losses:
+            self.add_eval_losses(eval_losses)
+
+        return eval_losses.get('final_state_loss', float('inf')), eval_losses
+            
     def validate(self, store_losses: bool = True):
         if self.dataloader_val is None:
             return None
@@ -517,6 +724,6 @@ class Trainer(object):
         if store_losses:
             self.add_val_losses(val_losses)
 
-        return val_losses.get('val_loss', float('inf'))  # Use .get for safety
+        return val_losses.get('val_loss', float('inf')), val_losses.get('final_state_loss', float('inf'))  # Use .get for safety
 
             
