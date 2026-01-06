@@ -11,12 +11,15 @@ from genMoPlan.adaptive_training.data_sampler import *
 from genMoPlan.adaptive_training.uncertainty import *
 from genMoPlan.adaptive_training.dataset_combiner import *
 from genMoPlan.adaptive_training.animation_generator import AnimationGenerator
-from genMoPlan.adaptive_training.video_generator import generate_iteration_evolution_videos
-from genMoPlan.eval.roa import ROAEstimator
+from genMoPlan.adaptive_training.video_generator import (
+    generate_iteration_evolution_videos,
+)
+from genMoPlan.eval.roa import Classifier
 from genMoPlan.utils.trajectory_generator import TrajectoryGenerator
 from genMoPlan.models.generative.base import GenerativeModel
 from genMoPlan.datasets.trajectory import TrajectoryDataset
 from genMoPlan import utils
+
 
 def get_start_point(fname: str, dataset_path: str, read_trajectory_fn: Callable):
     fpath = path.join(dataset_path, "trajectories", fname)
@@ -26,6 +29,7 @@ def get_start_point(fname: str, dataset_path: str, read_trajectory_fn: Callable)
         return None
 
     return trajectory[0]
+
 
 # def get_start_point_attractor(fname: str, dataset_path: str, read_trajectory_fn: Callable, attractors: np.ndarray):
 #     fpath = path.join(dataset_path, "trajectories", fname)
@@ -39,6 +43,7 @@ def get_start_point(fname: str, dataset_path: str, read_trajectory_fn: Callable)
 #     attractor_dist = np.linalg.norm(final_point - attractors, axis=1)
 
 #     return attractors[np.argmin(attractor_dist)]
+
 
 class AdaptiveTrainer:
     mean_uncertainties: list[float] = []
@@ -135,17 +140,26 @@ class AdaptiveTrainer:
             return combiner_class(**combiner_kwargs)
         else:
             return combiner
-    
+
     def _initialize_uncertainty(self, uncertainty, uncertainty_kwargs):
         if isinstance(uncertainty, str):
             uncertainty_class = utils.import_class(uncertainty)
             return uncertainty_class(**uncertainty_kwargs)
         else:
             return uncertainty
-    
+
     def _initialize_roa_estimator(self):
-        roa_estimator = ROAEstimator(
+        from genMoPlan.utils.setup import get_dataset_config
+
+        cfg = get_dataset_config(self.args.dataset)
+        system = None
+        get_system = getattr(cfg, "get_system", None)
+        if callable(get_system):
+            system = get_system()
+
+        roa_estimator = Classifier(
             dataset=self.args.dataset,
+            system=system,
         )
 
         roa_start_states, roa_expected_labels = utils.load_roa_labels(self.args.dataset)
@@ -160,24 +174,35 @@ class AdaptiveTrainer:
         roa_estimator.expected_labels = roa_labels
 
         return roa_estimator, roa_labels
-    
+
     def _load_start_points(self):
         dataset_path = path.join(utils.get_data_trajectories_path(), self.args.dataset)
         trajectories_path = path.join(dataset_path, "trajectories")
 
         fnames = utils.get_fnames_to_load(dataset_path, trajectories_path)
 
-        args_list = [(fname, dataset_path, self.args.read_trajectory_fn) for fname in fnames]
+        args_list = [
+            (fname, dataset_path, self.args.read_trajectory_fn) for fname in fnames
+        ]
 
-        start_points = utils.parallelize_toggle(get_start_point, args_list, parallel=True, desc="Loading start points")
+        start_points = utils.parallelize_toggle(
+            get_start_point, args_list, parallel=True, desc="Loading start points"
+        )
 
-        start_points = np.array([start_point for start_point in start_points if start_point is not None])
+        start_points = np.array(
+            [start_point for start_point in start_points if start_point is not None]
+        )
 
         return start_points, fnames
 
     # ----------------------- private helpers ----------------------- #
 
-    def _create_dataset(self, ids: Sequence[int], dataset_fnames: Sequence[str], is_validation: bool = False):
+    def _create_dataset(
+        self,
+        ids: Sequence[int],
+        dataset_fnames: Sequence[str],
+        is_validation: bool = False,
+    ):
         fnames = [dataset_fnames[i] for i in ids]
 
         return TrajectoryDataset(
@@ -188,8 +213,12 @@ class AdaptiveTrainer:
             observation_dim=self.args.observation_dim,
             trajectory_normalizer=getattr(self.args, "trajectory_normalizer", None),
             normalizer_params=getattr(self.args, "normalizer_params", {}),
-            trajectory_preprocess_fns=getattr(self.args, "trajectory_preprocess_fns", ()),
-            preprocess_kwargs=getattr(self.args, "preprocess_kwargs", {"trajectory": {}}),
+            trajectory_preprocess_fns=getattr(
+                self.args, "trajectory_preprocess_fns", ()
+            ),
+            preprocess_kwargs=getattr(
+                self.args, "preprocess_kwargs", {"trajectory": {}}
+            ),
             use_horizon_padding=self.args.use_horizon_padding,
             use_history_padding=self.args.use_history_padding,
             is_history_conditioned=self.args.is_history_conditioned,
@@ -220,7 +249,7 @@ class AdaptiveTrainer:
             save_parallel=self.args.save_parallel,
             results_folder=self.logdir,
             method=self.args.method,
-            exp_name=f'{self.args.dataset}/{self.args.exp_name}',
+            exp_name=f"{self.args.dataset}/{self.args.exp_name}",
             num_workers=self.args.num_workers,
             device=self.args.device,
             seed=self.args.seed,
@@ -235,7 +264,10 @@ class AdaptiveTrainer:
     def _add_mean_uncertainty(self, mean_uncertainty: float):
         self.mean_uncertainties.append(mean_uncertainty)
 
-        np.save(path.join(self.args.savepath, "mean_uncertainties.txt"), self.mean_uncertainties)
+        np.save(
+            path.join(self.args.savepath, "mean_uncertainties.txt"),
+            self.mean_uncertainties,
+        )
 
         # Combined linear and log-scale plots in one figure
         fig, axes = plt.subplots(1, 2, figsize=(14, 5))
@@ -264,7 +296,9 @@ class AdaptiveTrainer:
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Best model not found at {model_path}")
 
-        model_state_dict = torch.load(model_path, weights_only=False, map_location=torch.device(self.args.device))
+        model_state_dict = torch.load(
+            model_path, weights_only=False, map_location=torch.device(self.args.device)
+        )
         self.model.load_state_dict(model_state_dict["model"])
 
     def _update_logdir(self, iteration: int):
@@ -274,7 +308,9 @@ class AdaptiveTrainer:
     def _train_iteration(self, iteration: int, train_ids: Sequence[int]):
         print(f"\n[ adaptive_training/trainer ] Iteration {iteration}")
 
-        train_dataset = self._create_dataset(train_ids, self._train_fnames, is_validation=False)
+        train_dataset = self._create_dataset(
+            train_ids, self._train_fnames, is_validation=False
+        )
         trainer = self._build_trainer(train_dataset, self.val_dataset)
         trainer.train(reraise_keyboard_interrupt=True)
 
@@ -286,12 +322,16 @@ class AdaptiveTrainer:
 
         self._add_mean_uncertainty(mean_uncertainty)
 
-        print(f"[ adaptive_training/trainer ] Mean {self.uncertainty.name}: {mean_uncertainty:.6f}")
+        print(
+            f"[ adaptive_training/trainer ] Mean {self.uncertainty.name}: {mean_uncertainty:.6f}"
+        )
 
         achieved_stop_uncertainty = mean_uncertainty < self.stop_uncertainty
 
         if achieved_stop_uncertainty:
-            print(f"[ adaptive_training/trainer ] Reached target uncertainty {self.stop_uncertainty}. Stopping.")
+            print(
+                f"[ adaptive_training/trainer ] Reached target uncertainty {self.stop_uncertainty}. Stopping."
+            )
 
         return achieved_stop_uncertainty
 
@@ -311,14 +351,12 @@ class AdaptiveTrainer:
 
         return sampling_uncertainty
 
-    def _update_animation(self, iteration: int, uncertainty: np.ndarray, new_ids: Sequence[int]):
+    def _update_animation(
+        self, iteration: int, uncertainty: np.ndarray, new_ids: Sequence[int]
+    ):
         if self.animate_plots:
             self.animation_generator.generate_animations(
-                iteration,
-                uncertainty,
-                self._train_start_points,
-                new_ids,
-                self.logdir
+                iteration, uncertainty, self._train_start_points, new_ids, self.logdir
             )
 
     def _create_videos(self, num_iterations: int):
@@ -330,7 +368,7 @@ class AdaptiveTrainer:
 
     def _generate_final_states(self):
         """
-        Generates final states for all start states and not only the 
+        Generates final states for all start states and not only the
         ones in the current training dataset.
         """
         num_start_states = len(self._all_start_points)
@@ -338,7 +376,9 @@ class AdaptiveTrainer:
 
         final_states = np.zeros((num_start_states, self.n_runs, dim))
 
-        for i in tqdm(range(self.n_runs), desc=f"Generating final states {self.n_runs} runs"):
+        for i in tqdm(
+            range(self.n_runs), desc=f"Generating final states {self.n_runs} runs"
+        ):
             run_final_states = self.trajectory_generator.generate_trajectories(
                 self._all_start_points,
                 batch_size=self.sampling_batch_size,
@@ -354,11 +394,7 @@ class AdaptiveTrainer:
             final_states[:, i, :] = run_final_states
 
         np.save(
-            path.join(
-                self.logdir, 
-                f"final_states_{self.n_runs}_runs.npy"
-            ), 
-            final_states
+            path.join(self.logdir, f"final_states_{self.n_runs}_runs.npy"), final_states
         )
 
         return final_states
@@ -376,12 +412,12 @@ class AdaptiveTrainer:
         self.roa_estimator.results_path = os.path.join(self.logdir, "roa_results")
         os.makedirs(self.roa_estimator.results_path, exist_ok=True)
         self.roa_estimator.set_final_states(final_states)
-        
-        self.roa_estimator.compute_attractor_labels()
-        self.roa_estimator.compute_attractor_probabilities()
-        self.roa_estimator.plot_attractor_probabilities(s=s)
-        self.roa_estimator.predict_attractor_labels(save=True)
-        self.roa_estimator.plot_predicted_attractor_labels(s=s)
+
+        # System-driven, outcome-based RoA estimation.
+        self.roa_estimator.compute_outcome_labels()
+        self.roa_estimator.compute_outcome_probabilities()
+        self.roa_estimator.predict_outcomes(save=True)
+        self.roa_estimator.derive_labels_from_outcomes()
         self.roa_estimator.plot_roas(plot_separatrix=True, s=s)
         self.roa_estimator.compute_classification_results(save=True)
         self.roa_estimator.plot_classification_results(s=s)
@@ -398,8 +434,7 @@ class AdaptiveTrainer:
     #     # expected_final = utils.parallelize_toggle(get_start_point_attractor, args_list, parallel=True, desc="Getting attractor labels")
 
     #     return attractor_labels
-        
-    
+
     # --------------------------- main loop ------------------------- #
 
     def run(self):
@@ -407,9 +442,11 @@ class AdaptiveTrainer:
         all_train_ids = list(range(num_train_states))
 
         # List of ids that constitute the current training dataset
-        current_train_ids = random.sample(all_train_ids, min(self.init_size, num_train_states))
+        current_train_ids = random.sample(
+            all_train_ids, min(self.init_size, num_train_states)
+        )
 
-        # Set of ids that have appeared at least once, and the corresponding start points and attractors
+        # Set of ids that have appeared at least once (start points seen at least once)
         seen_set: Set[int] = set(current_train_ids)
 
         self.logdir = None
@@ -420,7 +457,7 @@ class AdaptiveTrainer:
         for iteration in range(self.max_iters):
             try:
                 last_iteration = iteration
-                if self.logdir is not None: # Load best model from previous iteration
+                if self.logdir is not None:  # Load best model from previous iteration
                     self._load_best_model()
 
                 self._update_logdir(iteration)
@@ -435,20 +472,22 @@ class AdaptiveTrainer:
 
                 uncertainty = self.uncertainty.compute_normalized_uncertainty(
                     it_train_final_states,
-                    self.args, 
-                    self._train_start_points, 
-                    save_path=self.logdir, 
+                    self.args,
+                    self._train_start_points,
+                    save_path=self.logdir,
                     title_suffix=f"Iteration {iteration}",
                 )
-                
+
                 if self._acheived_low_uncertainty(uncertainty):
                     break
 
-                sampling_uncertainty = self._get_sampling_uncertainty(uncertainty, seen_set)
+                sampling_uncertainty = self._get_sampling_uncertainty(
+                    uncertainty, seen_set
+                )
 
                 new_ids = self.sampler.sample(
-                    sampling_uncertainty, 
-                    all_train_ids, 
+                    sampling_uncertainty,
+                    all_train_ids,
                     self._train_start_points,
                     self.step_size,
                     save_path=self.logdir,
@@ -464,18 +503,24 @@ class AdaptiveTrainer:
                 )
 
                 if not new_ids:
-                    print("[ adaptive_training/trainer ] Sampler returned no ids. Stopping.")
+                    print(
+                        "[ adaptive_training/trainer ] Sampler returned no ids. Stopping."
+                    )
                     break
 
                 self._update_animation(iteration, uncertainty, new_ids)
 
                 # Update dataset lists/sets
-                current_train_ids = self.combiner.combine(current_train_ids, new_ids, uncertainty)
+                current_train_ids = self.combiner.combine(
+                    current_train_ids, new_ids, uncertainty
+                )
                 seen_set.update(new_ids)
 
                 # Stop if we've now covered the entire pool (at least once)
                 if len(seen_set) == num_train_states:
-                    print("[ adaptive_training/trainer ] Exhausted all start states. Stopping.")
+                    print(
+                        "[ adaptive_training/trainer ] Exhausted all start states. Stopping."
+                    )
                     break
             except KeyboardInterrupt:
                 print("[ adaptive_training/trainer ] Keyboard interrupt. Stopping.")
@@ -491,4 +536,4 @@ class AdaptiveTrainer:
             trainer.save_model("best", save_path=self.args.savepath)
 
         if last_iteration > -1:
-            self._create_videos(last_iteration + 1)        
+            self._create_videos(last_iteration + 1)
