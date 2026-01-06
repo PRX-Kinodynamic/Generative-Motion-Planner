@@ -266,7 +266,7 @@ class TestTrajectoryGeneration:
             assert result.shape[2] == 2   # observation dim
 
     def test_generate_trajectories_only_final_states(self, trajectory_generator):
-        """Test generating only final states (not full trajectories)"""
+        """Test generating only final states using generate_final_states method"""
         start_states = np.random.randn(10, 2)
 
         with patch.object(trajectory_generator, '_generate_raw_trajectories') as mock_gen:
@@ -277,10 +277,9 @@ class TestTrajectoryGeneration:
 
             mock_gen.side_effect = mock_generate
 
-            result = trajectory_generator.generate_trajectories(
+            result = trajectory_generator.generate_final_states(
                 start_states,
                 num_inference_steps=3,
-                only_return_final_states=True,
             )
 
             assert result.shape == (10, 2)
@@ -303,11 +302,10 @@ class TestTrajectoryGeneration:
 
             mock_gen.side_effect = mock_generate
 
-            result = trajectory_generator.generate_trajectories(
+            result = trajectory_generator.generate_final_states(
                 start_states,
                 batch_size=10,
                 num_inference_steps=3,
-                only_return_final_states=True,
             )
 
             # Should be called 10 times (100 / 10)
@@ -326,18 +324,64 @@ class TestTrajectoryGeneration:
             with patch.object(trajectory_generator, '_generate_raw_trajectories') as mock_gen:
                 def mock_generate(batch_states, **kwargs):
                     batch_size = len(batch_states)
-                    return np.random.randn(batch_size, 2)
+                    return np.random.randn(batch_size, 10, 2)
 
                 mock_gen.side_effect = mock_generate
 
                 result = trajectory_generator.generate_trajectories(
                     start_states,
                     num_inference_steps=3,
-                    only_return_final_states=True,
                 )
 
                 # Check that normalizer was called
                 mock_norm_getter.assert_called_once()
+
+    def test_generate_final_states_returns_correct_shape(self, trajectory_generator):
+        """Test that generate_final_states returns only final states"""
+        start_states = np.random.randn(10, 2)
+
+        with patch.object(trajectory_generator, '_generate_raw_trajectories') as mock_gen:
+            def mock_generate(batch_states, **kwargs):
+                batch_size = len(batch_states)
+                return np.random.randn(batch_size, 2)
+
+            mock_gen.side_effect = mock_generate
+
+            result = trajectory_generator.generate_final_states(
+                start_states,
+                num_inference_steps=3,
+            )
+
+            assert result.shape == (10, 2)  # Only final states, not full trajectories
+
+    def test_generate_final_states_vs_generate_trajectories(self, trajectory_generator):
+        """Test that generate_final_states and generate_trajectories with only_return_final_states are equivalent"""
+        start_states = np.random.randn(5, 2)
+
+        with patch.object(trajectory_generator, '_generate_raw_trajectories') as mock_gen:
+            def mock_generate(batch_states, **kwargs):
+                batch_size = len(batch_states)
+                if kwargs.get('only_return_final_states'):
+                    return np.random.randn(batch_size, 2)
+                else:
+                    return np.random.randn(batch_size, 10, 2)
+
+            mock_gen.side_effect = mock_generate
+
+            # Both should call the internal method with only_return_final_states appropriately
+            final_states = trajectory_generator.generate_final_states(
+                start_states,
+                num_inference_steps=3,
+            )
+
+            trajectories = trajectory_generator.generate_trajectories(
+                start_states,
+                num_inference_steps=3,
+            )
+
+            assert final_states.shape == (5, 2)
+            assert trajectories.shape[0] == 5
+            assert trajectories.ndim == 3  # Full trajectories
 
 
 class TestMultipleRunGeneration:
@@ -366,7 +410,7 @@ class TestMultipleRunGeneration:
         """Test that generate_multiple_runs can keep full trajectories"""
         start_states = np.random.randn(10, 2)
 
-        with patch.object(trajectory_generator, 'generate_trajectories') as mock_gen:
+        with patch.object(trajectory_generator, '_generate_trajectories_or_final_states') as mock_gen:
             # Return full trajectories (batch, path_length, dim)
             mock_gen.return_value = np.random.randn(10, 15, 2)
 

@@ -1,93 +1,103 @@
 import argparse
+import importlib
 
-from genMoPlan.eval.roa import ROAEstimator
+from genMoPlan.eval.roa import Classifier
 from genMoPlan.utils import expand_model_paths
 
+
 def estimate_roa(
-    model_state_name, 
+    model_state_name,
     model_path,
-    n_runs=None, 
-    batch_size=None, 
+    n_runs=None,
+    batch_size=None,
     num_batches=None,
-    timestamp=None, 
-    no_img=False, 
-    continue_gen=False, 
-    analyze=False, 
-    verbose=True, 
-    attractor_dist_threshold=None,
-    attractor_prob_threshold=None,
+    timestamp=None,
+    no_img=False,
+    continue_gen=False,
+    analyze=False,
+    verbose=True,
+    outcome_prob_threshold=None,
 ):
 
     dataset = None
 
-    path_splits = model_path.split('/')
+    path_splits = model_path.split("/")
 
     for i, splits in enumerate(path_splits):
-        if splits == 'experiments':
-            dataset = path_splits[i+1]
+        if splits == "experiments":
+            dataset = path_splits[i + 1]
             break
 
     if dataset is None:
         raise ValueError(f"Dataset not found in model path: {model_path}")
 
-    if '#' in model_path:
-        model_path = model_path.replace('#', '*')
+    if "#" in model_path:
+        model_path = model_path.replace("#", "*")
         model_path = expand_model_paths(model_path)[0]
 
     if batch_size is not None:
         batch_size = int(batch_size)
 
-    roa_estimator = ROAEstimator(
+    # Build the latest system definition from the dataset config.
+    config_module = importlib.import_module(f"config.{dataset}")
+    get_system = getattr(config_module, "get_system", None)
+    if get_system is None:
+        raise ValueError(
+            f"Config module for dataset '{dataset}' does not define get_system()."
+        )
+
+    system = get_system()
+
+    roa_estimator = Classifier(
         dataset=dataset,
-        model_state_name=model_state_name, 
-        model_path=model_path, 
-        n_runs=n_runs, 
-        batch_size=batch_size, 
-        num_batches=num_batches, 
-        verbose=verbose
+        model_state_name=model_state_name,
+        model_path=model_path,
+        n_runs=n_runs,
+        batch_size=batch_size,
+        num_batches=num_batches,
+        verbose=verbose,
+        system=system,
     )
 
     roa_estimator.load_ground_truth()
 
-    if attractor_dist_threshold is not None:
-        roa_estimator.set_attractor_dist_threshold(attractor_dist_threshold)
-    if attractor_prob_threshold is not None:
-        roa_estimator.set_attractor_prob_threshold(attractor_prob_threshold)
+    if outcome_prob_threshold is not None:
+        roa_estimator.set_outcome_prob_threshold(outcome_prob_threshold)
 
     if analyze or continue_gen:
         roa_estimator.load_final_states(timestamp=timestamp)
-    
+
     if not analyze:
         roa_estimator.generate_trajectories(
             save=True,
         )
 
-    roa_estimator.compute_attractor_labels()
-
-    roa_estimator.predict_attractor_labels(save=True)
+    # Outcome-based analysis driven purely by the system-defined outcomes.
+    roa_estimator.compute_outcome_labels()
+    roa_estimator.compute_outcome_probabilities()
+    roa_estimator.predict_outcomes(save=True)
+    roa_estimator.derive_labels_from_outcomes()
 
     if not no_img:
         try:
-            roa_estimator.plot_attractor_probabilities()
-            roa_estimator.plot_predicted_attractor_labels()
             roa_estimator.plot_roas(plot_separatrix=True)
-        except Exception as e:
+        except Exception:
             pass
 
     roa_estimator.compute_classification_results(save=True)
-
     roa_estimator.plot_classification_results()
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Visualize model trajectories")
-    
+
     parser.add_argument("--model_path", type=str, help="Experiment path")
 
     parser.add_argument(
-        "--model_paths", 
-        type=str, 
-        nargs="+", 
-        help="Multiple experiment paths. If provided, will override --model_path"
+        "--model_paths",
+        type=str,
+        nargs="+",
+        help="Multiple experiment paths. If provided, will override --model_path",
     )
 
     parser.add_argument(
@@ -97,7 +107,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--no_img",
         action="store_true",
-        help="Do not generate an image with the attractor labels. Only possible for 2D datasets",
+        help="Do not generate any ROA or classification plots",
     )
 
     parser.add_argument(
@@ -115,7 +125,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--timestamp",
         type=str,
-        help="Timestamp for the experiment to load the attractor labels. If not provided, the latest timestamp will be used.",
+        help="Timestamp for the experiment to load precomputed final states. If not provided, the latest timestamp will be used.",
     )
 
     parser.add_argument(
@@ -143,15 +153,9 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--attractor_dist_threshold",
+        "--outcome_prob_threshold",
         type=float,
-        help="Attractor distance threshold",
-    )
-
-    parser.add_argument(
-        "--attractor_prob_threshold",
-        type=float,
-        help="Attractor probability threshold",
+        help="Outcome probability threshold for assigning a label/outcome",
     )
 
     parser.add_argument(
@@ -159,38 +163,36 @@ if __name__ == "__main__":
         action="store_true",
         help="Do not print anything",
     )
-    
+
     args = parser.parse_args()
 
     if args.model_paths:
         for model_path in args.model_paths:
             print(f"\n\n[ scripts/estimate_roa ] Estimating ROA for {model_path}\n\n")
             estimate_roa(
-                model_state_name=args.model_state_name, 
-                model_path=model_path, 
-                n_runs=args.n_runs, 
-                batch_size=args.batch_size, 
-                num_batches=args.num_batches, 
-                timestamp=args.timestamp, 
-                no_img=args.no_img, 
-                continue_gen=args.continue_gen, 
-                analyze=args.analyze, 
-                attractor_dist_threshold=args.attractor_dist_threshold, 
-                attractor_prob_threshold=args.attractor_prob_threshold,
-                verbose=not args.silent
+                model_state_name=args.model_state_name,
+                model_path=model_path,
+                n_runs=args.n_runs,
+                batch_size=args.batch_size,
+                num_batches=args.num_batches,
+                timestamp=args.timestamp,
+                no_img=args.no_img,
+                continue_gen=args.continue_gen,
+                analyze=args.analyze,
+                outcome_prob_threshold=args.outcome_prob_threshold,
+                verbose=not args.silent,
             )
     else:
         estimate_roa(
-            model_state_name=args.model_state_name, 
-            model_path=args.model_path, 
-            n_runs=args.n_runs, 
-            batch_size=args.batch_size, 
-            num_batches=args.num_batches, 
-            timestamp=args.timestamp, 
-            no_img=args.no_img, 
-            continue_gen=args.continue_gen, 
-            analyze=args.analyze, 
-            attractor_dist_threshold=args.attractor_dist_threshold, 
-            attractor_prob_threshold=args.attractor_prob_threshold,
-            verbose=not args.silent
+            model_state_name=args.model_state_name,
+            model_path=args.model_path,
+            n_runs=args.n_runs,
+            batch_size=args.batch_size,
+            num_batches=args.num_batches,
+            timestamp=args.timestamp,
+            no_img=args.no_img,
+            continue_gen=args.continue_gen,
+            analyze=args.analyze,
+            outcome_prob_threshold=args.outcome_prob_threshold,
+            verbose=not args.silent,
         )
