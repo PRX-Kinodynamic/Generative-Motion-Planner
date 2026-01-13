@@ -77,6 +77,9 @@ base = {
         "final_state_directory": "final_states",
         "generated_trajectory_directory": "generated_trajectories",
         "load_ema": True,
+        # Inference masking strategy (when use_history_mask=True)
+        # Options: "first_step_only" (default), "always", "never"
+        "inference_mask_strategy": "first_step_only",
     },
     "base": {
         "action_indices": None,
@@ -280,32 +283,80 @@ next_history_loss_weight_5 = {
     },
 }
 
-history_mask_2 = {
-    "use_history_mask": True,
-    "use_horizon_padding": False,
-    "history_length": 2,
-    "final_state_evaluation": False,
-}
-
-history_padding_2 = {
-    "use_history_padding": True,
-    "use_history_mask": False,
-    "use_horizon_padding": False,
-    "history_length": 2,
-    "final_state_evaluation": False,
-}
-
-history_mask_5 = {
+history_mask_zeros = {
+    """
+    History masking with zero padding and loss weighting.
+    - Model explicitly knows which positions are missing (via mask)
+    - Missing positions padded with zeros
+    - Loss only computed on valid positions
+    - Use case: Variable-length demonstrations, neutral padding
+    """
     "use_history_mask": True,
     "use_horizon_padding": False,
     "history_length": 5,
+    "history_mask_padding_value": "zeros",
+    "use_mask_loss_weighting": True,
     "final_state_evaluation": False,
 }
 
-history_padding_5 = {
+history_mask_first = {
+    """
+    History masking with first-state padding and loss weighting.
+    - Model knows which positions are missing
+    - Missing positions padded with first available state
+    - Loss only computed on valid positions
+    - Use case: Systems that start from rest/stationary state
+    """
+    "use_history_mask": True,
+    "use_horizon_padding": False,
+    "history_length": 5,
+    "history_mask_padding_value": "first",
+    "use_mask_loss_weighting": True,
+    "final_state_evaluation": False,
+}
+
+history_mask_mirror = {
+    """
+    History masking with mirror padding and loss weighting.
+    - Model knows which positions are missing
+    - Missing positions filled by reflecting available sequence
+    - Loss only computed on valid positions
+    - Use case: Smooth/periodic trajectories
+    """
+    "use_history_mask": True,
+    "use_horizon_padding": False,
+    "history_length": 5,
+    "history_mask_padding_value": "mirror",
+    "use_mask_loss_weighting": True,
+    "final_state_evaluation": False,
+}
+
+history_padding_first = {
+    """
+    History padding (no mask) with first-state strategy.
+    - Model treats all positions as real (no mask)
+    - Missing positions padded with first available state
+    - Use case: Want model to "imagine" stationary start
+    """
     "use_history_padding": True,
     "use_history_mask": False,
     "use_horizon_padding": False,
     "history_length": 5,
+    "history_padding_strategy": "first",
+    "final_state_evaluation": False,
+}
+
+history_padding_mirror = {
+    """
+    History padding (no mask) with mirror strategy.
+    - Model treats all positions as real (no mask)
+    - Missing positions filled by mirroring available sequence
+    - Use case: Smooth continuation without exposing missing data
+    """
+    "use_history_padding": True,
+    "use_history_mask": False,
+    "use_horizon_padding": False,
+    "history_length": 5,
+    "history_padding_strategy": "mirror",
     "final_state_evaluation": False,
 }
