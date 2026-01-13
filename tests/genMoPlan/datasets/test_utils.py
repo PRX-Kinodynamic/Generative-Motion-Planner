@@ -443,6 +443,15 @@ class TestApplyPadding:
         assert torch.allclose(padded_trajectory, torch.tensor([[9, 9], [9, 9], [9, 9]], dtype=torch.float32))
         
     def test_apply_padding_empty_trajectory_no_pad_value(self):
+        """Test that empty trajectory with no pad_value defaults to zeros padding."""
         trajectory = torch.tensor([], dtype=torch.float32).reshape(0, 2)
-        with pytest.raises(ValueError, match="Cannot pad empty trajectory with no pad value"):
-            apply_padding(trajectory, 3, pad_left=True)
+        # With the new strategy parameter, empty trajectories default to zeros padding
+        padded = apply_padding(trajectory, 3, pad_left=True)
+        expected = torch.zeros((3, 2), dtype=torch.float32)
+        assert torch.allclose(padded, expected), "Empty trajectory should be padded with zeros by default"
+
+    def test_apply_padding_empty_trajectory_non_zeros_strategy_raises(self):
+        """Test that empty trajectory with non-zeros strategy raises ValueError."""
+        trajectory = torch.tensor([], dtype=torch.float32).reshape(0, 2)
+        with pytest.raises(ValueError, match="Cannot pad empty trajectory"):
+            apply_padding(trajectory, 3, pad_left=True, strategy="first")
