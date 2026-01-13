@@ -13,12 +13,24 @@ import torch
 from tqdm import tqdm
 
 from genMoPlan.datasets.normalization import get_normalizer, Normalizer
+from genMoPlan.datasets.constants import MASK_ON, MASK_OFF
 from genMoPlan.utils.arrays import to_torch
 from genMoPlan.utils.data_processing import compute_actual_length
 from genMoPlan.utils.model import load_model, get_normalizer_params
 from genMoPlan.utils.params import load_inference_params
 from genMoPlan.utils.progress import ETAIterator
 from genMoPlan.utils.trajectory import plot_trajectories
+
+# Inference mask strategy constants
+INFERENCE_MASK_FIRST_STEP_ONLY = "first_step_only"
+INFERENCE_MASK_ALWAYS = "always"
+INFERENCE_MASK_NEVER = "never"
+VALID_INFERENCE_MASK_STRATEGIES = [
+    INFERENCE_MASK_FIRST_STEP_ONLY,
+    INFERENCE_MASK_ALWAYS,
+    INFERENCE_MASK_NEVER,
+]
+DEFAULT_INFERENCE_MASK_STRATEGY = INFERENCE_MASK_FIRST_STEP_ONLY
 
 if TYPE_CHECKING:
     from genMoPlan.systems import BaseSystem, Outcome
@@ -150,6 +162,16 @@ class TrajectoryGenerator:
         self.post_process_fns = inference_params.get("post_process_fns")
         self.post_process_fn_kwargs = inference_params.get("post_process_fn_kwargs", {})
         self.final_state_directory = inference_params.get("final_state_directory")
+
+        # Inference masking strategy
+        self.inference_mask_strategy = inference_params.get(
+            "inference_mask_strategy", DEFAULT_INFERENCE_MASK_STRATEGY
+        )
+        if self.inference_mask_strategy not in VALID_INFERENCE_MASK_STRATEGIES:
+            raise ValueError(
+                f"Invalid inference_mask_strategy '{self.inference_mask_strategy}'. "
+                f"Valid options: {VALID_INFERENCE_MASK_STRATEGIES}"
+            )
 
         # Derived state
         self._timestamp: Optional[str] = None
@@ -945,18 +967,24 @@ class TrajectoryGenerator:
         )
 
         use_history_padding = bool(getattr(model_args, "use_history_padding", True))
+
         if use_history_padding:
             history_window = current_states.unsqueeze(1).repeat(1, history_length, 1)
             first_step_mask = None
         else:
             history_window[:, -1, :] = current_states
-            first_step_mask = torch.ones(
+            # Create mask following the correct convention:
+            # - MASK_OFF (1.0): Position is valid/present
+            # - MASK_ON (0.0): Position is masked/missing
+            first_step_mask = torch.full(
                 (batch_size, training_prediction_length),
+                MASK_OFF,  # Default: all positions valid
                 dtype=torch.float32,
                 device=current_states.device,
             )
             if history_length > 1:
-                first_step_mask[:, : history_length - 1] = 0.0
+                # Mark early history positions as masked (only last position is valid initially)
+                first_step_mask[:, : history_length - 1] = MASK_ON
 
         current_idx = history_length
 
@@ -970,8 +998,29 @@ class TrajectoryGenerator:
                 conditions = {t: history_window[:, t, :] for t in range(history_length)}
 
                 sample_kwargs = dict(conditional_sample_kwargs or {})
-                if first_step and first_step_mask is not None:
-                    sample_kwargs["mask"] = first_step_mask
+
+                # Apply mask based on inference_mask_strategy
+                # - "first_step_only": Mask only on first step (default, current behavior)
+                # - "always": Pass mask on all autoregressive steps
+                # - "never": Never pass mask during inference
+                if first_step_mask is not None:
+                    if self.inference_mask_strategy == INFERENCE_MASK_FIRST_STEP_ONLY:
+                        if first_step:
+                            sample_kwargs["mask"] = first_step_mask
+                    elif self.inference_mask_strategy == INFERENCE_MASK_ALWAYS:
+                        # For subsequent steps, all history is valid (model's own predictions)
+                        if first_step:
+                            sample_kwargs["mask"] = first_step_mask
+                        else:
+                            # Create a full mask where all positions are valid
+                            all_valid_mask = torch.full(
+                                (batch_size, training_prediction_length),
+                                MASK_OFF,
+                                dtype=torch.float32,
+                                device=current_states.device,
+                            )
+                            sample_kwargs["mask"] = all_valid_mask
+                    # For INFERENCE_MASK_NEVER, we don't add mask to sample_kwargs
 
                 sample = model(
                     cond=conditions,
