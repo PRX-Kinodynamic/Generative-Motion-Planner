@@ -178,20 +178,88 @@ def make_indices(path_lengths, history_length, use_history_padding, horizon_leng
 
     return indices
 
-def apply_padding(trajectory, length, pad_left=True, pad_value=None):
+def _create_mirror_padding(sequence, pad_length):
+    """
+    Create mirror-reflected padding of specified length.
+
+    Args:
+        sequence: [N, state_dim] available data
+        pad_length: Number of padding positions needed
+
+    Returns:
+        padding: [pad_length, state_dim] mirror-reflected padding
+    """
+    if pad_length <= 0:
+        return torch.zeros((0, sequence.shape[-1]), dtype=sequence.dtype, device=sequence.device)
+
+    # Reverse the sequence
+    reflected = sequence.flip(0)  # [N, state_dim] reversed
+
+    # Tile if needed to cover pad_length
+    if pad_length <= len(reflected):
+        return reflected[:pad_length]
+    else:
+        # Need to tile: repeat reflected sequence
+        num_tiles = (pad_length + len(reflected) - 1) // len(reflected)
+        tiled = reflected.repeat(num_tiles, 1)  # [num_tiles * N, state_dim]
+        return tiled[:pad_length]
+
+
+def apply_padding(trajectory, length, pad_left=True, pad_value=None, strategy=None):
+    """
+    Apply padding to sequence to reach target length.
+
+    Args:
+        trajectory: [N, state_dim] available data
+        length: M (desired length, M >= N)
+        pad_left: If True, pad on left; else pad on right
+        pad_value: Explicit value to use for padding (overrides strategy)
+        strategy: Padding strategy if pad_value not provided
+                  - "zeros": Pad with zeros
+                  - "first": Pad with first element (default if pad_left=True)
+                  - "last": Pad with last element (default if pad_left=False)
+                  - "mirror": Pad with reflected sequence
+
+    Returns:
+        padded_sequence: [M, state_dim] padded data
+
+    Backward Compatibility:
+        - If pad_value is provided, it takes precedence over strategy
+        - If neither provided, defaults to "first" for pad_left=True, "last" for pad_left=False
+          (matching current behavior)
+    """
     if len(trajectory) == length:
         return trajectory
-    
-    if pad_value is None and len(trajectory) == 0:
-        raise ValueError("Cannot pad empty trajectory with no pad value")
-    
-    if pad_value is None:
-        if pad_left:
-            pad_value = trajectory[0]
-        else:
-            pad_value = trajectory[-1]
 
-    padding = pad_value.repeat(length - len(trajectory), 1)
+    pad_length = length - len(trajectory)
+
+    if pad_value is None and len(trajectory) == 0:
+        # Special case: empty trajectory - can only pad with zeros
+        if strategy == "zeros" or strategy is None:
+            padding = torch.zeros((pad_length, trajectory.shape[-1]), dtype=trajectory.dtype, device=trajectory.device)
+        else:
+            raise ValueError(f"Cannot pad empty trajectory with strategy '{strategy}'. Use 'zeros' or provide pad_value.")
+    elif pad_value is not None:
+        # Explicit pad_value takes precedence
+        padding = pad_value.repeat(pad_length, 1)
+    elif strategy == "zeros":
+        # Pad with zeros
+        padding = torch.zeros((pad_length, trajectory.shape[-1]), dtype=trajectory.dtype, device=trajectory.device)
+    elif strategy == "first":
+        # Pad with first element
+        padding = trajectory[0].repeat(pad_length, 1)
+    elif strategy == "last":
+        # Pad with last element
+        padding = trajectory[-1].repeat(pad_length, 1)
+    elif strategy == "mirror":
+        # Pad with reflected sequence
+        padding = _create_mirror_padding(trajectory, pad_length)
+    else:
+        # Default behavior (backward compatible): use first for left, last for right
+        if pad_left:
+            padding = trajectory[0].repeat(pad_length, 1)
+        else:
+            padding = trajectory[-1].repeat(pad_length, 1)
 
     if pad_left:
         return torch.cat([padding, trajectory], dim=0)

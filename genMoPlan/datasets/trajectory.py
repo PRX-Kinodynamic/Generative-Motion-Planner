@@ -6,6 +6,18 @@ from tqdm import tqdm
 
 from genMoPlan.datasets.normalization import *
 from genMoPlan.datasets.utils import EMPTY_DICT, apply_padding, make_indices, DataSample, NONE_TENSOR, FinalStateDataSample
+from genMoPlan.datasets.constants import (
+    MASK_ON,
+    MASK_OFF,
+    PADDING_STRATEGY_ZEROS,
+    PADDING_STRATEGY_FIRST,
+    PADDING_STRATEGY_LAST,
+    PADDING_STRATEGY_MIRROR,
+    VALID_PADDING_STRATEGIES,
+    DEFAULT_HISTORY_MASK_PADDING_VALUE,
+    DEFAULT_HISTORY_PADDING_STRATEGY,
+    validate_padding_strategy,
+)
 from genMoPlan.utils import load_trajectories, compute_actual_length
 from genMoPlan.utils.arrays import batchify
 
@@ -32,11 +44,48 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         use_history_mask: bool = False,
         history_padding_anywhere: bool = True,
         history_padding_k = "k1",
+        history_mask_padding_value: str = None,  # NEW: Padding strategy when using history masking
+        history_padding_strategy: str = None,    # NEW: Padding strategy when using history padding
         is_history_conditioned: bool = True, # Otherwise it is provided as a query that is not predicted by the model
         is_validation: bool = False,
         perform_final_state_evaluation: bool = False,
         **kwargs,
     ):
+        """
+        TrajectoryDataset for loading and processing trajectory data.
+
+        Args:
+            dataset: Name of the dataset
+            read_trajectory_fn: Function to read trajectory files
+            horizon_length: Length of the horizon (future) portion
+            history_length: Length of the history (past) portion
+            stride: Stride for subsampling trajectories
+            observation_dim: Dimension of observations
+            trajectory_normalizer: Normalizer class name
+            normalizer_params: Parameters for the normalizer
+            trajectory_preprocess_fns: Preprocessing functions to apply
+            preprocess_kwargs: Kwargs for preprocessing functions
+            dataset_size: Maximum number of trajectories to load
+            fnames: Specific filenames to load
+            use_horizon_padding: Whether to pad horizon if too short
+            use_history_padding: Whether to pad history without masking
+            use_history_mask: Whether to use masking for variable-length history
+            history_padding_anywhere: Allow padding at any position
+            history_padding_k: Configuration for k values in padding
+            history_mask_padding_value: Padding strategy when using history masking
+                - "zeros" (default): Pad with zeros
+                - "first": Pad with first available state
+                - "last": Pad with last available state
+                - "mirror": Pad with reflected sequence
+            history_padding_strategy: Padding strategy when using history padding
+                - "first" (default): Pad with first available state
+                - "last": Pad with last available state
+                - "zeros": Pad with zeros
+                - "mirror": Pad with reflected sequence
+            is_history_conditioned: Whether history is used for conditioning
+            is_validation: Whether this is a validation dataset
+            perform_final_state_evaluation: Whether to prepare final state evaluation data
+        """
         self.horizon_length = horizon_length
         self.history_length = history_length
         self.stride = stride
@@ -47,6 +96,19 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         self.history_padding_k = history_padding_k
         self.is_history_conditioned = is_history_conditioned
         self.observation_dim = observation_dim
+
+        # Set padding strategy defaults based on mode
+        if history_mask_padding_value is None:
+            self.history_mask_padding_value = DEFAULT_HISTORY_MASK_PADDING_VALUE
+        else:
+            validate_padding_strategy(history_mask_padding_value, context="history_mask_padding_value")
+            self.history_mask_padding_value = history_mask_padding_value
+
+        if history_padding_strategy is None:
+            self.history_padding_strategy = DEFAULT_HISTORY_PADDING_STRATEGY
+        else:
+            validate_padding_strategy(history_padding_strategy, context="history_padding_strategy")
+            self.history_padding_strategy = history_padding_strategy
 
         if perform_final_state_evaluation:
             assert is_validation, "perform_final_state_evaluation is only supported for validation dataset"
@@ -217,20 +279,47 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         mask = NONE_TENSOR
 
         if self.use_history_padding:
-            history = apply_padding(history, self.history_length, pad_left=True)
+            # Apply history padding using the configured strategy
+            history = apply_padding(
+                history,
+                self.history_length,
+                pad_left=True,
+                strategy=self.history_padding_strategy,
+            )
         elif self.use_history_mask:
-            # Left-pad with zeros up to history_length and create missing-mask (1 for missing, 0 for provided)
+            # Apply history masking: pad with configured strategy and create mask
+            # Mask convention: MASK_OFF=1 (valid/present), MASK_ON=0 (masked/missing)
             provided = len(history)
             pad = self.history_length - provided
             if pad > 0:
-                zeros = torch.zeros((pad, history.shape[-1]), dtype=history.dtype, device=history.device)
-                history = torch.cat([zeros, history], dim=0)
+                # Apply padding using configured strategy
+                history = apply_padding(
+                    history,
+                    self.history_length,
+                    pad_left=True,
+                    strategy=self.history_mask_padding_value,
+                )
+
             # Build mask for full prediction length (history + horizon)
-            hist_missing = torch.zeros((self.history_length,), dtype=torch.float32, device=history.device)
+            # Start with all positions valid (MASK_OFF=1)
+            hist_mask = torch.full(
+                (self.history_length,),
+                MASK_OFF,
+                dtype=torch.float32,
+                device=history.device
+            )
             if pad > 0:
-                hist_missing[:pad] = 1.0
-            hor_missing = torch.zeros((self.horizon_length,), dtype=torch.float32, device=history.device)
-            mask = torch.cat([hist_missing, hor_missing], dim=0)
+                # Mark padded positions as masked (MASK_ON=0)
+                hist_mask[:pad] = MASK_ON
+
+            # Horizon positions are always valid (never masked)
+            hor_mask = torch.full(
+                (self.horizon_length,),
+                MASK_OFF,
+                dtype=torch.float32,
+                device=history.device
+            )
+            mask = torch.cat([hist_mask, hor_mask], dim=0)
 
         if self.use_horizon_padding:
             if len(horizon) > 0:
