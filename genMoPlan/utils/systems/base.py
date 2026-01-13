@@ -264,9 +264,14 @@ class BaseSystem:
             "read_trajectory_fn": self.read_trajectory,
             "trajectory_normalizer": "LimitsNormalizer",
             "normalizer_params": self.get_normalizer_params(use_manifold=use_manifold),
-            "trajectory_preprocess_fns": self.trajectory_preprocess_fns,
-            "preprocess_kwargs": self.preprocess_kwargs,
+            "trajectory_preprocess_fns": self.trajectory_preprocess_fns if not use_manifold else [],
+            "preprocess_kwargs": self.preprocess_kwargs if not use_manifold else {},
         }
+
+        # Add manifold if using manifold flow matching
+        if use_manifold and self.manifold is not None:
+            config["manifold"] = self.manifold
+
         return config
 
     def get_inference_config(self) -> Dict[str, Any]:

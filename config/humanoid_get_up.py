@@ -154,7 +154,6 @@ base = {
         "prefix": "diffusion/",
         "min_delta": 1e-3,
         "validation_kwargs": {},
-        "manifold": None,
     },
     "flow_matching": {
         "method_name": "flow_matching",

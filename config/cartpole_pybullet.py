@@ -153,7 +153,6 @@ base = {
         "prefix": "diffusion/",
         "min_delta": 1e-3,
         "validation_kwargs": {},
-        "manifold": None,
     },
     "flow_matching": {
         "method_name": "flow_matching",
@@ -180,13 +179,8 @@ base = {
             "n_timesteps": 5,
             "integration_method": "euler",
         },
-        # Manifold-specific config (overrides base when using manifold)
-        "manifold": _default_system.manifold,
-        "normalizer_params": _default_system.get_normalizer_params(use_manifold=True),
-        "trajectory_preprocess_fns": [],  # No preprocessing for manifold
-        "preprocess_kwargs": {},
-        "manifold_unwrap_fns": _default_system.manifold_unwrap_fns,
-        "manifold_unwrap_kwargs": _default_system.manifold_unwrap_kwargs,
+        # Set to True to use manifold flow matching (system will provide manifold)
+        "use_manifold": True,
     },
 }
 
