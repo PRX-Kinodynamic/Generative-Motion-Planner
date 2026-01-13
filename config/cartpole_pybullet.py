@@ -15,12 +15,8 @@ max_batch_size = int(2.5e5) if is_arrakis else int(1e4)
 
 # -------------------------------- System -------------------------------- #
 
-# Create default system for extracting system-provided config values
+# Create default system for backward compatibility with scripts that import configs directly
 _default_system = CartpolePyBulletSystem.create(stride=1, history_length=1, horizon_length=31)
-
-# Get system-provided dataset config
-_system_dataset_config = _default_system.get_dataset_config(use_manifold=False)
-_system_inference_config = _default_system.get_inference_config()
 
 
 def get_system(config=None, use_manifold: bool = False, **kwargs):
@@ -81,12 +77,6 @@ base = {
         "final_state_directory": "final_states",
         "generated_trajectory_directory": "generated_trajectories",
         "load_ema": True,
-        # System-provided inference config
-        "max_path_length": _system_inference_config["max_path_length"],
-        "post_process_fns": _system_inference_config["post_process_fns"],
-        "post_process_fn_kwargs": _system_inference_config["post_process_fn_kwargs"],
-        "manifold_unwrap_fns": _system_inference_config["manifold_unwrap_fns"],
-        "manifold_unwrap_kwargs": _system_inference_config["manifold_unwrap_kwargs"],
     },
     "base": {
         "action_indices": None,
@@ -104,16 +94,6 @@ base = {
         "use_plan": False,
         "train_dataset_size": None,
         "is_history_conditioned": True,
-        # System-provided dataset config
-        "observation_dim": _system_dataset_config["observation_dim"],
-        "angle_indices": _system_dataset_config["angle_indices"],
-        "state_names": _system_dataset_config["state_names"],
-        "max_path_length": _system_dataset_config["max_path_length"],
-        "read_trajectory_fn": _system_dataset_config["read_trajectory_fn"],
-        "trajectory_normalizer": _system_dataset_config["trajectory_normalizer"],
-        "normalizer_params": _system_dataset_config["normalizer_params"],
-        "trajectory_preprocess_fns": _system_dataset_config["trajectory_preprocess_fns"],
-        "preprocess_kwargs": _system_dataset_config["preprocess_kwargs"],
         # ---------------------------- serialization ----------------------------#
         "logbase": logbase,
         "exp_name": watch(exp_args_to_watch),

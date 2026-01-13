@@ -255,13 +255,13 @@ class Parser(Tap):
         if method is not None:
             if method not in getattr(module, "base"):
                 raise ValueError(f"[ utils/setup ] Method {method} not found in config: {args.config}")
-            
+
             print(f"[ utils/setup ] Using method: {method}")
 
             params.update(getattr(module, "base")[method])
 
         args.used_variations = []
-        
+
         if variations:
             valid_variations = []
             for variation in variations:
@@ -273,7 +273,7 @@ class Parser(Tap):
                 for variation in variations:
                     if variation not in valid_variations:
                         print(f"    - {variation}")
-        
+
                 input("Press Enter to continue with the remaining variations...")
 
             variations = valid_variations
@@ -290,6 +290,39 @@ class Parser(Tap):
             print(
                 f"[ utils/setup ] Not using overrides | config: {args.config} | variation: base"
             )
+
+        # Inject system-provided configuration values
+        if hasattr(module, 'get_system'):
+            print(f"[ utils/setup ] Injecting system-provided configuration")
+
+            # Get use_manifold flag from method config if it exists
+            use_manifold = params.get('use_manifold', False)
+
+            # Create system instance with training params (stride, history_length, horizon_length)
+            system = module.get_system(
+                config=getattr(module, "base"),
+                use_manifold=use_manifold,
+                stride=params.get('stride', 1),
+                history_length=params.get('history_length', 1),
+                horizon_length=params.get('horizon_length', 31),
+            )
+
+            # Get system-provided configs
+            system_dataset_config = system.get_dataset_config(use_manifold=use_manifold)
+            system_inference_config = system.get_inference_config()
+
+            # Inject dataset config values
+            params.update(system_dataset_config)
+
+            # Inject inference config values into params (for backward compatibility)
+            # These are typically used during inference
+            if 'inference' not in getattr(module, "base"):
+                params['inference'] = {}
+
+            # Store inference config separately but also make top-level keys available
+            for key, value in system_inference_config.items():
+                if key not in params:  # Don't override training params
+                    params[key] = value
 
         self._dict = {}
         for key, val in params.items():
