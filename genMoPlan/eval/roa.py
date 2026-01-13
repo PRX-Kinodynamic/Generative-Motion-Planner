@@ -13,7 +13,7 @@ from genMoPlan.utils import (
     load_roa_labels,
     compute_actual_length,
 )
-from genMoPlan.utils.systems import BaseSystem, Outcome
+from genMoPlan.systems import BaseSystem, Outcome
 from genMoPlan.utils.trajectory_generator import TrajectoryGenerator
 
 

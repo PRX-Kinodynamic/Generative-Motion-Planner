@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional, Sequence, Union
 import numpy as np
 
 from genMoPlan.datasets.normalization import Normalizer
-from genMoPlan.utils.systems.base import BaseSystem, Outcome
+from genMoPlan.systems.base import BaseSystem, Outcome
 
 
 class DoubleIntegrator1DSystem(BaseSystem):

@@ -7,7 +7,7 @@ This config contains only training/model setup. System-specific details
 import socket
 
 from genMoPlan.utils import watch, watch_dict, get_experiments_path
-from genMoPlan.utils.systems import CartpoleDMControlSystem
+from genMoPlan.systems import CartpoleDMControlSystem
 
 is_arrakis = "arrakis" in socket.gethostname()
 max_batch_size = int(2.5e5) if is_arrakis else int(1e4)

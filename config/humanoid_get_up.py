@@ -7,7 +7,7 @@ This config contains only training/model setup. System-specific details
 import socket
 
 from genMoPlan.utils import watch, watch_dict, get_experiments_path
-from genMoPlan.utils.systems import HumanoidGetUpSystem
+from genMoPlan.systems import HumanoidGetUpSystem
 
 is_arrakis = "arrakis" in socket.gethostname()
 max_batch_size = int(1e5) if is_arrakis else int(4e3)

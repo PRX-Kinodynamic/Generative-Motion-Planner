@@ -8,7 +8,7 @@ import socket
 import numpy as np
 
 from genMoPlan.utils import watch, watch_dict, get_experiments_path, process_angles
-from genMoPlan.utils.systems import PendulumLQRSystem
+from genMoPlan.systems import PendulumLQRSystem
 
 is_arrakis = "arrakis" in socket.gethostname()
 max_batch_size = int(1e6) if is_arrakis else int(266e3)

@@ -6,7 +6,7 @@ import os
 import time
 import warnings
 from os import path
-from typing import Callable, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Callable, List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -19,7 +19,9 @@ from genMoPlan.utils.model import load_model, get_normalizer_params
 from genMoPlan.utils.params import load_inference_params
 from genMoPlan.utils.progress import ETAIterator
 from genMoPlan.utils.trajectory import plot_trajectories
-from genMoPlan.utils.systems import BaseSystem, Outcome
+
+if TYPE_CHECKING:
+    from genMoPlan.systems import BaseSystem, Outcome
 
 
 def _infer_method_name(model_args) -> Optional[str]:
@@ -118,7 +120,7 @@ class TrajectoryGenerator:
         device: str = "cuda",
         verbose: bool = True,
         default_batch_size: Optional[int] = None,
-        system: Optional[BaseSystem] = None,
+        system: Optional["BaseSystem"] = None,
     ):
         if inference_params is None:
             if dataset is None:
@@ -488,6 +490,9 @@ class TrajectoryGenerator:
         2) Load from inference_params["system_state"] if present.
         3) Construct a BaseSystem from available params/model_args.
         """
+        # Import here to avoid circular dependency
+        from genMoPlan.systems import BaseSystem, Outcome
+
         if self.system is not None:
             return
 

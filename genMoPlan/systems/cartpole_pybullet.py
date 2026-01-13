@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional, Sequence
 import numpy as np
 
 from genMoPlan.datasets.normalization import Normalizer
-from genMoPlan.utils.systems.base import BaseSystem, Outcome
+from genMoPlan.systems.base import BaseSystem, Outcome
 from genMoPlan.utils.data_processing import (
     handle_angle_wraparound,
     augment_unwrapped_state_data,
@@ -12,81 +12,60 @@ from genMoPlan.utils.data_processing import (
 from genMoPlan.utils.trajectory import process_angles
 
 
-def _create_humanoid_manifold():
-    """Create the manifold for humanoid (lazy import to avoid circular deps)."""
-    from flow_matching.utils.manifolds import Euclidean, Product, Sphere
+def _create_cartpole_manifold():
+    """Create the manifold for cartpole (lazy import to avoid circular deps)."""
+    from flow_matching.utils.manifolds import FlatTorus, Euclidean, Product
 
     return Product(
-        input_dim=67,
-        manifolds=[(Euclidean(), 34), (Sphere(), 3), (Euclidean(), 30)],
+        input_dim=4,
+        manifolds=[(Euclidean(), 1), (FlatTorus(), 1), (Euclidean(), 2)],
     )
 
 
-class HumanoidGetUpSystem(BaseSystem):
+class CartpolePyBulletSystem(BaseSystem):
     """
-    System descriptor for Humanoid Get-Up task.
+    System descriptor for Cartpole PyBullet environment.
 
-    State dimension: 67
-    - Positions (34 dims): body positions and joint angles
-    - Orientation (3 dims): represented on sphere manifold
-    - Velocities (30 dims): body velocities and joint velocities
+    State: [x, theta, x_dot, theta_dot]
+    - x: cart position
+    - theta: pole angle (wrapped to [-pi, pi])
+    - x_dot: cart velocity
+    - theta_dot: pole angular velocity
 
-    The task is for the humanoid to get up from a lying position.
+    Success requires keeping all state variables within a tight tolerance
+    around the origin.
     """
 
     # Class-level defaults for state space
-    DEFAULT_STATE_DIM = 67
-    DEFAULT_MAX_PATH_LENGTH = 745
-    DEFAULT_ANGLE_INDICES: List[int] = []  # Humanoid uses sphere manifold, not angles
-    DEFAULT_STATE_NAMES: List[str] = []  # Too many to list
+    DEFAULT_STATE_DIM = 4
+    DEFAULT_MINS = [-6.0, -np.pi, -5.0, -5.0]
+    DEFAULT_MAXS = [6.0, np.pi, 5.0, 5.0]
+    DEFAULT_MAX_PATH_LENGTH = 613
+    DEFAULT_ANGLE_INDICES = [1]
+    DEFAULT_STATE_NAMES = ["x", "theta", "x_dot", "theta_dot"]
 
-    # State limits (from humanoid dataset)
-    DEFAULT_MINS = [
-        -0.859485, -1.375191, -0.688990, -0.525767, -0.632861, -1.994933, -2.905200,
-        -0.540604, -1.030145, -0.544243, -0.614817, -1.993659, -2.883713, -0.487868,
-        -1.017001, -1.579886, -1.602320, -1.720383, -1.183831, -1.170331, -1.739313,
-        0.051704, -0.455080, -0.168303, -0.557510, -0.858317, -0.986132, -1.281937,
-        -0.446948, -0.786912, -0.556428, -0.895774, -1.038971, -1.279955, -1.000000,
-        -0.999984, -0.896724, -1.914248, -1.915843, -3.327530, -2.658107, -2.528388,
-        -5.331130, -11.301671, -13.006869, -17.815111, -14.461623, -14.078833,
-        -12.893085, -12.061430, -12.384354, -12.161468, -17.793238, -26.302641,
-        -20.862368, -10.522175, -13.214445, -13.203420, -20.225025, -19.451426,
-        -21.217875, -24.788021, -18.834494, -21.369850, -22.102814, -20.644373,
-        -21.245199,
-    ]
-    DEFAULT_MAXS = [
-        0.838374, 0.609621, 0.725149, 0.164440, 0.517798, 0.522608, 0.185058,
-        0.921429, 0.983391, 0.163125, 0.545136, 0.491036, 0.209521, 0.921906,
-        1.020330, 1.199831, 1.143854, 0.985109, 1.646968, 1.620824, 0.964722,
-        1.494286, 0.617372, 0.787087, 0.556917, 1.055067, 1.020654, 0.523082,
-        0.618061, 0.187432, 0.555102, 1.036542, 0.980308, 0.523863, 1.000000,
-        1.000000, 1.000000, 1.900168, 1.837195, 1.918130, 2.789604, 2.940170,
-        2.997349, 8.091124, 12.754802, 14.861890, 11.852520, 14.249229, 11.141454,
-        11.107437, 12.403696, 14.443352, 25.315464, 19.668034, 18.593166, 11.033415,
-        12.674791, 17.079679, 24.056908, 22.487865, 21.304333, 23.978119, 19.407972,
-        24.520531, 25.825670, 21.328411, 24.432425,
-    ]
-
-    # Sphere manifold indices (last 3 dims of position section)
-    SPHERE_INDICES = [34, 35, 36]
+    # Success/failure thresholds
+    SUCCESS_TOLERANCES = np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32)
+    FAILURE_LIMITS = np.array([5.9, np.inf, 4.9, 4.9], dtype=np.float32)
 
     def __init__(
         self,
         *,
-        name: str = "humanoid_get_up",
-        state_dim: int = 67,
+        name: str = "cartpole_pybullet",
+        state_dim: int = 4,
         stride: int,
         history_length: int,
         horizon_length: int,
         max_path_length: Optional[int] = None,
         mins: Optional[List[float]] = None,
         maxs: Optional[List[float]] = None,
+        state_names: Optional[List[str]] = None,
         angle_indices: Optional[List[int]] = None,
         manifold: Optional[Any] = None,
         valid_outcomes: Optional[Sequence[Outcome]] = None,
         normalizer: Optional[Normalizer] = None,
         metadata: Optional[Dict[str, Any]] = None,
-        height_threshold: float = 0.8,
+        success_threshold: float = 1.0,
         use_manifold: bool = False,
     ):
         # Set defaults from class constants
@@ -96,23 +75,26 @@ class HumanoidGetUpSystem(BaseSystem):
             mins = self.DEFAULT_MINS.copy()
         if maxs is None:
             maxs = self.DEFAULT_MAXS.copy()
+        if state_names is None:
+            state_names = self.DEFAULT_STATE_NAMES.copy()
         if angle_indices is None:
             angle_indices = self.DEFAULT_ANGLE_INDICES.copy()
         if valid_outcomes is None:
-            # Humanoid trajectories are ultimately classified as success or failure;
-            # INVALID can be used by higher-level analysis when labels are uncertain.
             valid_outcomes = [Outcome.SUCCESS, Outcome.FAILURE, Outcome.INVALID]
 
         # Create manifold if using manifold-based flow matching
         if use_manifold and manifold is None:
-            manifold = _create_humanoid_manifold()
+            manifold = _create_cartpole_manifold()
 
         # Set up metadata
         metadata = metadata or {}
-        metadata.setdefault("height_threshold", height_threshold)
+        metadata.setdefault("success_threshold", success_threshold)
         metadata.setdefault("angle_indices", angle_indices)
-        # Position indices for the torso/head height (typically z-coordinate)
-        metadata.setdefault("height_index", 2)
+        metadata.setdefault("success_tolerances", self.SUCCESS_TOLERANCES.tolist())
+        metadata.setdefault("failure_limits", self.FAILURE_LIMITS.tolist())
+        metadata.setdefault("invalid_label", -1)
+        metadata.setdefault("invalid_labels", [metadata["invalid_label"]])
+        metadata.setdefault("invalid_outcomes", ["INVALID"])
 
         # Preprocessing functions for diffusion (Euclidean)
         trajectory_preprocess_fns = [
@@ -126,21 +108,13 @@ class HumanoidGetUpSystem(BaseSystem):
             "plan": None,
         }
 
-        # Post-processing for inference (use index 0 for sphere coords)
+        # Post-processing for inference
         post_process_fns = [process_angles]
-        post_process_fn_kwargs = {"angle_indices": [0]}
+        post_process_fn_kwargs = {"angle_indices": angle_indices}
 
         # Manifold unwrap functions
         manifold_unwrap_fns = [shift_to_zero_center_angles]
-        manifold_unwrap_kwargs = {"angle_indices": [0]}
-
-        # For manifold, set sphere indices to None in mins/maxs
-        manifold_mins = mins.copy()
-        manifold_maxs = maxs.copy()
-        for idx in self.SPHERE_INDICES:
-            if idx < len(manifold_mins):
-                manifold_mins[idx] = None
-                manifold_maxs[idx] = None
+        manifold_unwrap_kwargs = {"angle_indices": angle_indices}
 
         super().__init__(
             name=name,
@@ -151,10 +125,9 @@ class HumanoidGetUpSystem(BaseSystem):
             max_path_length=max_path_length,
             mins=mins,
             maxs=maxs,
+            state_names=state_names,
             angle_indices=angle_indices,
             manifold=manifold,
-            manifold_mins=manifold_mins,
-            manifold_maxs=manifold_maxs,
             trajectory_preprocess_fns=trajectory_preprocess_fns,
             preprocess_kwargs=preprocess_kwargs,
             post_process_fns=post_process_fns,
@@ -170,18 +143,20 @@ class HumanoidGetUpSystem(BaseSystem):
         """
         Evaluate the final state of a trajectory.
 
-        Success if the humanoid has gotten up (height above threshold).
+        Success if the final state is within the tolerance bounds.
+        Failure if any variable exceeds its bounds.
+        Otherwise, the state is marked invalid.
         """
-        height_threshold = self.metadata.get("height_threshold", 0.8)
-        height_index = self.metadata.get("height_index", 2)
+        state_vec = self._as_state_vector(state)
 
-        # Check if humanoid is upright based on height
-        if len(state) > height_index:
-            height = state[height_index]
-            if height >= height_threshold:
-                return Outcome.SUCCESS
+        if self._is_out_of_bounds(state_vec):
+            # Out-of-bounds states are treated as failures.
+            return Outcome.FAILURE
 
-        return Outcome.FAILURE
+        if self._is_within_success_tolerance(state_vec):
+            return Outcome.SUCCESS
+
+        return Outcome.INVALID
 
     def should_terminate(
         self, state: np.ndarray, t: int, traj_so_far: Optional[np.ndarray]
@@ -189,17 +164,34 @@ class HumanoidGetUpSystem(BaseSystem):
         """
         Early termination check.
 
-        Can terminate early if humanoid successfully gets up.
+        Terminate on out-of-bounds failure or immediate success.
         """
-        height_threshold = self.metadata.get("height_threshold", 0.8)
-        height_index = self.metadata.get("height_index", 2)
+        state_vec = self._as_state_vector(state)
 
-        if len(state) > height_index:
-            height = state[height_index]
-            if height >= height_threshold:
-                return Outcome.SUCCESS
+        if self._is_out_of_bounds(state_vec):
+            return Outcome.FAILURE
+
+        if self._is_within_success_tolerance(state_vec):
+            return Outcome.SUCCESS
 
         return None
+
+    def _as_state_vector(self, state: np.ndarray) -> np.ndarray:
+        state_np = np.asarray(state, dtype=np.float32)
+        return state_np[0] if state_np.ndim > 1 else state_np
+
+    def _is_out_of_bounds(self, state: np.ndarray) -> bool:
+        limits = np.asarray(
+            self.metadata.get("failure_limits", self.FAILURE_LIMITS), dtype=np.float32
+        )
+        return bool(np.any(np.abs(state) > limits))
+
+    def _is_within_success_tolerance(self, state: np.ndarray) -> bool:
+        tolerances = np.asarray(
+            self.metadata.get("success_tolerances", self.SUCCESS_TOLERANCES),
+            dtype=np.float32,
+        )
+        return bool(np.all(np.abs(state) < tolerances))
 
     @classmethod
     def create(
@@ -210,9 +202,9 @@ class HumanoidGetUpSystem(BaseSystem):
         max_path_length: Optional[int] = None,
         use_manifold: bool = False,
         **kwargs,
-    ) -> "HumanoidGetUpSystem":
+    ) -> "CartpolePyBulletSystem":
         """
-        Factory method to create a HumanoidGetUpSystem with sensible defaults.
+        Factory method to create a CartpolePyBulletSystem with sensible defaults.
 
         Args:
             stride: Stride for trajectory sampling
@@ -223,7 +215,7 @@ class HumanoidGetUpSystem(BaseSystem):
             **kwargs: Additional arguments passed to __init__
 
         Returns:
-            HumanoidGetUpSystem instance
+            CartpolePyBulletSystem instance
         """
         return cls(
             stride=stride,
@@ -239,25 +231,25 @@ class HumanoidGetUpSystem(BaseSystem):
         cls,
         config: Dict[str, Any],
         **kwargs,
-    ) -> "HumanoidGetUpSystem":
+    ) -> "CartpolePyBulletSystem":
         """
-        Create a HumanoidGetUpSystem from a config dictionary.
+        Create a CartpolePyBulletSystem from a config dictionary.
 
         This method extracts training parameters (stride, history_length, etc.)
         from the config while using system defaults for state space properties.
 
         Args:
-            config: Configuration dictionary
+            config: Configuration dictionary (typically from config files)
             **kwargs: Additional arguments to override config values
 
         Returns:
-            HumanoidGetUpSystem instance
+            CartpolePyBulletSystem instance
         """
         method_config = config.get("flow_matching", config.get("diffusion", {}))
         use_manifold = "manifold" in method_config and method_config.get("manifold") is not None
 
         return cls(
-            name=kwargs.get("name", "humanoid_get_up"),
+            name=kwargs.get("name", "cartpole_pybullet"),
             stride=kwargs.get("stride", method_config.get("stride", 1)),
             history_length=kwargs.get(
                 "history_length", method_config.get("history_length", 1)
@@ -266,7 +258,6 @@ class HumanoidGetUpSystem(BaseSystem):
                 "horizon_length", method_config.get("horizon_length", 31)
             ),
             max_path_length=kwargs.get("max_path_length"),
-            height_threshold=kwargs.get("height_threshold", 0.8),
             use_manifold=kwargs.get("use_manifold", use_manifold),
             normalizer=kwargs.get("normalizer"),
             metadata=kwargs.get("metadata"),

@@ -5,7 +5,7 @@ This config contains only training/model setup. System-specific details
 (state limits, preprocessing) are handled by PendulumLQRSystem.
 """
 from genMoPlan.utils import watch, get_experiments_path
-from genMoPlan.utils.systems import PendulumLQRSystem
+from genMoPlan.systems import PendulumLQRSystem
 
 
 # -------------------------------- System -------------------------------- #
