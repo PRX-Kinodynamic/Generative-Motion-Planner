@@ -5,9 +5,10 @@ from torch import nn
 import torch
 
 from genMoPlan.models.temporal.base import TemporalModel
+from genMoPlan.datasets.constants import MASK_ON, MASK_OFF
 
 from ..helpers import (
-    Losses, 
+    Losses,
     LossWeightTypes,
 )
 
@@ -32,6 +33,7 @@ class GenerativeModel(nn.Module, ABC):
         loss_weight_type="none",
         loss_weight_kwargs={},
         use_history_mask: bool = False,
+        use_mask_loss_weighting: bool = False,  # NEW: Apply loss weighting by mask
         **kwargs,
     ):
         super().__init__()
@@ -48,6 +50,7 @@ class GenerativeModel(nn.Module, ABC):
         self.has_local_query = has_local_query
         self.manifold = manifold
         self.use_mask = bool(use_history_mask)
+        self.use_mask_loss_weighting = bool(use_mask_loss_weighting)
         if loss_weight_type is not None and loss_weight_type != "none":
             loss_weights = LossWeightTypes[loss_weight_type](history_length=history_length, prediction_length=prediction_length, **loss_weight_kwargs)
             self.register_buffer("loss_weights", loss_weights)
@@ -77,6 +80,37 @@ class GenerativeModel(nn.Module, ABC):
         Must be implemented by subclasses.
         """
         raise NotImplementedError("Subclasses must implement this method")
+
+    def apply_mask_loss_weighting(self, loss: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        """
+        Apply mask-based loss weighting.
+
+        When use_mask_loss_weighting is True, this zeros out loss for masked (invalid) positions
+        so that only valid positions contribute to the loss.
+
+        Args:
+            loss: [batch, seq, state_dim] or [batch, seq] element-wise loss tensor
+            mask: [batch, seq] mask tensor where MASK_OFF=1 (valid) and MASK_ON=0 (masked)
+
+        Returns:
+            weighted_loss: Loss tensor with masked positions zeroed out
+
+        Mask convention:
+            - MASK_OFF (1.0): Position is valid - contributes to loss (weight = 1)
+            - MASK_ON (0.0): Position is masked - does not contribute to loss (weight = 0)
+        """
+        if not self.use_mask_loss_weighting or mask is None:
+            return loss
+
+        # Expand mask to match loss dimensions
+        if loss.dim() == 3 and mask.dim() == 2:
+            # [batch, seq, 1] -> broadcast over state_dim
+            weight = mask.unsqueeze(-1)
+        else:
+            weight = mask
+
+        # Apply weighting: masked positions get weight=0 (MASK_ON), valid get weight=1 (MASK_OFF)
+        return loss * weight
 
     @abstractmethod
     @torch.no_grad()

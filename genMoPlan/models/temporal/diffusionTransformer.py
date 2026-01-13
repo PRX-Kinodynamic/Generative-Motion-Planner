@@ -4,6 +4,7 @@ import einops
 
 from genMoPlan.models.helpers import SinusoidalPosEmb
 from genMoPlan.models.temporal.base import TemporalModel
+from genMoPlan.datasets.constants import MASK_ON, MASK_OFF
 
 
 class GlobalQueryProcessor(nn.Module):
@@ -351,9 +352,11 @@ class TemporalDiffusionTransformer(TemporalModel):
             global_query (torch.Tensor): [batch, global_query_length, global_query_dim] or None
             local_query (torch.Tensor): [batch, prediction_length, local_query_dim] or None
             time (torch.Tensor): [batch] or [batch, ...] timestep indices
-            mask (torch.Tensor): [batch, prediction_length] binary mask in {0,1}. If provided,
-                positions with 0 replace the entire input vector at that timestep with a learned
-                scalar token before input projection.
+            mask (torch.Tensor): [batch, prediction_length] binary mask in {0,1}.
+                Mask convention:
+                - MASK_OFF (1.0): Position is UNMASKED (valid/present) - keeps original x value
+                - MASK_ON (0.0): Position is MASKED (missing/padded) - replaced with learned mask_token
+                Formula: x = mask * x + (1 - mask) * mask_token
 
         Returns:
             torch.Tensor: Output shape [batch, prediction_length, output_dim].
@@ -380,6 +383,7 @@ class TemporalDiffusionTransformer(TemporalModel):
             mask = mask.to(dtype=x.dtype, device=x.device)
             mask_unsq = mask.unsqueeze(-1)
             masked_fill_value = self.mask_token.to(dtype=x.dtype, device=x.device).view(1, 1, 1)
+            # Apply mask: MASK_OFF (1) keeps x, MASK_ON (0) uses mask_token
             x = mask_unsq * x + (1.0 - mask_unsq) * masked_fill_value
 
         x = self.input_projection(x)

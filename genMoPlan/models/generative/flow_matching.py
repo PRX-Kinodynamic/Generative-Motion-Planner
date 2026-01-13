@@ -16,6 +16,7 @@ except ImportError:
 
 from genMoPlan.models.helpers import apply_conditioning
 from genMoPlan.utils.arrays import torch_randn_like
+from genMoPlan.datasets.constants import MASK_ON, MASK_OFF
 
 from .base import GenerativeModel, Sample
 
@@ -135,7 +136,10 @@ class FlowMatching(GenerativeModel):
 
     def compute_loss(self, x_target, cond, global_query=None, local_query=None, seed=None, mask=None):
         """
-        Choose a random timestep t and calculate the loss for the model
+        Choose a random timestep t and calculate the loss for the model.
+
+        When use_mask_loss_weighting is True, masked positions (MASK_ON=0) will
+        have zero loss contribution, focusing training on valid positions only.
         """
         if getattr(self, "use_mask", False) and mask is None:
             raise ValueError("Mask expected by FlowMatching but not provided")
@@ -151,7 +155,7 @@ class FlowMatching(GenerativeModel):
         t = torch.rand(batch_size, device=x_target.device, generator=generator)
 
         x_noisy = torch_randn_like(x_target, generator=generator)
-        
+
         apply_conditioning(x_noisy, cond)
 
         if self.manifold is not None:
@@ -160,12 +164,34 @@ class FlowMatching(GenerativeModel):
 
         path_sample = self.path.sample(t=t, x_0=x_noisy, x_1=x_target)
 
+        # Compute combined loss weights (combining temporal weights and mask weights)
+        combined_loss_weights = self.loss_weights
+
+        if self.use_mask_loss_weighting and mask is not None:
+            # Create mask weights: MASK_OFF (1) = count in loss, MASK_ON (0) = ignore
+            # Expand mask from [batch, seq] to [batch, seq, 1] for broadcasting
+            mask_weights = mask.unsqueeze(-1).to(dtype=x_target.dtype, device=x_target.device)
+
+            if combined_loss_weights is not None:
+                # Combine with existing loss weights
+                combined_loss_weights = combined_loss_weights * mask_weights
+            else:
+                combined_loss_weights = mask_weights
+
         loss, info = self.loss_fn(
             self.vector_field(x=path_sample.x_t, t=path_sample.t, global_query=global_query, local_query=local_query, mask=mask),
             path_sample.dx_t,
             ignore_manifold=True,
-            loss_weights=self.loss_weights,
+            loss_weights=combined_loss_weights,
         )
+
+        # Add mask statistics to info
+        if self.use_mask_loss_weighting and mask is not None:
+            num_masked = (mask == MASK_ON).sum().item()
+            num_valid = (mask == MASK_OFF).sum().item()
+            info["num_masked_positions"] = num_masked
+            info["num_valid_positions"] = num_valid
+            info["percent_masked"] = 100.0 * num_masked / mask.numel() if mask.numel() > 0 else 0.0
 
         return loss, info
 
