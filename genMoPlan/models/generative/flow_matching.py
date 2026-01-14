@@ -300,11 +300,11 @@ class FlowMatching(GenerativeModel):
         pred_final_state = sol.trajectories[..., -1, :]
         target_final_state = x[..., -1, :]
 
-        final_state_loss, _ = self.loss_fn(pred_final_state, target_final_state)
+        final_horizon_step_loss, _ = self.loss_fn(pred_final_state, target_final_state)
 
         loss, info = self.loss_fn(sol.trajectories, x, loss_weights=self.loss_weights)
 
-        info["final_state_loss"] = final_state_loss
+        info["final_horizon_step_loss"] = final_horizon_step_loss
 
         return loss, info
 
@@ -354,4 +354,3 @@ class FlowMatching(GenerativeModel):
         final_state_loss, final_state_info = self.loss_fn(pred_final_states, target_final_states)
 
         return final_state_loss, final_state_info
-

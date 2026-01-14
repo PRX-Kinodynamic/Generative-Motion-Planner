@@ -146,6 +146,11 @@ base = {
         "val_dataset_size": 100,
         "val_batch_size": max_batch_size,
         "val_seed": 42,
+        # -------------------------------evaluation--------------------------#
+        "perform_final_state_evaluation": True,
+        "eval_freq": 10,  # epochs
+        "eval_batch_size": max_batch_size,
+        "eval_seed": 42,
     },
     "diffusion": {
         "method_name": "diffusion",

@@ -15,7 +15,7 @@ DataSample = namedtuple(
     "trajectory conditions global_query local_query mask",
     defaults=(EMPTY_DICT, NONE_TENSOR, NONE_TENSOR, NONE_TENSOR),
 )
-FinalStateDataSample = namedtuple("FinalStateDataSample", "histories final_states", defaults=(NONE_TENSOR, NONE_TENSOR))
+FinalStateDataSample = namedtuple("FinalStateDataSample", "histories final_states max_path_length", defaults=(NONE_TENSOR, NONE_TENSOR, None))
 
 
 def _make_indices_for_single_trajectory(i, traj_length, actual_history_length, actual_horizon_length, stride, use_history_padding, use_horizon_padding, use_history_mask, history_padding_anywhere, history_padding_k):

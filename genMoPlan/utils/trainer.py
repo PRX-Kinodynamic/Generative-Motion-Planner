@@ -589,17 +589,17 @@ class Trainer(object):
 
                 self.train_one_epoch()
 
-                val, final_state_val = self.validate()
+                val, final_horizon_step_loss = self.validate()
 
                 if self.perform_final_state_evaluation and (epoch % self.eval_freq) == 0:
-                    final_state_eval_loss, final_state_eval_loss_infos = self.evaluate_final_states()
+                    final_rollout_step_loss, final_rollout_infos = self.evaluate_final_states()
 
-                    if final_state_eval_loss_infos:
-                        infos_str = ' | ' + ' | '.join([f'{key}: {val:8.4f}' for key, val in final_state_eval_loss_infos.items()])
+                    if final_rollout_infos:
+                        infos_str = ' | ' + ' | '.join([f'{key}: {val:8.4f}' for key, val in final_rollout_infos.items()])
                     else:
                         infos_str = ''
 
-                    print(f"Final state evaluation:\n{infos_str}")
+                    print(f"Final Rollout Evaluation:\n{infos_str}")
 
                     
 
@@ -622,7 +622,7 @@ class Trainer(object):
 
                     window_gain = sum(recent_improvements)
                     print(
-                        f"Validation: {val:8.6f} | New val best (Δ={old_best - val:+.6g} raw | Final state dist: {final_state_val:8.6f} | "
+                        f"Validation: {val:8.6f} | New val best (Δ={old_best - val:+.6g}) | Final Horizon Step Loss: {final_horizon_step_loss:8.6f} | "
                         f"Val window_gain={window_gain:.3g} over last ≤{self.patience} epoch(s); "
                         f"target ≥ {self.min_delta})"
                     )
@@ -630,7 +630,7 @@ class Trainer(object):
                     recent_improvements.append(0.0)
                     window_gain = sum(recent_improvements)
                     print(
-                        f"Validation: {val:8.6f} | Best: {best_val:8.6f} (epoch {best_epoch}) | Final state dist: {final_state_val:8.6f} | "
+                        f"Validation: {val:8.6f} | Best: {best_val:8.6f} (epoch {best_epoch}) | Final Horizon Step Loss: {final_horizon_step_loss:8.6f} | "
                         f"Val window_gain={window_gain:.3g} over last ≤{self.patience} epoch(s); target ≥ {self.min_delta}"
                     )
 
@@ -669,11 +669,22 @@ class Trainer(object):
         infos = defaultdict(lambda : 0.0)
         num_batches = 0
 
+        # Get max_path_length from eval_data or validation_kwargs
+        max_path_length = eval_data.max_path_length
+        if max_path_length is None:
+            max_path_length = self.validation_kwargs.get('max_path_length')
+
         for i in range(0, num_evals, self.val_batch_size):
             batch_start_states = eval_data.histories[i:i+self.val_batch_size]
             batch_final_states = eval_data.final_states[i:i+self.val_batch_size]
-            loss, infos = self.model.evaluate_final_states(batch_start_states, batch_final_states, get_conditions=self.val_dataset.get_conditions, **self.validation_kwargs)
-            eval_losses['final_state_loss'] += loss.item()
+            loss, infos = self.model.evaluate_final_states(
+                batch_start_states,
+                batch_final_states,
+                get_conditions=self.val_dataset.get_conditions,
+                max_path_length=max_path_length,
+                **self.validation_kwargs
+            )
+            eval_losses['final_rollout_step_loss'] += loss.item()
             for key, val in infos.items():
                 infos[key] += val
             num_batches += 1
@@ -681,14 +692,14 @@ class Trainer(object):
         final_infos = {}
 
         for key in infos.keys():
-            final_infos['final_state_' + key] = infos[key] / num_batches
-        eval_losses['final_state_loss'] /= num_batches
+            final_infos['final_rollout_' + key] = infos[key] / num_batches
+        eval_losses['final_rollout_step_loss'] /= num_batches
         eval_losses.update(final_infos)
 
         if store_losses:
             self.add_eval_losses(eval_losses)
 
-        return eval_losses.get('final_state_loss', float('inf')), eval_losses
+        return eval_losses.get('final_rollout_step_loss', float('inf')), eval_losses
             
     def validate(self, store_losses: bool = True):
         if self.dataloader_val is None:
@@ -699,9 +710,9 @@ class Trainer(object):
         with torch.no_grad(), self.swap_to_ema():
             for i, batch in enumerate(self.dataloader_val):
                 batch = batch_to_device(batch, device=self.device)
-        
+
                 loss, infos = self.model.validation_loss(*batch, **self.validation_kwargs)
-                
+
                 # Check if loss is valid
                 if torch.isnan(loss) or torch.isinf(loss):
                     print(f"Warning: Invalid validation loss detected (NaN/Inf) at batch {i}. Skipping.")
@@ -717,13 +728,13 @@ class Trainer(object):
                         val_losses[key] += value_item
                     else:
                         print(f"Warning: Skipping non-scalar info value for key '{key}' in validation: {value_item}")
-        
+
         for key in val_losses.keys():
             val_losses[key] /= num_batches
 
         if store_losses:
             self.add_val_losses(val_losses)
 
-        return val_losses.get('val_loss', float('inf')), val_losses.get('final_state_loss', float('inf'))  # Use .get for safety
+        return val_losses.get('val_loss', float('inf')), val_losses.get('final_horizon_step_loss', float('inf'))  # Use .get for safety
 
             

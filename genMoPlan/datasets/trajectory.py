@@ -218,6 +218,7 @@ class TrajectoryDataset(torch.utils.data.Dataset):
 
         histories = []
         final_states = []
+        max_path_length = 0
 
         for trajectory in trajectories:
             history = trajectory[:history_end:self.stride]
@@ -226,10 +227,13 @@ class TrajectoryDataset(torch.utils.data.Dataset):
             histories.append(history)
             final_states.append(final_state)
 
+            # Track the maximum path length across all trajectories
+            max_path_length = max(max_path_length, len(trajectory))
+
         histories = torch.stack(histories)
         final_states = torch.stack(final_states)
 
-        return FinalStateDataSample(histories=histories, final_states=final_states)
+        return FinalStateDataSample(histories=histories, final_states=final_states, max_path_length=max_path_length)
 
     def get_conditions(self, history):
         """
