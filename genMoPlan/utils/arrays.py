@@ -32,6 +32,9 @@ def to_device(x, device=DEVICE):
         return x.to(device)
     elif type(x) is dict:
         return {k: to_device(v, device) for k, v in x.items()}
+    elif x is None or isinstance(x, (int, float, str, bool)):
+        # Scalar values and None don't need to be moved to device
+        return x
     else:
         raise RuntimeError(f"Unrecognized type in `to_device`: {type(x)}")
 
