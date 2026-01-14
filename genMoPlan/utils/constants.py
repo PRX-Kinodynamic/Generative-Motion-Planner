@@ -13,7 +13,7 @@ Where:
 - mask=0 (MASK_ON): uses learned mask_token
 
 Usage:
-    from genMoPlan.datasets.constants import MASK_ON, MASK_OFF
+    from genMoPlan.utils.constants import MASK_ON, MASK_OFF
 
     # Create mask with all positions valid
     mask = torch.full((seq_len,), MASK_OFF)

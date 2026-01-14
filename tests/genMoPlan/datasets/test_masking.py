@@ -12,7 +12,7 @@ import pytest
 import torch
 import numpy as np
 
-from genMoPlan.datasets.constants import (
+from genMoPlan.utils.constants import (
     MASK_ON,
     MASK_OFF,
     PADDING_STRATEGY_ZEROS,

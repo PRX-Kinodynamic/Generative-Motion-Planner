@@ -16,7 +16,7 @@ except ImportError:
 
 from genMoPlan.models.helpers import apply_conditioning
 from genMoPlan.utils.arrays import torch_randn_like
-from genMoPlan.datasets.constants import MASK_ON, MASK_OFF
+from genMoPlan.utils.constants import MASK_ON, MASK_OFF
 
 from .base import GenerativeModel, Sample
 

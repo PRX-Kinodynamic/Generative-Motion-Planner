@@ -5,7 +5,7 @@ from torch import nn
 import torch
 
 from genMoPlan.models.temporal.base import TemporalModel
-from genMoPlan.datasets.constants import MASK_ON, MASK_OFF
+from genMoPlan.utils.constants import MASK_ON, MASK_OFF
 
 from ..helpers import (
     Losses,

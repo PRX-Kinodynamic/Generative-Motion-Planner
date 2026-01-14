@@ -6,7 +6,7 @@ from tqdm import tqdm
 
 from genMoPlan.datasets.normalization import *
 from genMoPlan.datasets.utils import EMPTY_DICT, apply_padding, make_indices, DataSample, NONE_TENSOR, FinalStateDataSample
-from genMoPlan.datasets.constants import (
+from genMoPlan.utils.constants import (
     MASK_ON,
     MASK_OFF,
     PADDING_STRATEGY_ZEROS,

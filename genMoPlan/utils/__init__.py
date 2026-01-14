@@ -4,6 +4,7 @@ from argparse import Namespace
 
 from .arrays import *
 from .class_loader import *
+from .constants import *
 from .data_processing import *
 from .json_args import *
 from .manifold import *
