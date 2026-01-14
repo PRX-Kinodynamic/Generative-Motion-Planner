@@ -7,7 +7,18 @@ from genMoPlan.systems.base import BaseSystem, Outcome
 from genMoPlan.utils.data_processing import (
     handle_angle_wraparound,
     augment_unwrapped_state_data,
+    shift_to_zero_center_angles,
 )
+
+
+def _create_pendulum_manifold():
+    """Create the manifold for pendulum (lazy import to avoid circular deps)."""
+    from flow_matching.utils.manifolds import FlatTorus, Euclidean, Product
+
+    return Product(
+        input_dim=2,
+        manifolds=[(FlatTorus(), 1), (Euclidean(), 1)],
+    )
 
 
 class PendulumLQRSystem(BaseSystem):
@@ -42,10 +53,12 @@ class PendulumLQRSystem(BaseSystem):
         maxs: Optional[List[float]] = None,
         state_names: Optional[List[str]] = None,
         angle_indices: Optional[List[int]] = None,
+        manifold: Optional[Any] = None,
         valid_outcomes: Optional[Sequence[Outcome]] = None,
         normalizer: Optional[Normalizer] = None,
         metadata: Optional[Dict[str, Any]] = None,
         success_threshold: float = 0.075,
+        use_manifold: bool = False,
     ):
         # Set defaults from class constants
         if max_path_length is None:
@@ -62,6 +75,10 @@ class PendulumLQRSystem(BaseSystem):
             # Pendulum trajectories are ultimately classified as success or failure;
             # INVALID can be used by higher-level analysis when labels are uncertain.
             valid_outcomes = [Outcome.SUCCESS, Outcome.FAILURE, Outcome.INVALID]
+
+        # Create manifold if using manifold-based flow matching
+        if use_manifold and manifold is None:
+            manifold = _create_pendulum_manifold()
 
         # Set up metadata
         metadata = metadata or {}
@@ -84,6 +101,10 @@ class PendulumLQRSystem(BaseSystem):
         post_process_fns = []
         post_process_fn_kwargs = {}
 
+        # Manifold unwrap functions for manifold-based flow matching
+        manifold_unwrap_fns = [shift_to_zero_center_angles]
+        manifold_unwrap_kwargs = {"angle_indices": angle_indices}
+
         super().__init__(
             name=name,
             state_dim=state_dim,
@@ -95,10 +116,13 @@ class PendulumLQRSystem(BaseSystem):
             maxs=maxs,
             state_names=state_names,
             angle_indices=angle_indices,
+            manifold=manifold,
             trajectory_preprocess_fns=trajectory_preprocess_fns,
             preprocess_kwargs=preprocess_kwargs,
             post_process_fns=post_process_fns,
             post_process_fn_kwargs=post_process_fn_kwargs,
+            manifold_unwrap_fns=manifold_unwrap_fns,
+            manifold_unwrap_kwargs=manifold_unwrap_kwargs,
             valid_outcomes=valid_outcomes,
             normalizer=normalizer,
             metadata=metadata,
@@ -154,6 +178,7 @@ class PendulumLQRSystem(BaseSystem):
         history_length: int = 1,
         horizon_length: int = 31,
         max_path_length: Optional[int] = None,
+        use_manifold: bool = False,
         **kwargs,
     ) -> "PendulumLQRSystem":
         """
@@ -164,6 +189,7 @@ class PendulumLQRSystem(BaseSystem):
             history_length: Length of history conditioning
             horizon_length: Length of prediction horizon
             max_path_length: Maximum trajectory length (uses default if None)
+            use_manifold: Whether to use manifold-based flow matching
             **kwargs: Additional arguments passed to __init__
 
         Returns:
@@ -174,6 +200,7 @@ class PendulumLQRSystem(BaseSystem):
             history_length=history_length,
             horizon_length=horizon_length,
             max_path_length=max_path_length,
+            use_manifold=use_manifold,
             **kwargs,
         )
 
@@ -182,6 +209,7 @@ class PendulumLQRSystem(BaseSystem):
         cls,
         config: Dict[str, Any],
         dataset_size: Optional[str] = None,
+        use_manifold: bool = False,
         **kwargs,
     ) -> "PendulumLQRSystem":
         """
@@ -193,12 +221,19 @@ class PendulumLQRSystem(BaseSystem):
         Args:
             config: Configuration dictionary
             dataset_size: Optional dataset size indicator (e.g., "5k" or "50k")
+            use_manifold: Whether to use manifold-based flow matching
             **kwargs: Additional arguments to override config values
 
         Returns:
             PendulumLQRSystem instance
         """
         method_config = config.get("flow_matching", config.get("diffusion", {}))
+
+        # Detect use_manifold from config if not explicitly provided
+        if not use_manifold:
+            use_manifold = method_config.get("use_manifold", False) or (
+                "manifold" in method_config and method_config.get("manifold") is not None
+            )
 
         name = kwargs.get("name", "pendulum_lqr")
         if dataset_size:
@@ -214,6 +249,7 @@ class PendulumLQRSystem(BaseSystem):
                 "horizon_length", method_config.get("horizon_length", 31)
             ),
             max_path_length=kwargs.get("max_path_length"),
+            use_manifold=kwargs.get("use_manifold", use_manifold),
             normalizer=kwargs.get("normalizer"),
             metadata=kwargs.get("metadata"),
         )

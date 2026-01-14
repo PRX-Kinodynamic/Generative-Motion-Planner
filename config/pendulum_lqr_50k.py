@@ -4,6 +4,7 @@ Configuration for Pendulum LQR (50k dataset variant).
 This config contains only training/model setup. System-specific details
 (state limits, preprocessing) are handled by PendulumLQRSystem.
 """
+
 import socket
 import numpy as np
 
@@ -15,6 +16,7 @@ max_batch_size = int(1e6) if is_arrakis else int(266e3)
 
 
 # -------------------------------- System -------------------------------- #
+
 
 def get_system(config=None, use_manifold: bool = False, **kwargs):
     """
@@ -32,18 +34,33 @@ def get_system(config=None, use_manifold: bool = False, **kwargs):
         config = base
 
     method_config = config.get("flow_matching", config.get("diffusion", {}))
+
+    # Detect use_manifold from method config if not explicitly provided
+    if not use_manifold:
+        use_manifold = method_config.get("use_manifold", False)
+
     return PendulumLQRSystem(
         name="pendulum_lqr_50k",
         stride=kwargs.get("stride", method_config.get("stride", 1)),
-        history_length=kwargs.get("history_length", method_config.get("history_length", 1)),
-        horizon_length=kwargs.get("horizon_length", method_config.get("horizon_length", 31)),
-        **{k: v for k, v in kwargs.items() if k not in ["stride", "history_length", "horizon_length"]},
+        history_length=kwargs.get(
+            "history_length", method_config.get("history_length", 1)
+        ),
+        horizon_length=kwargs.get(
+            "horizon_length", method_config.get("horizon_length", 31)
+        ),
+        use_manifold=kwargs.get("use_manifold", use_manifold),
+        **{
+            k: v
+            for k, v in kwargs.items()
+            if k not in ["stride", "history_length", "horizon_length", "use_manifold"]
+        },
     )
 
 
 # Create default system for backward compatibility with scripts that import configs directly
-_default_system = PendulumLQRSystem.create(stride=1, history_length=1, horizon_length=31)
-
+_default_system = PendulumLQRSystem.create(
+    stride=1, history_length=1, horizon_length=31
+)
 
 
 # -------------------------------- Experiment naming -------------------------------- #
