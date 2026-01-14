@@ -313,3 +313,27 @@ def shift_to_zero_center_angles(
 
 def compute_actual_length(length, stride):
     return 1 + (length - 1) * stride
+
+
+def warn_stride_horizon_length(horizon_length, stride, context=""):
+    """
+    Warn if horizon_length=1 with stride>1, since stride has no effect in this case.
+
+    When horizon_length=1, actual_horizon = 1 + (1-1)*stride = 1 regardless of stride.
+    This means each inference step only advances by 1 timestep, which may be unexpected.
+
+    Args:
+        horizon_length: Number of horizon points
+        stride: Temporal spacing between sampled points
+        context: Optional string describing where this warning originates (e.g., "TrajectoryDataset")
+    """
+    import warnings
+    if horizon_length == 1 and stride > 1:
+        ctx = f" in {context}" if context else ""
+        warnings.warn(
+            f"horizon_length=1 with stride={stride}{ctx}: stride has no effect on horizon "
+            f"when horizon_length=1. Each inference step will advance by only 1 timestep. "
+            f"Consider increasing horizon_length if you want stride to affect prediction steps.",
+            UserWarning,
+            stacklevel=3,
+        )

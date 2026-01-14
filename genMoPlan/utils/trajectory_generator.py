@@ -13,9 +13,9 @@ import torch
 from tqdm import tqdm
 
 from genMoPlan.datasets.normalization import get_normalizer, Normalizer
-from genMoPlan.datasets.constants import MASK_ON, MASK_OFF
+from genMoPlan.utils.constants import MASK_ON, MASK_OFF
 from genMoPlan.utils.arrays import to_torch
-from genMoPlan.utils.data_processing import compute_actual_length
+from genMoPlan.utils.data_processing import compute_actual_length, warn_stride_horizon_length
 from genMoPlan.utils.model import load_model, get_normalizer_params
 from genMoPlan.utils.params import load_inference_params
 from genMoPlan.utils.progress import ETAIterator
@@ -222,6 +222,8 @@ class TrajectoryGenerator:
         self.horizon_length = int(getattr(self.model_args, "horizon_length"))
         self.stride = int(getattr(self.model_args, "stride", 1))
 
+        warn_stride_horizon_length(self.horizon_length, self.stride, context="TrajectoryGenerator")
+
         if self.method_name and self.method_name in self.inference_params:
             self.conditional_sample_kwargs = dict(
                 self.inference_params[self.method_name]
@@ -233,6 +235,7 @@ class TrajectoryGenerator:
         self.history_length = int(self.system.history_length)
         self.horizon_length = int(self.system.horizon_length)
         self.stride = int(self.system.stride)
+        warn_stride_horizon_length(self.horizon_length, self.stride, context="TrajectoryGenerator (system override)")
         if getattr(self.system, "max_path_length", None) is not None:
             self.max_path_length = int(self.system.max_path_length)
         # Keep inference params in sync for downstream consumers and saving
