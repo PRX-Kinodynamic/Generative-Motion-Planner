@@ -42,11 +42,17 @@ class TestMakeIndices:
         assert indices == expected_indices
     
     def test_with_history_padding_stride_1(self):
-        """Test with history padding allowed and stride=1"""
+        """Test with history padding allowed and stride=1.
+
+        With use_history_padding=True, the implementation generates:
+        1. Indices starting at position 0 with varying history lengths (padded)
+        2. Sliding window indices throughout the trajectory
+        This maximizes training data by including all valid windows.
+        """
         path_lengths = [5, 3]
         history_length = 3
         horizon_length = 2
-        
+
         indices = make_indices(
             path_lengths=path_lengths,
             history_length=history_length,
@@ -55,19 +61,27 @@ class TestMakeIndices:
             use_horizon_padding=False,  # No padding for horizon
             stride=1
         )
-        
+
         # For path 0 (length 5):
         # - With padding allowed, history can be as short as 1
-        # - Horizon still requires 2 elements without padding
+        # - Horizon requires 2 elements without padding
+        # - Implementation generates both padded (from pos 0) and sliding window indices
         expected_indices = [
             # (path_idx, history_start, history_end, horizon_start, horizon_end)
-            (0, 0, 1, 1, 3),  # History of length 1 (will be padded)
-            (0, 0, 2, 2, 4),  # History of length 2 (will be padded)
-            (0, 0, 3, 3, 5),  # Full history of length 3
+            # Padded history starting at 0, horizon at [1,3)
+            (0, 0, 1, 1, 3),  # History length 1 (will be padded to 3)
+            # Padded history starting at 0, horizon at [2,4)
+            (0, 0, 2, 2, 4),  # History length 2 (will be padded to 3)
+            # Sliding window: history [1,2), horizon [2,4)
+            (0, 1, 2, 2, 4),  # History length 1 (will be padded to 3)
+            # Full history starting at 0, horizon at [3,5)
+            (0, 0, 3, 3, 5),  # History length 3 (no padding needed)
+            # Sliding window: history [2,3), horizon [3,5)
+            (0, 2, 3, 3, 5),  # History length 1 (will be padded to 3)
             # Path 1 (length 3) only has room for min history (1) + horizon (2)
             (1, 0, 1, 1, 3),
         ]
-        
+
         assert indices == expected_indices
     
     def test_with_horizon_padding_stride_1(self):

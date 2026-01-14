@@ -12,7 +12,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from genMoPlan.datasets.constants import MASK_ON, MASK_OFF
+from genMoPlan.utils.constants import MASK_ON, MASK_OFF
 
 
 class TestTemporalDiffusionTransformerMasking:

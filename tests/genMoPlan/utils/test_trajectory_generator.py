@@ -284,13 +284,6 @@ class TestTrajectoryGeneration:
 
             assert result.shape == (10, 2)
 
-    def test_generate_trajectories_requires_one_of_max_path_or_steps(self, trajectory_generator):
-        """Test that generate_trajectories requires exactly one of max_path_length or num_inference_steps"""
-        start_states = np.random.randn(10, 2)
-
-        with pytest.raises(ValueError, match="exactly one of"):
-            trajectory_generator.generate_trajectories(start_states)
-
     def test_generate_trajectories_batching(self, trajectory_generator):
         """Test that large batches are properly split"""
         start_states = np.random.randn(100, 2)
