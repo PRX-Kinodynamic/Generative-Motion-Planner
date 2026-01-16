@@ -18,16 +18,19 @@ class GenerativeModel(nn.Module, ABC):
     def __init__(
         self,
         model,
-        input_dim,
-        output_dim,
-        prediction_length,
-        history_length,
+        system=None,  # System instance - provides system-specific config
+        # System-specific params (for backward compatibility when system=None)
+        input_dim=None,
+        output_dim=None,
+        action_indices=None,
+        manifold=None,
+        # Model-specific params
+        prediction_length=None,
+        history_length=None,
         clip_denoised=False,
         loss_type="l2",
-        action_indices=None,
         has_global_query=False,
         has_local_query=False,
-        manifold=None,
         val_seed=42,
         loss_weight_type="none",
         loss_weight_kwargs={},
@@ -39,8 +42,18 @@ class GenerativeModel(nn.Module, ABC):
 
         self.model: TemporalModel = model
 
-        self.input_dim = input_dim
-        self.output_dim = output_dim
+        # Extract parameters from system if provided
+        if system is not None:
+            self.input_dim = system.state_dim
+            self.output_dim = system.state_dim
+            action_indices = getattr(system, 'action_indices', None)
+            manifold = system.manifold
+        else:
+            # Backward compatibility: use directly provided params
+            if input_dim is None or output_dim is None:
+                raise ValueError("input_dim and output_dim must be provided when system is None")
+            self.input_dim = input_dim
+            self.output_dim = output_dim
         self.clip_denoised = clip_denoised
         self.history_length = history_length
         self.prediction_length = prediction_length

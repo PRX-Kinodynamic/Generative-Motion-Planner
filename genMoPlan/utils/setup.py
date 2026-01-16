@@ -291,9 +291,9 @@ class Parser(Tap):
                 f"[ utils/setup ] Not using overrides | config: {args.config} | variation: base"
             )
 
-        # Inject system-provided configuration values
+        # Create system instance
         if hasattr(module, 'get_system'):
-            print(f"[ utils/setup ] Injecting system-provided configuration")
+            print(f"[ utils/setup ] Creating system instance")
 
             # Get use_manifold flag from method config if it exists
             use_manifold = params.get('use_manifold', False)
@@ -307,25 +307,15 @@ class Parser(Tap):
                 horizon_length=params.get('horizon_length', 31),
             )
 
-            # Get system-provided configs
-            system_dataset_config = system.get_dataset_config(use_manifold=use_manifold)
+            # Store the system instance - dataset and gen_model will extract what they need
+            params['system'] = system
+
+            # For backward compatibility with inference scripts that access these directly,
+            # still inject a few commonly used values
             system_inference_config = system.get_inference_config()
-
-            # Inject dataset config values
-            params.update(system_dataset_config)
-
-            # Inject inference config values into params (for backward compatibility)
-            # These are typically used during inference
-            if 'inference' not in getattr(module, "base"):
-                params['inference'] = {}
-
-            # Store inference config separately but also make top-level keys available
             for key, value in system_inference_config.items():
                 if key not in params:  # Don't override training params
                     params[key] = value
-
-            # Store the system instance for later use (e.g., by trainer for state_names)
-            params['system'] = system
 
         self._dict = {}
         for key, val in params.items():

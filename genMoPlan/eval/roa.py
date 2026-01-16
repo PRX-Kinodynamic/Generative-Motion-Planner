@@ -145,9 +145,9 @@ class Classifier:
         self.max_path_length = self.inference_params["max_path_length"]
         self.final_state_directory = self.inference_params["final_state_directory"]
 
-        if self.trajectory_generator is not None:
+        if self._trajectory_generator is not None:
             self.conditional_sample_kwargs = dict(
-                self.trajectory_generator.conditional_sample_kwargs or {}
+                self._trajectory_generator.conditional_sample_kwargs or {}
             )
         else:
             self.conditional_sample_kwargs = (
@@ -183,13 +183,15 @@ class Classifier:
 
     @property
     def timestamp(self):
-        if self.trajectory_generator is None:
+        if self._trajectory_generator is None:
             return None
-        return self.trajectory_generator.timestamp
+        return self._trajectory_generator.timestamp
 
     @timestamp.setter
     def timestamp(self, value):
-        self.trajectory_generator.timestamp = value
+        if self._trajectory_generator is None:
+            raise ValueError("Cannot set timestamp without a trajectory generator (model_path required)")
+        self._trajectory_generator.timestamp = value
 
     # === Helper methods ===
 

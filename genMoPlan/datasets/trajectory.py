@@ -29,15 +29,18 @@ class TrajectoryDataset(torch.utils.data.Dataset):
     def __init__(
         self,
         dataset: str,
-        read_trajectory_fn: Callable,
-        horizon_length: int = 31,
-        history_length: int = 1,
-        stride: int = 1,
+        system = None,  # System instance - provides system-specific config
+        # System-specific params (for backward compatibility when system=None)
+        read_trajectory_fn: Callable = None,
+        horizon_length: int = None,
+        history_length: int = None,
+        stride: int = None,
         observation_dim: int = None,
-        trajectory_normalizer: str = "LimitsNormalizer",
-        normalizer_params: dict = {},
-        trajectory_preprocess_fns: tuple = (),
-        preprocess_kwargs: dict = {},
+        trajectory_normalizer: str = None,
+        normalizer_params: dict = None,
+        trajectory_preprocess_fns: tuple = None,
+        preprocess_kwargs: dict = None,
+        # Training-specific params
         dataset_size: int = None,
         fnames: Optional[List[str]] = None,
         use_horizon_padding: bool = False,
@@ -57,15 +60,18 @@ class TrajectoryDataset(torch.utils.data.Dataset):
 
         Args:
             dataset: Name of the dataset
-            read_trajectory_fn: Function to read trajectory files
-            horizon_length: Length of the horizon (future) portion
-            history_length: Length of the history (past) portion
-            stride: Stride for subsampling trajectories
-            observation_dim: Dimension of observations
-            trajectory_normalizer: Normalizer class name
-            normalizer_params: Parameters for the normalizer
-            trajectory_preprocess_fns: Preprocessing functions to apply
-            preprocess_kwargs: Kwargs for preprocessing functions
+            system: System instance providing system-specific configuration.
+                If provided, system-specific params are extracted from it.
+                If None, params must be provided directly (backward compatibility).
+            read_trajectory_fn: Function to read trajectory files (if system=None)
+            horizon_length: Length of the horizon (future) portion (if system=None)
+            history_length: Length of the history (past) portion (if system=None)
+            stride: Stride for subsampling trajectories (if system=None)
+            observation_dim: Dimension of observations (if system=None)
+            trajectory_normalizer: Normalizer class name (if system=None)
+            normalizer_params: Parameters for the normalizer (if system=None)
+            trajectory_preprocess_fns: Preprocessing functions to apply (if system=None)
+            preprocess_kwargs: Kwargs for preprocessing functions (if system=None)
             dataset_size: Maximum number of trajectories to load
             fnames: Specific filenames to load
             use_horizon_padding: Whether to pad horizon if too short
@@ -74,22 +80,46 @@ class TrajectoryDataset(torch.utils.data.Dataset):
             history_padding_anywhere: Allow padding at any position
             history_padding_k: Configuration for k values in padding
             history_mask_padding_value: Padding strategy when using history masking
-                - "zeros" (default): Pad with zeros
-                - "first": Pad with first available state
-                - "last": Pad with last available state
-                - "mirror": Pad with reflected sequence
             history_padding_strategy: Padding strategy when using history padding
-                - "first" (default): Pad with first available state
-                - "last": Pad with last available state
-                - "zeros": Pad with zeros
-                - "mirror": Pad with reflected sequence
             is_history_conditioned: Whether history is used for conditioning
             is_validation: Whether this is a validation dataset
             perform_final_state_evaluation: Whether to prepare final state evaluation data
         """
-        self.horizon_length = horizon_length
-        self.history_length = history_length
-        self.stride = stride
+        # Extract parameters from system if provided
+        if system is not None:
+            # System-provided values
+            self.horizon_length = system.horizon_length
+            self.history_length = system.history_length
+            self.stride = system.stride
+            self.observation_dim = system.state_dim
+            read_trajectory_fn = system.read_trajectory
+            trajectory_preprocess_fns = system.trajectory_preprocess_fns
+            preprocess_kwargs = system.preprocess_kwargs
+
+            # Get normalizer params from system
+            # Determine if we should use manifold normalization
+            use_manifold = system.manifold is not None
+            normalizer_params = system.get_normalizer_params(use_manifold=use_manifold)
+
+            # Use default normalizer
+            if trajectory_normalizer is None:
+                trajectory_normalizer = "LimitsNormalizer"
+        else:
+            # Backward compatibility: use directly provided params
+            self.horizon_length = horizon_length if horizon_length is not None else 31
+            self.history_length = history_length if history_length is not None else 1
+            self.stride = stride if stride is not None else 1
+            self.observation_dim = observation_dim
+
+            # Set defaults for optional params
+            if trajectory_normalizer is None:
+                trajectory_normalizer = "LimitsNormalizer"
+            if normalizer_params is None:
+                normalizer_params = {}
+            if trajectory_preprocess_fns is None:
+                trajectory_preprocess_fns = ()
+            if preprocess_kwargs is None:
+                preprocess_kwargs = {}
         self.use_horizon_padding = use_horizon_padding
         self.use_history_padding = use_history_padding
         self.use_history_mask = use_history_mask

@@ -1,10 +1,58 @@
 import argparse
+import importlib
 import os
 import re
 import pickle
 from typing import Optional
 import torch
 import genMoPlan.utils as utils
+
+
+def _reconstruct_system(model_args):
+    """
+    Reconstruct the system instance from saved model_args.
+
+    This allows us to inject the system into ClassLoaders that were pickled
+    before the system-based architecture was introduced.
+    """
+    dataset = getattr(model_args, "dataset", None)
+    if dataset is None:
+        print("[ scripts/resume_train_trajectory ] Warning: No dataset in model_args, cannot reconstruct system")
+        return None
+
+    # Load the config module
+    config_module_name = f"config.{dataset.replace('-', '_')}"
+    try:
+        config_module = importlib.import_module(config_module_name)
+    except ImportError as e:
+        print(f"[ scripts/resume_train_trajectory ] Warning: Could not import config {config_module_name}: {e}")
+        return None
+
+    # Check if config has get_system function
+    if not hasattr(config_module, "get_system"):
+        print(f"[ scripts/resume_train_trajectory ] Warning: Config {config_module_name} has no get_system() function")
+        return None
+
+    # Extract parameters needed to create system
+    use_manifold = getattr(model_args, "use_manifold", False)
+    stride = getattr(model_args, "stride", 1)
+    history_length = getattr(model_args, "history_length", 1)
+    horizon_length = getattr(model_args, "horizon_length", 31)
+
+    # Create system
+    try:
+        system = config_module.get_system(
+            config=getattr(config_module, "base"),
+            use_manifold=use_manifold,
+            stride=stride,
+            history_length=history_length,
+            horizon_length=horizon_length,
+        )
+        print(f"[ scripts/resume_train_trajectory ] Reconstructed system: {system.name}")
+        return system
+    except Exception as e:
+        print(f"[ scripts/resume_train_trajectory ] Warning: Failed to create system: {e}")
+        return None
 
 
 def _select_checkpoint_name(experiments_path: str, model_state_name: Optional[str]) -> str:
@@ -67,6 +115,9 @@ def main():
     utils.set_device(device)
     print(f"Using device: {utils.DEVICE}\n")
 
+    # Reconstruct system for backward compatibility with old pickled loaders
+    system = _reconstruct_system(model_args)
+
     dataset_loader_pkl = os.path.join(experiments_path, "dataset_config.pkl")
     ml_model_loader_pkl = os.path.join(experiments_path, "ml_model_config.pkl")
     gen_model_loader_pkl = os.path.join(experiments_path, "gen_model_config.pkl")
@@ -76,6 +127,17 @@ def main():
     ml_model_class_loader = _load_classloader(ml_model_loader_pkl)
     gen_model_class_loader = _load_classloader(gen_model_loader_pkl)
     trainer_class_loader = _load_classloader(trainer_loader_pkl)
+
+    # Inject system into loaders if it was reconstructed
+    # This provides backward compatibility with old pickled loaders that don't have system
+    if system is not None:
+        # Only inject if not already present (newer pickles might have it)
+        if "system" not in train_dataset_class_loader._dict:
+            train_dataset_class_loader._dict["system"] = system
+            print("[ scripts/resume_train_trajectory ] Injected system into dataset loader")
+        if "system" not in gen_model_class_loader._dict:
+            gen_model_class_loader._dict["system"] = system
+            print("[ scripts/resume_train_trajectory ] Injected system into gen_model loader")
 
     print(f"[ scripts/resume_train_trajectory ] Loading dataset")
     train_dataset = train_dataset_class_loader()

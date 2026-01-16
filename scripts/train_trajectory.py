@@ -21,23 +21,14 @@ train_dataset_class_loader = utils.ClassLoader(
     args.loader,
     savepath=(args.savepath, "dataset_config.pkl"),
     dataset=args.dataset,
-    horizon_length=args.horizon_length,
-    history_length=args.history_length,
-    stride=args.stride,
-    observation_dim=args.observation_dim,
-    trajectory_normalizer=args.trajectory_normalizer,
-    plan_normalizer=args.plan_normalizer,
-    normalizer_params=args.normalizer_params,
-    trajectory_preprocess_fns=args.trajectory_preprocess_fns,
-    plan_preprocess_fns=args.plan_preprocess_fns,
-    preprocess_kwargs=args.preprocess_kwargs,
+    system=args.system,  # System provides all system-specific config
+    # Training-specific params only
     dataset_size=args.train_dataset_size,
     use_history_padding=args.use_history_padding,
     use_horizon_padding=args.use_horizon_padding,
     use_history_mask=args.use_history_mask,
     use_plan=args.use_plan,
     is_history_conditioned=args.is_history_conditioned,
-    read_trajectory_fn=args.read_trajectory_fn,
     **args.safe_get("dataset_kwargs", {}),
 )
 
@@ -48,16 +39,8 @@ if args.val_dataset_size is not None:
     val_dataset_class_loader = utils.ClassLoader(
         args.loader,
         dataset=args.dataset,
-        horizon_length=args.horizon_length,
-        history_length=args.history_length,
-        stride=args.stride,
-        observation_dim=args.observation_dim,
-        trajectory_normalizer=args.trajectory_normalizer,
-        plan_normalizer=args.plan_normalizer,
-        normalizer_params=args.normalizer_params,
-        trajectory_preprocess_fns=args.trajectory_preprocess_fns,
-        plan_preprocess_fns=args.plan_preprocess_fns,
-        preprocess_kwargs=args.preprocess_kwargs,
+        system=args.system,  # System provides all system-specific config
+        # Training-specific params only
         dataset_size=args.val_dataset_size,
         use_history_padding=args.use_history_padding,
         use_horizon_padding=args.use_horizon_padding,
@@ -65,7 +48,6 @@ if args.val_dataset_size is not None:
         use_plan=args.use_plan,
         is_history_conditioned=args.is_history_conditioned,
         is_validation=True,
-        read_trajectory_fn=args.read_trajectory_fn,
         perform_final_state_evaluation=args.perform_final_state_evaluation,
         **args.safe_get("dataset_kwargs", {}),
     )
@@ -112,16 +94,15 @@ ml_model_class_loader = utils.ClassLoader(
 gen_model_class_loader = utils.ClassLoader(
     args.method,
     savepath=(args.savepath, "gen_model_config.pkl"),
-    input_dim=observation_dim,
-    output_dim=observation_dim,
+    system=args.system,  # System provides system-specific config
+    # Model-specific params
     prediction_length=args.horizon_length + args.history_length,
     history_length=args.history_length,
     clip_denoised=args.clip_denoised,
     loss_type=args.loss_type,
-    action_indices=args.action_indices,
     has_local_query=args.has_local_query,
     has_global_query=args.has_global_query,
-    manifold=manifold,
+    manifold=manifold,  # Keep manifold for backward compat (may be wrapped)
     val_seed=args.val_seed,
     loss_weight_type=args.loss_weight_type,
     loss_weight_kwargs=args.loss_weight_kwargs,
