@@ -139,12 +139,16 @@ def plot_trajectories(
 
 
 def get_fnames_to_load(
-    dataset_path, trajectories_path=None, num_trajs=None, load_reverse=False
+    dataset_path,
+    trajectories_path=None,
+    num_trajs=None,
+    load_reverse=False,
+    shuffled_indices_fname="shuffled_indices.txt",
 ):
     if trajectories_path is None:
         trajectories_path = path.join(dataset_path, "trajectories")
 
-    indices_fpath = path.join(dataset_path, "shuffled_indices.txt")
+    indices_fpath = path.join(dataset_path, shuffled_indices_fname)
 
     if path.exists(indices_fpath):
         with open(indices_fpath, "r") as f:
