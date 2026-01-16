@@ -39,6 +39,7 @@ class PendulumLQRSystem(BaseSystem):
     DEFAULT_MAX_PATH_LENGTH = 502
     DEFAULT_ANGLE_INDICES = [0]
     DEFAULT_STATE_NAMES = ["theta", "theta_dot"]
+    SUCCESS_THRESHOLD = 0.075
 
     def __init__(
         self,
@@ -57,7 +58,7 @@ class PendulumLQRSystem(BaseSystem):
         valid_outcomes: Optional[Sequence[Outcome]] = None,
         normalizer: Optional[Normalizer] = None,
         metadata: Optional[Dict[str, Any]] = None,
-        success_threshold: float = 0.075,
+        success_threshold: float = 0.1,
         use_manifold: bool = False,
     ):
         # Set defaults from class constants
@@ -138,7 +139,7 @@ class PendulumLQRSystem(BaseSystem):
 
         Success if pendulum is near upright (theta ~= 0) with low velocity.
         """
-        threshold = self.metadata.get("success_threshold", 0.075)
+        threshold = self.metadata.get("success_threshold", self.SUCCESS_THRESHOLD)
 
         theta = self._wrap_angle(state[0])
         theta_dot = state[1]
@@ -151,6 +152,33 @@ class PendulumLQRSystem(BaseSystem):
 
         return Outcome.FAILURE
 
+    def evaluate_final_states(self, states: np.ndarray) -> np.ndarray:
+        """
+        Evaluate a batch of final states using vectorized operations.
+
+        Args:
+            states: Array of shape (batch_size, state_dim) containing final states
+
+        Returns:
+            np.ndarray of shape (batch_size,) with Outcome values
+        """
+        threshold = self.metadata.get("success_threshold", self.SUCCESS_THRESHOLD)
+
+        # Vectorized angle wrapping: wrap to [-pi, pi]
+        theta = ((states[:, 0] + np.pi) % (2 * np.pi)) - np.pi
+        theta_dot = states[:, 1]
+
+        # Vectorized distance computation
+        upright_distance = np.sqrt(theta**2 + theta_dot**2)
+
+        # Vectorized outcome assignment
+        outcomes = np.where(
+            upright_distance <= threshold,
+            Outcome.SUCCESS.value,
+            Outcome.FAILURE.value
+        )
+        return outcomes.astype(np.int32)
+
     def should_terminate(
         self, state: np.ndarray, t: int, traj_so_far: Optional[np.ndarray]
     ):
@@ -159,7 +187,7 @@ class PendulumLQRSystem(BaseSystem):
 
         Terminate early if pendulum reaches upright position and stabilizes.
         """
-        threshold = self.metadata.get("success_threshold", 0.075)
+        threshold = self.metadata.get("success_threshold", self.SUCCESS_THRESHOLD)
 
         theta = self._wrap_angle(state[0])
         theta_dot = state[1]

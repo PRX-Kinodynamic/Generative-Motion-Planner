@@ -402,6 +402,23 @@ class BaseSystem:
     def evaluate_final_state(self, state: np.ndarray) -> Outcome:
         raise NotImplementedError
 
+    def evaluate_final_states(self, states: np.ndarray) -> np.ndarray:
+        """
+        Evaluate a batch of final states using vectorized operations.
+
+        Subclasses must implement this method with proper vectorization.
+        Do NOT use Python loops - use NumPy vectorized operations.
+
+        Args:
+            states: Array of shape (batch_size, state_dim) containing final states
+
+        Returns:
+            np.ndarray of shape (batch_size,) with dtype int32 containing Outcome values
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement evaluate_final_states with vectorized operations"
+        )
+
     # ------------------------------------------------------------------ #
     # Serialization helpers
     # ------------------------------------------------------------------ #

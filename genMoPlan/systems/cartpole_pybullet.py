@@ -158,6 +158,41 @@ class CartpolePyBulletSystem(BaseSystem):
 
         return Outcome.INVALID
 
+    def evaluate_final_states(self, states: np.ndarray) -> np.ndarray:
+        """
+        Evaluate a batch of final states using vectorized operations.
+
+        Args:
+            states: Array of shape (batch_size, state_dim) containing final states
+
+        Returns:
+            np.ndarray of shape (batch_size,) with Outcome values
+        """
+        # Handle batched states - ensure 2D
+        if states.ndim == 1:
+            states = states[np.newaxis, :]
+
+        failure_limits = np.asarray(
+            self.metadata.get("failure_limits", self.FAILURE_LIMITS), dtype=np.float32
+        )
+        success_tolerances = np.asarray(
+            self.metadata.get("success_tolerances", self.SUCCESS_TOLERANCES), dtype=np.float32
+        )
+
+        # Vectorized bounds check: any state element exceeds failure limits
+        abs_states = np.abs(states)
+        is_out_of_bounds = np.any(abs_states > failure_limits, axis=1)
+
+        # Vectorized success check: all state elements within success tolerances
+        is_within_success = np.all(abs_states < success_tolerances, axis=1)
+
+        # Assign outcomes: FAILURE > SUCCESS > INVALID (priority order)
+        outcomes = np.full(states.shape[0], Outcome.INVALID.value, dtype=np.int32)
+        outcomes[is_within_success] = Outcome.SUCCESS.value
+        outcomes[is_out_of_bounds] = Outcome.FAILURE.value  # Overrides SUCCESS if both true
+
+        return outcomes
+
     def should_terminate(
         self, state: np.ndarray, t: int, traj_so_far: Optional[np.ndarray]
     ):

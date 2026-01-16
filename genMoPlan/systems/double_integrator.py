@@ -170,6 +170,29 @@ class DoubleIntegrator1DSystem(BaseSystem):
 
         return Outcome.FAILURE
 
+    def evaluate_final_states(self, states: np.ndarray) -> np.ndarray:
+        """
+        Evaluate a batch of final states using vectorized operations.
+
+        Args:
+            states: Array of shape (batch_size, state_dim) containing final states
+
+        Returns:
+            np.ndarray of shape (batch_size,) with Outcome values
+        """
+        threshold = self.metadata.get("success_threshold", 0.1)
+
+        # Vectorized norm computation
+        state_norms = np.linalg.norm(states, axis=1)
+
+        # Vectorized outcome assignment
+        outcomes = np.where(
+            state_norms <= threshold,
+            Outcome.SUCCESS.value,
+            Outcome.FAILURE.value
+        )
+        return outcomes.astype(np.int32)
+
     def should_terminate(
         self, state: np.ndarray, t: int, traj_so_far: Optional[np.ndarray]
     ):

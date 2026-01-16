@@ -183,6 +183,33 @@ class HumanoidGetUpSystem(BaseSystem):
 
         return Outcome.FAILURE
 
+    def evaluate_final_states(self, states: np.ndarray) -> np.ndarray:
+        """
+        Evaluate a batch of final states using vectorized operations.
+
+        Args:
+            states: Array of shape (batch_size, state_dim) containing final states
+
+        Returns:
+            np.ndarray of shape (batch_size,) with Outcome values
+        """
+        height_threshold = self.metadata.get("height_threshold", 0.8)
+        height_index = self.metadata.get("height_index", 2)
+
+        # Vectorized height check
+        if states.shape[1] > height_index:
+            heights = states[:, height_index]
+            outcomes = np.where(
+                heights >= height_threshold,
+                Outcome.SUCCESS.value,
+                Outcome.FAILURE.value
+            )
+        else:
+            # All failures if state doesn't have height index
+            outcomes = np.full(states.shape[0], Outcome.FAILURE.value)
+
+        return outcomes.astype(np.int32)
+
     def should_terminate(
         self, state: np.ndarray, t: int, traj_so_far: Optional[np.ndarray]
     ):
