@@ -164,6 +164,7 @@ trainer_class_loader = utils.ClassLoader(
     eval_batch_size=args.eval_batch_size,
     eval_seed=args.eval_seed,
     perform_final_state_evaluation=args.perform_final_state_evaluation,
+    system=args.safe_get("system", None),
 )
 
 # # -----------------------------------------------------------------------------#

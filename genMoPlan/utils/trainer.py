@@ -159,6 +159,7 @@ class Trainer(object):
         eval_batch_size: int = 32,
         eval_seed: int = 42,
         perform_final_state_evaluation: bool = False,
+        system = None,
     ):
         super().__init__()
         self.model = model
@@ -188,7 +189,7 @@ class Trainer(object):
         self.eval_batch_size = eval_batch_size
         self.eval_seed = eval_seed
         self.perform_final_state_evaluation = perform_final_state_evaluation
-
+        self.system = system
 
         self.num_steps_per_epoch = max(ceil(len(train_dataset) / (batch_size * gradient_accumulate_every)), 
         min_num_steps_per_epoch)
@@ -556,7 +557,7 @@ class Trainer(object):
                     infos_str = ' | ' + ' | '.join([f'{key}: {val:8.4f}' for key, val in info_items])
                 else:
                     infos_str = ''
-                print(f'{self.step}: {train_losses["train_loss"]:8.6f}{infos_str} | t: {timer():8.4f}', flush=True)
+                print(f'    Step {self.step}: train_loss={train_losses["train_loss"]:8.6f}{infos_str}  (t={timer():8.3f}s)', flush=True)
 
             self.step += 1
 
@@ -569,7 +570,10 @@ class Trainer(object):
 
         recent_improvements = deque(maxlen=self.patience)
 
-        print(f"\nTraining for {self.num_epochs} epochs\n")
+        print(f"\n{'='*60}")
+        print(f"Training for {self.num_epochs} epochs")
+        print(f"Experiment: {self.exp_name}")
+        print(f"{'='*60}\n")
 
         try:
             for epoch in range(1, self.num_epochs + 1):
@@ -580,33 +584,54 @@ class Trainer(object):
                 if self.step >= planned_total_steps:
                     print(f"Reached planned total steps ({planned_total_steps}); stopping.")
                     break
-                # Update learning rate if scheduler is enabled
+
+                # Print epoch header
+                print(f"\n{'-'*60}")
                 if self.lr_scheduler is not None:
                     current_lr = self.optimizer.param_groups[0]['lr']
-                    print(f"Epoch {epoch}/{self.num_epochs} | LR: {current_lr:.6e} | {self.exp_name}")
+                    print(f"Epoch {epoch}/{self.num_epochs}  |  LR: {current_lr:.2e}")
                 else:
-                    print(f"Epoch {epoch}/{self.num_epochs} | {self.exp_name}")
+                    print(f"Epoch {epoch}/{self.num_epochs}")
+                print(f"{'-'*60}")
 
                 self.train_one_epoch()
 
-                val, final_horizon_step_loss = self.validate()
+                val, val_losses = self.validate()
 
+                # Print validation results
+                print(f"\n  Validation Results:")
+                print(f"    Normalized trajectory MSE:   {val:.6f}")
+                if 'unnorm_val_mae' in val_losses:
+                    print(f"    Unnormalized trajectory MAE: {val_losses['unnorm_val_mae']:.6f}")
+                    # Print per-dim MAE if available
+                    state_names = self.system.state_names if self.system is not None else None
+                    if state_names is not None:
+                        per_dim_str = ", ".join([f"{name}: {val_losses.get(f'unnorm_val_mae_{name}', 0):.4f}" for name in state_names if f'unnorm_val_mae_{name}' in val_losses])
+                        if per_dim_str:
+                            print(f"      Per-dim: {per_dim_str}")
+                if 'unnorm_final_horizon_step_mae' in val_losses:
+                    print(f"    Final horizon step MAE:      {val_losses['unnorm_final_horizon_step_mae']:.6f}")
+                    if state_names is not None:
+                        per_dim_str = ", ".join([f"{name}: {val_losses.get(f'unnorm_final_horizon_step_mae_{name}', 0):.4f}" for name in state_names if f'unnorm_final_horizon_step_mae_{name}' in val_losses])
+                        if per_dim_str:
+                            print(f"      Per-dim: {per_dim_str}")
+
+                # Final rollout evaluation
                 if self.perform_final_state_evaluation and (epoch % self.eval_freq) == 0:
-                    final_rollout_step_loss, final_rollout_infos = self.evaluate_final_states()
+                    final_rollout_mae, final_rollout_infos = self.evaluate_final_states()
 
-                    if final_rollout_infos:
-                        infos_str = ' | ' + ' | '.join([f'{key}: {val:8.4f}' for key, val in final_rollout_infos.items()])
-                    else:
-                        infos_str = ''
-
-                    print(f"Final Rollout Evaluation:\n{infos_str}")
-
-                    
+                    print(f"\n  Final Rollout Evaluation (MAE, unnormalized):")
+                    print(f"    Final state MAE: {final_rollout_mae:.6f}")
+                    if state_names is not None:
+                        per_dim_str = ", ".join([f"{name}: {final_rollout_infos.get(f'final_rollout_mae_{name}', 0):.4f}" for name in state_names if f'final_rollout_mae_{name}' in final_rollout_infos])
+                        if per_dim_str:
+                            print(f"      Per-dim: {per_dim_str}")
 
                 if not (val == val) or val in (float('inf'), -float('inf')):
-                    print(f"Validation returned non-finite value ({val}); stopping early.")
+                    print(f"\n  WARNING: Validation returned non-finite value ({val}); stopping early.")
                     break
 
+                # Track improvement
                 improvement = 0.0
                 if best_val != float('inf') and abs(best_val) > 1e-12:
                     improvement = (best_val - val) / abs(best_val)
@@ -621,18 +646,15 @@ class Trainer(object):
                     self.save_model('best')
 
                     window_gain = sum(recent_improvements)
-                    print(
-                        f"Validation: {val:8.6f} | New val best (Δ={old_best - val:+.6g}) | Final Horizon Step Loss: {final_horizon_step_loss:8.6f} | "
-                        f"Val window_gain={window_gain:.3g} over last ≤{self.patience} epoch(s); "
-                        f"target ≥ {self.min_delta})"
-                    )
+                    print(f"\n  >>> NEW BEST (epoch {epoch}) <<<")
+                    print(f"      Improved by: {old_best - val:+.6g}")
                 else:
                     recent_improvements.append(0.0)
                     window_gain = sum(recent_improvements)
-                    print(
-                        f"Validation: {val:8.6f} | Best: {best_val:8.6f} (epoch {best_epoch}) | Final Horizon Step Loss: {final_horizon_step_loss:8.6f} | "
-                        f"Val window_gain={window_gain:.3g} over last ≤{self.patience} epoch(s); target ≥ {self.min_delta}"
-                    )
+                    print(f"\n  Best: {best_val:.6f} (epoch {best_epoch})")
+
+                # Early stopping info
+                print(f"  Early stopping: window_gain={window_gain:.4g} / target={self.min_delta}")
 
                 if (epoch % self.save_freq) == 0:
                     self.save_model(f"state_{epoch}_epochs")
@@ -641,33 +663,42 @@ class Trainer(object):
                     if len(recent_improvements) == self.patience:
                         window_gain = sum(recent_improvements)
                         if window_gain < self.min_delta:
-                            print(
-                                f"Early stopping: cumulative gain over the last {self.patience} epochs "
-                                f"is {window_gain:.3g} < required {self.min_delta}. "
-                                f"Best @ epoch {best_epoch} with val={best_val:8.6f}"
-                            )
+                            print(f"\n{'='*60}")
+                            print(f"EARLY STOPPING at epoch {epoch}")
+                            print(f"  Window gain ({window_gain:.4g}) < target ({self.min_delta})")
+                            print(f"  Best: epoch {best_epoch} with MSE={best_val:.6f}")
+                            print(f"{'='*60}")
                             break
             else:
-                print(f"Finished all epochs. Best @ epoch {best_epoch} with val={best_val:8.6f}")
+                print(f"\n{'='*60}")
+                print(f"Completed all {self.num_epochs} epochs")
+                print(f"  Best: epoch {best_epoch} with MSE={best_val:.6f}")
+                print(f"{'='*60}")
 
             self.save_model("final")
 
         except KeyboardInterrupt:
-            print("Training interrupted by user.")
+            print("\n\nTraining interrupted by user.")
             self.save_model("interrupted")
             if reraise_keyboard_interrupt:
                 raise
-        
+
         self.save_losses()
-        print(f"\nTraining complete. Best validation loss: {best_val:.6f}")
+        print(f"\n{'='*60}")
+        print(f"Training Complete")
+        print(f"  Best validation MSE: {best_val:.6f} (epoch {best_epoch})")
+        print(f"{'='*60}\n")
 
     def evaluate_final_states(self, store_losses: bool = True):
         eval_data = batch_to_device(self.val_dataset.eval_data, device=self.device)
         num_evals = eval_data.final_states.shape[0]
 
         eval_losses = defaultdict(lambda : 0.0)
-        infos = defaultdict(lambda : 0.0)
+        per_dim_accumulators = {}  # Accumulate per-dim vectors separately
         num_batches = 0
+
+        # Get normalizer for unnormalized loss computation
+        normalizer = getattr(self.val_dataset, 'normalizer', None)
 
         # Get max_path_length from eval_data or validation_kwargs
         max_path_length = eval_data.max_path_length
@@ -677,41 +708,62 @@ class Trainer(object):
         for i in range(0, num_evals, self.val_batch_size):
             batch_start_states = eval_data.histories[i:i+self.val_batch_size]
             batch_final_states = eval_data.final_states[i:i+self.val_batch_size]
-            loss, infos = self.model.evaluate_final_states(
+            loss, batch_infos = self.model.evaluate_final_states(
                 batch_start_states,
                 batch_final_states,
                 get_conditions=self.val_dataset.get_conditions,
                 max_path_length=max_path_length,
+                normalizer=normalizer,
                 **self.validation_kwargs
             )
-            eval_losses['final_rollout_step_loss'] += loss.item()
-            for key, val in infos.items():
-                infos[key] += val
+            eval_losses['final_rollout_mae'] += loss.item()
+            for key, val in batch_infos.items():
+                # Handle per-dim vectors (numpy arrays)
+                if isinstance(val, np.ndarray):
+                    if key not in per_dim_accumulators:
+                        per_dim_accumulators[key] = np.zeros_like(val)
+                    per_dim_accumulators[key] += val
+                else:
+                    value_item = val.item() if hasattr(val, 'item') else val
+                    if isinstance(value_item, (float, int)):
+                        eval_losses[key] += value_item
             num_batches += 1
 
-        final_infos = {}
+        # Average scalar losses
+        for key in list(eval_losses.keys()):
+            eval_losses[key] /= num_batches
 
-        for key in infos.keys():
-            final_infos['final_rollout_' + key] = infos[key] / num_batches
-        eval_losses['final_rollout_step_loss'] /= num_batches
-        eval_losses.update(final_infos)
+        # Average and expand per-dim vectors
+        state_names = self.system.state_names if self.system is not None else None
+        for key, vec in per_dim_accumulators.items():
+            vec = vec / num_batches
+            # Expand into named entries if state_names available
+            if state_names is not None and len(state_names) == len(vec):
+                base_key = key.replace('_per_dim', '')
+                for i, name in enumerate(state_names):
+                    eval_losses[f"final_rollout_{base_key}_{name}"] = vec[i]
 
         if store_losses:
             self.add_eval_losses(eval_losses)
 
-        return eval_losses.get('final_rollout_step_loss', float('inf')), eval_losses
+        return eval_losses.get('final_rollout_mae', float('inf')), eval_losses
             
     def validate(self, store_losses: bool = True):
         if self.dataloader_val is None:
-            return None
+            return None, {}
         val_losses = defaultdict(lambda : 0.0)  # Initialize with float 0.0
+        per_dim_accumulators = {}  # Accumulate per-dim vectors separately
         num_batches = 0
         self.model.eval()
+
+        # Get normalizer for unnormalized loss computation
+        normalizer = getattr(self.val_dataset, 'normalizer', None)
+
         with torch.no_grad(), self.swap_to_ema():
             for i, batch in enumerate(self.dataloader_val):
                 batch = batch_to_device(batch, device=self.device)
 
-                loss, infos = self.model.validation_loss(*batch, **self.validation_kwargs)
+                loss, infos = self.model.validation_loss(*batch, normalizer=normalizer, **self.validation_kwargs)
 
                 # Check if loss is valid
                 if torch.isnan(loss) or torch.isinf(loss):
@@ -722,19 +774,34 @@ class Trainer(object):
                 num_batches += 1
 
                 for key, val in infos.items():
-                    # Handle potential tensor values in infos
-                    value_item = val.item() if hasattr(val, 'item') else val
-                    if isinstance(value_item, (float, int)):
-                        val_losses[key] += value_item
+                    # Handle per-dim vectors (numpy arrays)
+                    if isinstance(val, np.ndarray):
+                        if key not in per_dim_accumulators:
+                            per_dim_accumulators[key] = np.zeros_like(val)
+                        per_dim_accumulators[key] += val
                     else:
-                        print(f"Warning: Skipping non-scalar info value for key '{key}' in validation: {value_item}")
+                        # Handle potential tensor values in infos
+                        value_item = val.item() if hasattr(val, 'item') else val
+                        if isinstance(value_item, (float, int)):
+                            val_losses[key] += value_item
 
+        # Average scalar losses
         for key in val_losses.keys():
             val_losses[key] /= num_batches
+
+        # Average and expand per-dim vectors
+        state_names = self.system.state_names if self.system is not None else None
+        for key, vec in per_dim_accumulators.items():
+            vec = vec / num_batches
+            # Expand into named entries if state_names available
+            if state_names is not None and len(state_names) == len(vec):
+                base_key = key.replace('_per_dim', '')
+                for i, name in enumerate(state_names):
+                    val_losses[f"{base_key}_{name}"] = vec[i]
 
         if store_losses:
             self.add_val_losses(val_losses)
 
-        return val_losses.get('val_loss', float('inf')), val_losses.get('final_horizon_step_loss', float('inf'))  # Use .get for safety
+        return val_losses.get('val_loss', float('inf')), val_losses
 
             

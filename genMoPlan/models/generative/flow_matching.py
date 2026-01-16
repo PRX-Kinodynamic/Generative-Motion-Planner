@@ -279,7 +279,7 @@ class FlowMatching(GenerativeModel):
     
     # ------------------------------------------ validation ------------------------------------------#
 
-    def validation_loss(self, x, cond, global_query=None, local_query=None, mask=None, **sample_kwargs):
+    def validation_loss(self, x, cond, global_query=None, local_query=None, mask=None, normalizer=None, **sample_kwargs):
         if not self.has_local_query:
             local_query = None
         if not self.has_global_query:
@@ -297,18 +297,45 @@ class FlowMatching(GenerativeModel):
             **sample_kwargs,
         )
 
-        pred_final_state = sol.trajectories[..., -1, :]
-        target_final_state = x[..., -1, :]
-
-        final_horizon_step_loss, _ = self.loss_fn(pred_final_state, target_final_state)
-
         loss, info = self.loss_fn(sol.trajectories, x, loss_weights=self.loss_weights)
 
-        info["final_horizon_step_loss"] = final_horizon_step_loss
+        # Compute unnormalized MAE losses (manifold-aware)
+        if normalizer is not None:
+            pred_np = sol.trajectories.detach().cpu().numpy()
+            target_np = x.detach().cpu().numpy()
+            pred_unnorm = normalizer.unnormalize(pred_np)
+            target_unnorm = normalizer.unnormalize(target_np)
+
+            # Convert back to tensors
+            pred_unnorm_t = torch.from_numpy(pred_unnorm).to(x.device, dtype=x.dtype)
+            target_unnorm_t = torch.from_numpy(target_unnorm).to(x.device, dtype=x.dtype)
+
+            # Full trajectory unnormalized MAE (manifold-aware): [batch, horizon, state_dim]
+            if self.manifold is not None:
+                abs_error = self.manifold.dist(pred_unnorm_t, target_unnorm_t)
+            else:
+                abs_error = torch.abs(pred_unnorm_t - target_unnorm_t)
+
+            info["unnorm_val_mae"] = abs_error.mean().item()
+            # Per-dim only if output matches state_dim (not for Sphere which returns single value)
+            if abs_error.shape[-1] == pred_unnorm_t.shape[-1]:
+                info["unnorm_val_mae_per_dim"] = abs_error.mean(dim=(0, 1)).detach().cpu().numpy()
+
+            # Final horizon step unnormalized MAE: [batch, state_dim]
+            pred_final_unnorm_t = pred_unnorm_t[:, -1, :]
+            target_final_unnorm_t = target_unnorm_t[:, -1, :]
+            if self.manifold is not None:
+                abs_error_final = self.manifold.dist(pred_final_unnorm_t, target_final_unnorm_t)
+            else:
+                abs_error_final = torch.abs(pred_final_unnorm_t - target_final_unnorm_t)
+
+            info["unnorm_final_horizon_step_mae"] = abs_error_final.mean().item()
+            if abs_error_final.shape[-1] == pred_final_unnorm_t.shape[-1]:
+                info["unnorm_final_horizon_step_mae_per_dim"] = abs_error_final.mean(dim=0).detach().cpu().numpy()
 
         return loss, info
 
-    def evaluate_final_states(self, start_states: torch.Tensor, target_final_states: torch.Tensor, global_query: torch.Tensor =None, local_query: torch.Tensor =None, max_path_length: int =None, get_conditions: Callable =None, **sample_kwargs):
+    def evaluate_final_states(self, start_states: torch.Tensor, target_final_states: torch.Tensor, global_query: torch.Tensor =None, local_query: torch.Tensor =None, max_path_length: int =None, get_conditions: Callable =None, normalizer=None, **sample_kwargs):
         """
         Evaluate the final states of the model given the start states and the target final states.
 
@@ -319,6 +346,7 @@ class FlowMatching(GenerativeModel):
             local_query: The local query to use for the model.
             max_path_length: The maximum path length to use for the model.
             get_conditions: The function to get the conditions for the model.
+            normalizer: Optional normalizer to compute unnormalized losses.
             **sample_kwargs: Additional arguments passed to the conditional sample method.
 
         Returns:
@@ -334,7 +362,7 @@ class FlowMatching(GenerativeModel):
         num_inference_steps = np.ceil((max_path_length - self.history_length) / self.prediction_length).astype(int)
 
         assert num_inference_steps > 0, "num_inference_steps must be greater than 0"
-        
+
         if not self.has_local_query:
             local_query = None
         if not self.has_global_query:
@@ -345,12 +373,42 @@ class FlowMatching(GenerativeModel):
         for _ in range(num_inference_steps):
             sol = self.conditional_sample(cond, (batch_size, self.prediction_length, self.input_dim), global_query=global_query, local_query=local_query, return_chain=False, **sample_kwargs)
 
-            final_states = sol.trajectories[:, -self.history_length:, :] 
+            final_states = sol.trajectories[:, -self.history_length:, :]
 
             cond = get_conditions(final_states) # Start states for the next horizon
 
-        pred_final_states = sol.trajectories[:, -1, :] 
+        pred_final_states = sol.trajectories[:, -1, :]
 
-        final_state_loss, final_state_info = self.loss_fn(pred_final_states, target_final_states)
+        # Compute unnormalized MAE for final state predictions (manifold-aware)
+        final_state_info = {}
+        if normalizer is not None:
+            pred_np = pred_final_states.detach().cpu().numpy()
+            target_np = target_final_states.detach().cpu().numpy()
+            pred_unnorm = normalizer.unnormalize(pred_np)
+            target_unnorm = normalizer.unnormalize(target_np)
 
-        return final_state_loss, final_state_info
+            # Convert back to tensors
+            pred_unnorm_t = torch.from_numpy(pred_unnorm).to(pred_final_states.device, dtype=pred_final_states.dtype)
+            target_unnorm_t = torch.from_numpy(target_unnorm).to(target_final_states.device, dtype=target_final_states.dtype)
+
+            # Compute manifold-aware absolute error: [batch, state_dim]
+            if self.manifold is not None:
+                abs_error = self.manifold.dist(pred_unnorm_t, target_unnorm_t)
+            else:
+                abs_error = torch.abs(pred_unnorm_t - target_unnorm_t)
+
+            final_state_mae = abs_error.mean()
+            # Per-dim only if output matches state_dim (not for Sphere which returns single value)
+            if abs_error.shape[-1] == pred_unnorm_t.shape[-1]:
+                final_state_info["mae_per_dim"] = abs_error.mean(dim=0).detach().cpu().numpy()
+        else:
+            # Fallback to normalized MAE if no normalizer provided
+            if self.manifold is not None:
+                abs_error = self.manifold.dist(pred_final_states, target_final_states)
+            else:
+                abs_error = torch.abs(pred_final_states - target_final_states)
+            final_state_mae = abs_error.mean()
+            if abs_error.shape[-1] == pred_final_states.shape[-1]:
+                final_state_info["mae_per_dim"] = abs_error.mean(dim=0).detach().cpu().numpy()
+
+        return final_state_mae, final_state_info

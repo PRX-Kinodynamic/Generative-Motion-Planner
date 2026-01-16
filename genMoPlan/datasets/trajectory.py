@@ -183,14 +183,15 @@ class TrajectoryDataset(torch.utils.data.Dataset):
 
         First, aggregate all trajectories into a single array
         Then, normalize the aggregated array
-        Then, split the normalized array back into individual trajectories. 
+        Then, split the normalized array back into individual trajectories.
         """
         if trajectory_normalizer is None:
+            self.normalizer = None
             return [
                 torch.FloatTensor(trajectory)
                 for trajectory in trajectories
             ]
-        
+
         print(f"[ datasets/trajectory ] Normalizing trajectories")
 
         all_trajectories = np.concatenate(trajectories, axis=0)
@@ -198,21 +199,24 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         if type(trajectory_normalizer) == str:
             trajectory_normalizer = eval(trajectory_normalizer)
 
-        trajectory_normalizer = trajectory_normalizer(X=trajectories, params=normalizer_params["trajectory"])
-        normed_all_trajectories = trajectory_normalizer(all_trajectories)
+        normalizer_instance = trajectory_normalizer(X=trajectories, params=normalizer_params["trajectory"])
+        normed_all_trajectories = normalizer_instance(all_trajectories)
+
+        # Store the normalizer for later use (e.g., unnormalized loss computation)
+        self.normalizer = normalizer_instance
 
         # Split all trajectories into individual trajectories
         normed_trajectories = []
         traj_start_idx = 0
         traj_lengths = [len(traj) for traj in trajectories]
-        
+
         for traj_length in traj_lengths:
             traj_end_idx = traj_start_idx + traj_length
             normed_traj = normed_all_trajectories[traj_start_idx:traj_end_idx]
-            
+
             normed_trajectories.append(torch.FloatTensor(normed_traj, device='cpu'))
             traj_start_idx = traj_end_idx
-        
+
         return normed_trajectories
 
     

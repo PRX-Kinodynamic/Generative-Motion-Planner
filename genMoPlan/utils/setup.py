@@ -324,6 +324,9 @@ class Parser(Tap):
                 if key not in params:  # Don't override training params
                     params[key] = value
 
+            # Store the system instance for later use (e.g., by trainer for state_names)
+            params['system'] = system
+
         self._dict = {}
         for key, val in params.items():
             setattr(args, key, val)
