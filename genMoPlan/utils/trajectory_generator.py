@@ -512,8 +512,8 @@ class TrajectoryGenerator:
         """
         Build or load a system if not provided. Preference:
         1) Use existing self.system.
-        2) Load from inference_params["system_state"] if present.
-        3) Construct a BaseSystem from available params/model_args.
+        2) Load from config module's get_system() if available.
+        3) Construct a BaseSystem from available params/model_args (fallback).
         """
         # Import here to avoid circular dependency
         from genMoPlan.systems import BaseSystem, Outcome
@@ -521,6 +521,48 @@ class TrajectoryGenerator:
         if self.system is not None:
             return
 
+        # Try to load the actual system class from the config module
+        if self.dataset is not None:
+            try:
+                import importlib
+                config_module = importlib.import_module(f"config.{self.dataset}")
+                if hasattr(config_module, "get_system"):
+                    # Get method-specific config for stride/history/horizon
+                    method_config = {}
+                    if hasattr(config_module, "base"):
+                        base_config = config_module.base
+                        # Try to get method-specific config based on model_args
+                        method_name = getattr(self.model_args, "method_name", None)
+                        if method_name and method_name in base_config:
+                            method_config = base_config[method_name]
+                        elif "flow_matching" in base_config:
+                            method_config = base_config["flow_matching"]
+                        elif "diffusion" in base_config:
+                            method_config = base_config["diffusion"]
+
+                    # Override with model_args values if available
+                    stride = getattr(self.model_args, "stride", method_config.get("stride", 1))
+                    history_length = getattr(self.model_args, "history_length", method_config.get("history_length", 1))
+                    horizon_length = getattr(self.model_args, "horizon_length", method_config.get("horizon_length", 15))
+
+                    self.system = config_module.get_system(
+                        stride=stride,
+                        history_length=history_length,
+                        horizon_length=horizon_length,
+                    )
+                    if self.verbose:
+                        print(
+                            f"[ utils/trajectory_generator ] Loaded system: {type(self.system).__name__}"
+                        )
+                    return
+            except Exception as exc:
+                if self.verbose:
+                    warnings.warn(
+                        f"[ utils/trajectory_generator ] Failed to load system from config: {exc}. "
+                        f"Falling back to BaseSystem."
+                    )
+
+        # Fallback: construct a generic BaseSystem from available params
         stride = self.inference_params.get(
             "stride", getattr(self.model_args, "stride", None)
         )
@@ -570,6 +612,12 @@ class TrajectoryGenerator:
             normalizer=normalizer,
             metadata={"source": "auto-built"},
         )
+
+        if self.verbose:
+            warnings.warn(
+                "[ utils/trajectory_generator ] Using fallback BaseSystem instead of "
+                "dataset-specific system class."
+            )
 
         # The constructed system is used for this run only; a JSON snapshot is
         # written alongside inference params for reproducibility when saving.
