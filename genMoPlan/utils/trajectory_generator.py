@@ -256,6 +256,7 @@ class TrajectoryGenerator:
             verbose=self.verbose,
             inference_params=self.inference_params,
             load_ema=load_ema,
+            system=self.system,  # Pass system for reduced parameter passing
         )
 
     def _initialize_method_state(self):

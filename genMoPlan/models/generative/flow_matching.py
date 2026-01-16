@@ -25,13 +25,17 @@ class FlowMatching(GenerativeModel):
     def __init__(
         self,
         model,
-        input_dim,
-        output_dim,
-        prediction_length,
-        history_length,
+        system=None,  # System instance - provides system-specific config
+        # System-specific params (for backward compatibility when system=None)
+        input_dim=None,
+        output_dim=None,
+        action_indices=None,
+        manifold=None,
+        # Model-specific params
+        prediction_length=None,
+        history_length=None,
         clip_denoised=False,
         loss_type="l2",
-        action_indices=None,
         has_local_query=False,
         has_global_query=False,
         # Flow matching specific parameters
@@ -46,13 +50,15 @@ class FlowMatching(GenerativeModel):
 
         super().__init__(
             model=model,
+            system=system,
             input_dim=input_dim,
             output_dim=output_dim,
+            action_indices=action_indices,
+            manifold=manifold,
             prediction_length=prediction_length,
             history_length=history_length,
             clip_denoised=clip_denoised,
             loss_type=loss_type,
-            action_indices=action_indices,
             has_local_query=has_local_query,
             has_global_query=has_global_query,
             **kwargs

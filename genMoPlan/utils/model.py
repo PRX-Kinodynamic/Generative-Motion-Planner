@@ -33,6 +33,7 @@ def load_model(
         verbose: bool = False,
         inference_params: dict = None,
         load_ema: bool = False,
+        system = None,  # System instance for reduced parameter passing
     ) -> Tuple[GenerativeModel, JSONArgs]:
     model_args = load_model_args(experiments_path)
     model_path = path.join(experiments_path, model_state_name)
@@ -64,21 +65,38 @@ def load_model(
         **model_args.model_kwargs,
     ).to(device)
 
-    method_model: GenerativeModel = method_class(
-        model=ml_model,
-        input_dim=model_args.observation_dim,
-        output_dim=model_args.observation_dim,
-        prediction_length=model_args.horizon_length + model_args.history_length,
-        history_length=model_args.history_length,
-        clip_denoised=model_args.clip_denoised,
-        loss_type=model_args.loss_type,
-        action_indices=model_args.action_indices,
-        has_local_query=model_args.has_local_query,
-        has_global_query=model_args.has_global_query,
-        manifold=model_args.manifold,
-        verbose=verbose,
-        **model_args.method_kwargs,
-    ).to(device)
+    # Create generative model with system parameter if available
+    if system is not None:
+        method_model: GenerativeModel = method_class(
+            model=ml_model,
+            system=system,
+            prediction_length=model_args.horizon_length + model_args.history_length,
+            history_length=model_args.history_length,
+            clip_denoised=model_args.clip_denoised,
+            loss_type=model_args.loss_type,
+            has_local_query=model_args.has_local_query,
+            has_global_query=model_args.has_global_query,
+            manifold=model_args.manifold,  # Still pass manifold for backward compat
+            verbose=verbose,
+            **model_args.method_kwargs,
+        ).to(device)
+    else:
+        # Backward compatibility: pass individual parameters when system not available
+        method_model: GenerativeModel = method_class(
+            model=ml_model,
+            input_dim=model_args.observation_dim,
+            output_dim=model_args.observation_dim,
+            prediction_length=model_args.horizon_length + model_args.history_length,
+            history_length=model_args.history_length,
+            clip_denoised=model_args.clip_denoised,
+            loss_type=model_args.loss_type,
+            action_indices=model_args.action_indices,
+            has_local_query=model_args.has_local_query,
+            has_global_query=model_args.has_global_query,
+            manifold=model_args.manifold,
+            verbose=verbose,
+            **model_args.method_kwargs,
+        ).to(device)
 
     # Load model state dict
     method_model.load_state_dict(diff_model_state, strict=False)
