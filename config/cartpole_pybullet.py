@@ -4,6 +4,7 @@ Configuration for Cartpole PyBullet environment.
 This config contains training/model setup. System-specific details
 (state limits, manifolds, preprocessing) are provided by CartpolePyBulletSystem.
 """
+
 import socket
 
 from genMoPlan.utils import watch, watch_dict, get_experiments_path
@@ -16,7 +17,9 @@ max_batch_size = int(2.5e5) if is_arrakis else int(1e4)
 # -------------------------------- System -------------------------------- #
 
 # Create default system for backward compatibility with scripts that import configs directly
-_default_system = CartpolePyBulletSystem.create(stride=1, history_length=1, horizon_length=31)
+_default_system = CartpolePyBulletSystem.create(
+    stride=1, history_length=1, horizon_length=31
+)
 
 
 def get_system(config=None, use_manifold: bool = False, **kwargs):
@@ -37,10 +40,18 @@ def get_system(config=None, use_manifold: bool = False, **kwargs):
     method_config = config.get("flow_matching", config.get("diffusion", {}))
     return CartpolePyBulletSystem(
         stride=kwargs.get("stride", method_config.get("stride", 1)),
-        history_length=kwargs.get("history_length", method_config.get("history_length", 1)),
-        horizon_length=kwargs.get("horizon_length", method_config.get("horizon_length", 31)),
+        history_length=kwargs.get(
+            "history_length", method_config.get("history_length", 1)
+        ),
+        horizon_length=kwargs.get(
+            "horizon_length", method_config.get("horizon_length", 31)
+        ),
         use_manifold=use_manifold,
-        **{k: v for k, v in kwargs.items() if k not in ["stride", "history_length", "horizon_length"]},
+        **{
+            k: v
+            for k, v in kwargs.items()
+            if k not in ["stride", "history_length", "horizon_length"]
+        },
     )
 
 
@@ -160,13 +171,13 @@ base = {
     "flow_matching": {
         "method_name": "flow_matching",
         "method": "models.generative.FlowMatching",
-        "horizon_length": 15,
+        "horizon_length": 31,
         "history_length": 1,
         "stride": 1,
         "model": "models.temporal.TemporalUnet",
         "model_kwargs": {
             "base_hidden_dim": 32,
-            "hidden_dim_mult": (1, 2, 4, 8),
+            "hidden_dim_mult": (1, 2, 4, 8), 
             "conv_kernel_size": 5,
             "attention": False,
         },

@@ -88,7 +88,7 @@ base = {
         "results_name": watch_dict(results_args_to_watch),
         "n_runs": 20,
         "batch_size": max_batch_size,
-        "outcome_prob_threshold": 0.6,
+        "outcome_prob_threshold": 0.9,
         "flow_matching": {
             "n_timesteps": 5,
             "integration_method": "euler",
@@ -141,7 +141,7 @@ base = {
         # ---------------------------- early stopping-------------------------#
         "patience": 10,
         "warmup_epochs": 5,
-        "early_stopping": True,
+        "early_stopping": False,
         # ---------------------------- validation ----------------------------#
         "val_dataset_size": 100,
         "val_batch_size": max_batch_size,
