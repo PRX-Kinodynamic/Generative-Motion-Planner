@@ -123,7 +123,6 @@ gen_model_class_loader = utils.ClassLoader(
     has_global_query=args.has_global_query,
     manifold=manifold,
     val_seed=args.val_seed,
-    state_names=args.state_names,
     loss_weight_type=args.loss_weight_type,
     loss_weight_kwargs=args.loss_weight_kwargs,
     use_history_mask=args.use_history_mask,

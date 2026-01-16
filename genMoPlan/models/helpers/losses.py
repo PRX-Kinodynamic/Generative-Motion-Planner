@@ -14,12 +14,11 @@ import genMoPlan.utils as utils
 
 
 class WeightedLoss(nn.Module):
-    def __init__(self, history_length=1, action_indices=None, manifold=None, state_names=None):
+    def __init__(self, history_length=1, action_indices=None, manifold=None):
         super().__init__()
         self.history_length = history_length
         self.action_indices = action_indices
         self.manifold = manifold
-        self.state_names = state_names
 
     def forward(self, pred, targ, ignore_manifold=False, loss_weights=None):
         """
@@ -33,19 +32,9 @@ class WeightedLoss(nn.Module):
         else:
             weighted_loss = raw_loss
 
-        if weighted_loss.ndim == 3:
-            statewise_loss = raw_loss.mean(axis=(0, 1))
-        else:
-            statewise_loss = raw_loss.mean(axis=0)
-
-        info = {}
-
-        if self.state_names is not None:
-            for i, state_name in enumerate(self.state_names):
-                info[f"{state_name}_loss"] = statewise_loss[i]
-
         mean_loss = weighted_loss.mean()
 
+        info = {}
         info["raw_loss"] = raw_loss.mean()
         info["weighted_loss"] = weighted_loss.mean()
 

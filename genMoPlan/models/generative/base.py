@@ -29,7 +29,6 @@ class GenerativeModel(nn.Module, ABC):
         has_local_query=False,
         manifold=None,
         val_seed=42,
-        state_names=None,
         loss_weight_type="none",
         loss_weight_kwargs={},
         use_history_mask: bool = False,
@@ -56,7 +55,7 @@ class GenerativeModel(nn.Module, ABC):
             self.register_buffer("loss_weights", loss_weights)
         else:
             self.loss_weights = None
-        self.loss_fn = Losses[loss_type](history_length, action_indices, manifold=manifold, state_names=state_names)
+        self.loss_fn = Losses[loss_type](history_length, action_indices, manifold=manifold)
 
         self.val_seed = val_seed
 
