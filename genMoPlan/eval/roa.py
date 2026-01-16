@@ -128,7 +128,9 @@ class Classifier:
             "outcome_prob_threshold", None
         )
         if self._outcome_prob_threshold is None:
-            self._outcome_prob_threshold = 0.0
+            self._outcome_prob_threshold = self.inference_params.get(
+                "outcome_prob_threshold", 0.0
+            )
 
         meta = getattr(self.system, "metadata", {}) or {}
         if "invalid_label" not in meta:
@@ -968,6 +970,7 @@ class Classifier:
                 labels[i] = negative_label
 
         self.predicted_labels = labels
+        self.separatrix_indices = np.where(labels == self.invalid_label)[0]
         return labels
 
     def _resolve_invalid_outcome_indices(self, specs):
