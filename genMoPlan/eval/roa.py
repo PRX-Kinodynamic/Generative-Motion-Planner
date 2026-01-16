@@ -884,12 +884,10 @@ class Classifier:
         n, n_runs, dim = self.final_states.shape
         reshaped_final_states = self.final_states.reshape(-1, dim)
 
-        labels = []
-        for fs in reshaped_final_states:
-            outcome = self.system.evaluate_final_state(fs)
-            labels.append(self.system.outcome_to_index(outcome))
+        # Use vectorized evaluation for better performance
+        outcome_values = self.system.evaluate_final_states(reshaped_final_states)
 
-        self.outcome_labels = np.array(labels, dtype=np.int32).reshape(n, n_runs)
+        self.outcome_labels = outcome_values.reshape(n, n_runs)
         return self.outcome_labels
 
     def compute_outcome_probabilities(self):

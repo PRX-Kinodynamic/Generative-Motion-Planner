@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 from .arrays import batch_to_device
 from .timer import Timer
 from .model import GenerativeModel, get_parameter_groups
+from .trajectory_generator import TrajectoryGenerator
 
 
 def cycle(dl):
@@ -124,6 +125,7 @@ class Trainer(object):
     def __init__(
         self,
         model: GenerativeModel,
+        model_args,
         train_dataset: torch.utils.data.Dataset,
         val_dataset: torch.utils.data.Dataset = None,
         validation_kwargs: dict = {},
@@ -163,6 +165,7 @@ class Trainer(object):
     ):
         super().__init__()
         self.model = model
+        self.model_args = model_args
         self.ema = EMA(ema_decay)
         self.ema_model = copy.deepcopy(self.model)
         self.update_ema_every = update_ema_every
@@ -190,6 +193,31 @@ class Trainer(object):
         self.eval_seed = eval_seed
         self.perform_final_state_evaluation = perform_final_state_evaluation
         self.system = system
+
+        # Initialize TrajectoryGenerator for final state evaluation if needed
+        if perform_final_state_evaluation:
+            if system is None:
+                raise ValueError(
+                    "Final state evaluation requires a system. "
+                    "Pass system=... or set perform_final_state_evaluation=False."
+                )
+            # Get normalizer from dataset if available
+            normalizer = getattr(train_dataset, 'normalizer', None)
+            inference_params = {
+                "max_path_length": validation_kwargs.get("max_path_length"),
+                "batch_size": eval_batch_size,
+            }
+            self._eval_generator = TrajectoryGenerator(
+                model=self.ema_model,  # Use EMA model for evaluation
+                model_args=model_args,
+                system=system,
+                inference_params=inference_params,
+                device=device,
+                verbose=False,
+                require_system=True,
+            )
+        else:
+            self._eval_generator = None
 
         self.num_steps_per_epoch = max(ceil(len(train_dataset) / (batch_size * gradient_accumulate_every)), 
         min_num_steps_per_epoch)
@@ -690,14 +718,16 @@ class Trainer(object):
         print(f"{'='*60}\n")
 
     def evaluate_final_states(self, store_losses: bool = True):
-        eval_data = batch_to_device(self.val_dataset.eval_data, device=self.device)
+        if self._eval_generator is None:
+            raise ValueError(
+                "Final state evaluation requires a TrajectoryGenerator. "
+                "Ensure perform_final_state_evaluation=True and system is provided."
+            )
+
+        eval_data = self.val_dataset.eval_data
         num_evals = eval_data.final_states.shape[0]
 
-        eval_losses = defaultdict(lambda : 0.0)
-        per_dim_accumulators = {}  # Accumulate per-dim vectors separately
-        num_batches = 0
-
-        # Get normalizer for unnormalized loss computation
+        # Get normalizer for unnormalizing data
         normalizer = getattr(self.val_dataset, 'normalizer', None)
 
         # Get max_path_length from eval_data or validation_kwargs
@@ -705,43 +735,53 @@ class Trainer(object):
         if max_path_length is None:
             max_path_length = self.validation_kwargs.get('max_path_length')
 
-        for i in range(0, num_evals, self.val_batch_size):
-            batch_start_states = eval_data.histories[i:i+self.val_batch_size]
-            batch_final_states = eval_data.final_states[i:i+self.val_batch_size]
-            loss, batch_infos = self.model.evaluate_final_states(
-                batch_start_states,
-                batch_final_states,
-                get_conditions=self.val_dataset.get_conditions,
+        # Convert histories from normalized torch tensors to unnormalized numpy arrays
+        histories_normalized_np = eval_data.histories.detach().cpu().numpy()
+        if normalizer is not None:
+            histories_unnormalized = normalizer.unnormalize(histories_normalized_np)
+        else:
+            histories_unnormalized = histories_normalized_np
+
+        # Convert target final states similarly
+        target_final_states_normalized_np = eval_data.final_states.detach().cpu().numpy()
+        if normalizer is not None:
+            target_final_states = normalizer.unnormalize(target_final_states_normalized_np)
+        else:
+            target_final_states = target_final_states_normalized_np
+
+        # Generate trajectories using TrajectoryGenerator
+        # (returns unnormalized final states)
+        with torch.no_grad():
+            result = self._eval_generator.generate(
+                start_histories=histories_unnormalized,
                 max_path_length=max_path_length,
-                normalizer=normalizer,
-                **self.validation_kwargs
+                batch_size=self.eval_batch_size,
+                return_trajectories=False,
             )
-            eval_losses['final_rollout_mae'] += loss.item()
-            for key, val in batch_infos.items():
-                # Handle per-dim vectors (numpy arrays)
-                if isinstance(val, np.ndarray):
-                    if key not in per_dim_accumulators:
-                        per_dim_accumulators[key] = np.zeros_like(val)
-                    per_dim_accumulators[key] += val
-                else:
-                    value_item = val.item() if hasattr(val, 'item') else val
-                    if isinstance(value_item, (float, int)):
-                        eval_losses[key] += value_item
-            num_batches += 1
 
-        # Average scalar losses
-        for key in list(eval_losses.keys()):
-            eval_losses[key] /= num_batches
+        predicted_final_states = result.final_states
 
-        # Average and expand per-dim vectors
-        state_names = self.system.state_names if self.system is not None else None
-        for key, vec in per_dim_accumulators.items():
-            vec = vec / num_batches
-            # Expand into named entries if state_names available
-            if state_names is not None and len(state_names) == len(vec):
-                base_key = key.replace('_per_dim', '')
+        # Compute absolute error (manifold-aware if available)
+        manifold = getattr(self.model, 'manifold', None)
+        if manifold is not None:
+            # Convert to tensors for manifold distance computation
+            pred_t = torch.from_numpy(predicted_final_states).to(self.device)
+            target_t = torch.from_numpy(target_final_states).to(self.device)
+            abs_error = manifold.dist(pred_t, target_t).cpu().numpy()
+        else:
+            abs_error = np.abs(predicted_final_states - target_final_states)
+
+        # Compute losses
+        eval_losses = {}
+        eval_losses['final_rollout_mae'] = float(abs_error.mean())
+
+        # Per-dim MAE (only if abs_error has same dimensionality as state)
+        if abs_error.ndim == 2 and abs_error.shape[-1] == predicted_final_states.shape[-1]:
+            per_dim_mae = abs_error.mean(axis=0)
+            state_names = self.system.state_names if self.system is not None else None
+            if state_names is not None and len(state_names) == len(per_dim_mae):
                 for i, name in enumerate(state_names):
-                    eval_losses[f"final_rollout_{base_key}_{name}"] = vec[i]
+                    eval_losses[f'final_rollout_mae_{name}'] = float(per_dim_mae[i])
 
         if store_losses:
             self.add_eval_losses(eval_losses)

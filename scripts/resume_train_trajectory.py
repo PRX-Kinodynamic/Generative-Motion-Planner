@@ -100,7 +100,7 @@ def main():
     ml_model = ml_model_class_loader()
     gen_model = gen_model_class_loader(ml_model)
 
-    trainer: utils.Trainer = trainer_class_loader(gen_model, train_dataset, val_dataset)
+    trainer: utils.Trainer = trainer_class_loader(gen_model, model_args, train_dataset, val_dataset)
 
     if args_cli.num_epochs is not None:
         trainer.num_epochs = int(args_cli.num_epochs)

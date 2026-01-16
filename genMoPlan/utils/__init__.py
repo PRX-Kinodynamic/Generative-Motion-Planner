@@ -6,6 +6,7 @@ from .arrays import *
 from .class_loader import *
 from .constants import *
 from .data_processing import *
+from .generation_result import *
 from .json_args import *
 from .manifold import *
 from .model import *

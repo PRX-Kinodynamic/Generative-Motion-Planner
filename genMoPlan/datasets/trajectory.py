@@ -18,7 +18,8 @@ from genMoPlan.utils.constants import (
     DEFAULT_HISTORY_PADDING_STRATEGY,
     validate_padding_strategy,
 )
-from genMoPlan.utils import load_trajectories, compute_actual_length, warn_stride_horizon_length
+from genMoPlan.utils.trajectory import load_trajectories
+from genMoPlan.utils.data_processing import compute_actual_length, warn_stride_horizon_length
 from genMoPlan.utils.arrays import batchify
 
 

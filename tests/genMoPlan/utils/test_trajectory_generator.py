@@ -53,7 +53,11 @@ class MockNormalizer:
 @pytest.fixture
 def temp_dir():
     """Create a temporary directory for testing file operations"""
-    temp_path = tempfile.mkdtemp()
+    import uuid
+    base_tmp = "/common/home/st1122/Projects/genMoPlan/tmp"
+    os.makedirs(base_tmp, exist_ok=True)
+    temp_path = os.path.join(base_tmp, f"test_{uuid.uuid4().hex[:8]}")
+    os.makedirs(temp_path, exist_ok=True)
     yield temp_path
     shutil.rmtree(temp_path)
 

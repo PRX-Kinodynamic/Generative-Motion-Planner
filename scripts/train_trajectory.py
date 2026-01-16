@@ -175,7 +175,7 @@ ml_model: TemporalModel = ml_model_class_loader()
 
 gen_model: GenerativeModel = gen_model_class_loader(ml_model)
 
-trainer: utils.Trainer = trainer_class_loader(gen_model, train_dataset, val_dataset)
+trainer: utils.Trainer = trainer_class_loader(gen_model, args, train_dataset, val_dataset)
 
 # # -----------------------------------------------------------------------------#
 # # ---------------------------- update and save args ---------------------------#
