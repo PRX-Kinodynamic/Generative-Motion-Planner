@@ -75,6 +75,7 @@ base = {
         "has_global_query": False,
         # -------------------------------- dataset --------------------------------#
         "loader": "datasets.TrajectoryDataset",
+        "shuffled_indices_fname": "shuffled_indices.txt",
         "plan_normalizer": None,
         "plan_preprocess_fns": None,
         "use_history_padding": False,

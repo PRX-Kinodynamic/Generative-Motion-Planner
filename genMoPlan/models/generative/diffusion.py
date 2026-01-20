@@ -48,12 +48,7 @@ class Diffusion(GenerativeModel):
     def __init__(
         self,
         model,
-        system=None,  # System instance - provides system-specific config
-        # System-specific params (for backward compatibility when system=None)
-        input_dim=None,
-        output_dim=None,
-        action_indices=None,
-        manifold=None,
+        system,  # System instance - REQUIRED, provides system-specific config
         # Model-specific params
         prediction_length=None,
         history_length=None,
@@ -66,15 +61,16 @@ class Diffusion(GenerativeModel):
         n_timesteps=100,
         predict_epsilon=True,
         use_history_mask: bool = False,
+        # Deprecated parameters (for backward compatibility - will be ignored)
+        input_dim=None,
+        output_dim=None,
+        action_indices=None,
+        manifold=None,
         **kwargs,
     ):
         super().__init__(
             model=model,
             system=system,
-            input_dim=input_dim,
-            output_dim=output_dim,
-            action_indices=action_indices,
-            manifold=manifold,
             prediction_length=prediction_length,
             history_length=history_length,
             clip_denoised=clip_denoised,

@@ -12,21 +12,24 @@ if 'adaptive_training' not in args.variations:
 utils.set_device(args.device)
 print(f"Using device: {utils.DEVICE}\n")
 
-if args.manifold is not None:
-    manifold = utils.ManifoldWrapper(args.manifold, manifold_unwrap_fns=args.manifold_unwrap_fns, manifold_unwrap_kwargs=args.manifold_unwrap_kwargs)
-    args.manifold = manifold
-    ml_model_input_dim = manifold.compute_feature_dim(args.observation_dim, n_fourier_features=args.model_kwargs.get("n_fourier_features", 1))
+# Get system object - single source of truth for system-specific parameters
+system = args.system
+
+if system.manifold is not None:
+    ml_model_input_dim = system.manifold.compute_feature_dim(
+        system.state_dim,
+        n_fourier_features=args.method_kwargs.get("n_fourier_features", 1)
+    )
 else:
-    manifold = None
-    ml_model_input_dim = args.observation_dim
+    ml_model_input_dim = system.state_dim
 
 ml_model_class_loader = utils.ClassLoader(
     args.model,
     savepath=(args.savepath, "ml_model_config.pkl"),
-    prediction_length=args.horizon_length + args.history_length,
+    prediction_length=system.history_length + system.horizon_length,
     input_dim=ml_model_input_dim,
-    output_dim=args.observation_dim,
-    query_dim=0 if args.is_history_conditioned else args.observation_dim,
+    output_dim=system.state_dim,
+    query_dim=0 if args.is_history_conditioned else system.state_dim,
     **args.model_kwargs,
     device=args.device,
 )
@@ -34,16 +37,13 @@ ml_model_class_loader = utils.ClassLoader(
 gen_model_class_loader = utils.ClassLoader(
     args.method,
     savepath=(args.savepath, "gen_model_config.pkl"),
-    input_dim=args.observation_dim,
-    output_dim=args.observation_dim,
-    prediction_length=args.horizon_length + args.history_length,
-    history_length=args.history_length,
+    system=system,  # Pass system instead of individual attributes
+    prediction_length=system.history_length + system.horizon_length,
+    history_length=system.history_length,
     clip_denoised=args.clip_denoised,
     loss_type=args.loss_type,
-    action_indices=args.action_indices,
     has_local_query=args.has_local_query,
     has_global_query=args.has_global_query,
-    manifold=manifold,
     val_seed=args.val_seed,
     use_history_mask=args.use_history_mask,
     **args.method_kwargs,

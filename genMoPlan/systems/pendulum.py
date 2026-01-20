@@ -77,34 +77,49 @@ class PendulumLQRSystem(BaseSystem):
             # INVALID can be used by higher-level analysis when labels are uncertain.
             valid_outcomes = [Outcome.SUCCESS, Outcome.FAILURE, Outcome.INVALID]
 
+        # Manifold unwrap functions for manifold-based flow matching
+        manifold_unwrap_fns = [shift_to_zero_center_angles]
+        manifold_unwrap_kwargs = {"angle_indices": angle_indices}
+
         # Create manifold if using manifold-based flow matching
         if use_manifold and manifold is None:
-            manifold = _create_pendulum_manifold()
+            from genMoPlan.utils.manifold import ManifoldWrapper
+            raw_manifold = _create_pendulum_manifold()
+            manifold = ManifoldWrapper(
+                raw_manifold,
+                manifold_unwrap_fns=manifold_unwrap_fns,
+                manifold_unwrap_kwargs=manifold_unwrap_kwargs
+            )
 
         # Set up metadata
         metadata = metadata or {}
         metadata.setdefault("success_threshold", success_threshold)
         metadata.setdefault("angle_indices", angle_indices)
 
-        # Preprocessing functions for Euclidean flow matching / diffusion
-        trajectory_preprocess_fns = [
-            handle_angle_wraparound,
-            augment_unwrapped_state_data,
-        ]
-        preprocess_kwargs = {
-            "trajectory": {
-                "angle_indices": angle_indices,
-            },
-            "plan": None,
-        }
+        # Preprocessing functions depend on whether using manifold
+        # - Manifold flow matching: manifold handles angle topology natively
+        # - Euclidean (diffusion): needs unwrapping and augmentation
+        if use_manifold:
+            trajectory_preprocess_fns = []
+            preprocess_kwargs = {
+                "trajectory": {},
+                "plan": None,
+            }
+        else:
+            trajectory_preprocess_fns = [
+                handle_angle_wraparound,
+                augment_unwrapped_state_data,
+            ]
+            preprocess_kwargs = {
+                "trajectory": {
+                    "angle_indices": angle_indices,
+                },
+                "plan": None,
+            }
 
         # No special post-processing for pendulum (angles stay in natural range)
         post_process_fns = []
         post_process_fn_kwargs = {}
-
-        # Manifold unwrap functions for manifold-based flow matching
-        manifold_unwrap_fns = [shift_to_zero_center_angles]
-        manifold_unwrap_kwargs = {"angle_indices": angle_indices}
 
         super().__init__(
             name=name,
@@ -122,8 +137,9 @@ class PendulumLQRSystem(BaseSystem):
             preprocess_kwargs=preprocess_kwargs,
             post_process_fns=post_process_fns,
             post_process_fn_kwargs=post_process_fn_kwargs,
-            manifold_unwrap_fns=manifold_unwrap_fns,
-            manifold_unwrap_kwargs=manifold_unwrap_kwargs,
+            # Unwrap functions are already in ManifoldWrapper if manifold is set
+            manifold_unwrap_fns=manifold_unwrap_fns if manifold is None else None,
+            manifold_unwrap_kwargs=manifold_unwrap_kwargs if manifold is None else None,
             valid_outcomes=valid_outcomes,
             normalizer=normalizer,
             metadata=metadata,
@@ -178,26 +194,6 @@ class PendulumLQRSystem(BaseSystem):
             Outcome.FAILURE.value
         )
         return outcomes.astype(np.int32)
-
-    def should_terminate(
-        self, state: np.ndarray, t: int, traj_so_far: Optional[np.ndarray]
-    ):
-        """
-        Early termination check.
-
-        Terminate early if pendulum reaches upright position and stabilizes.
-        """
-        threshold = self.metadata.get("success_threshold", self.SUCCESS_THRESHOLD)
-
-        theta = self._wrap_angle(state[0])
-        theta_dot = state[1]
-
-        upright_distance = np.sqrt(theta**2 + theta_dot**2)
-
-        if upright_distance <= threshold:
-            return Outcome.SUCCESS
-
-        return None
 
     @classmethod
     def create(

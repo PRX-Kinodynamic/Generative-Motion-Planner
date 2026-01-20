@@ -101,7 +101,12 @@ class ManifoldWrapper:
     
     @staticmethod
     def _reconstruct_wrapper(manifold_info, state):
-        """Static method to reconstruct a ManifoldWrapper from pickle data."""
+        """
+        Static method to reconstruct a ManifoldWrapper from pickle data.
+
+        IMPORTANT: This bypasses __init__ to avoid re-running initialization code
+        (like printing) when unpickling in multiprocessing workers.
+        """
         # Product manifold case
         if manifold_info == 'Product':
             sub_manifolds = []
@@ -127,13 +132,14 @@ class ManifoldWrapper:
             manifold = Euclidean()
         else:
             raise ValueError(f"Invalid manifold info: {manifold_info}")
-        
-        # Create the wrapper
-        wrapper = ManifoldWrapper(manifold)
-        
-        # Restore the saved state
+
+        # Create wrapper without calling __init__ (avoids prints/initialization)
+        wrapper = ManifoldWrapper.__new__(ManifoldWrapper)
+        wrapper._manifold = manifold
+
+        # Restore the saved state (contains manifold_type, manifold_types, etc.)
         wrapper.__dict__.update(state)
-        
+
         return wrapper
     
 

@@ -182,7 +182,7 @@ class AdaptiveTrainer:
         fnames = utils.get_fnames_to_load(dataset_path, trajectories_path)
 
         args_list = [
-            (fname, dataset_path, self.args.read_trajectory_fn) for fname in fnames
+            (fname, dataset_path, self.args.system.read_trajectory) for fname in fnames
         ]
 
         start_points = utils.parallelize_toggle(
@@ -207,24 +207,13 @@ class AdaptiveTrainer:
 
         return TrajectoryDataset(
             dataset=self.args.dataset,
-            horizon_length=self.args.horizon_length,
-            history_length=self.args.history_length,
-            stride=self.args.stride,
-            observation_dim=self.args.observation_dim,
-            trajectory_normalizer=getattr(self.args, "trajectory_normalizer", None),
-            normalizer_params=getattr(self.args, "normalizer_params", {}),
-            trajectory_preprocess_fns=getattr(
-                self.args, "trajectory_preprocess_fns", ()
-            ),
-            preprocess_kwargs=getattr(
-                self.args, "preprocess_kwargs", {"trajectory": {}}
-            ),
+            system=self.args.system,  # Pass system instead of individual attributes
+            dataset_size=None,  # Will use len(fnames)
             use_horizon_padding=self.args.use_horizon_padding,
             use_history_padding=self.args.use_history_padding,
             is_history_conditioned=self.args.is_history_conditioned,
             is_validation=is_validation,
             fnames=fnames,
-            read_trajectory_fn=self.args.read_trajectory_fn,
         )
 
     def _build_trainer(self, train_dataset, val_dataset):
@@ -472,7 +461,7 @@ class AdaptiveTrainer:
 
                 uncertainty = self.uncertainty.compute_normalized_uncertainty(
                     it_train_final_states,
-                    self.args,
+                    self.args.system,
                     self._train_start_points,
                     save_path=self.logdir,
                     title_suffix=f"Iteration {iteration}",

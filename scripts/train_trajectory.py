@@ -24,6 +24,7 @@ train_dataset_class_loader = utils.ClassLoader(
     system=args.system,  # System provides all system-specific config
     # Training-specific params only
     dataset_size=args.train_dataset_size,
+    shuffled_indices_fname=args.shuffled_indices_fname,
     use_history_padding=args.use_history_padding,
     use_horizon_padding=args.use_horizon_padding,
     use_history_mask=args.use_history_mask,
@@ -42,6 +43,7 @@ if args.val_dataset_size is not None:
         system=args.system,  # System provides all system-specific config
         # Training-specific params only
         dataset_size=args.val_dataset_size,
+        shuffled_indices_fname=args.shuffled_indices_fname,
         use_history_padding=args.use_history_padding,
         use_horizon_padding=args.use_horizon_padding,
         use_history_mask=args.use_history_mask,
@@ -61,20 +63,23 @@ if args.val_dataset_size is not None:
     val_dataset = val_dataset_class_loader()
     print(f"[ scripts/train_trajectory ] Validation Data Size: {len(val_dataset)}")
 
-observation_dim = args.observation_dim
+# Get system object - single source of truth for system-specific parameters
+system = args.system
 
 
 # -----------------------------------------------------------------------------#
 # ------------------------------ manifold -------------------------------------#
 # -----------------------------------------------------------------------------#
 
-if args.manifold is not None:
-    manifold = utils.ManifoldWrapper(args.manifold, manifold_unwrap_fns=args.manifold_unwrap_fns, manifold_unwrap_kwargs=args.manifold_unwrap_kwargs)
-    args.manifold = manifold
-    ml_model_input_dim = manifold.compute_feature_dim(observation_dim, n_fourier_features=args.method_kwargs.get("n_fourier_features", 1))
+if system.manifold is not None:
+    # System already provides a ManifoldWrapper when use_manifold=True
+    args.manifold = system.manifold
+    ml_model_input_dim = system.manifold.compute_feature_dim(
+        system.state_dim,
+        n_fourier_features=args.method_kwargs.get("n_fourier_features", 1)
+    )
 else:
-    manifold = None
-    ml_model_input_dim = observation_dim
+    ml_model_input_dim = system.state_dim
 
 # # -----------------------------------------------------------------------------#
 # # ------------------------------ model & trainer ------------------------------#
@@ -83,10 +88,10 @@ else:
 ml_model_class_loader = utils.ClassLoader(
     args.model,
     savepath=(args.savepath, "ml_model_config.pkl"),
-    prediction_length=args.horizon_length + args.history_length,
+    prediction_length=system.history_length + system.horizon_length,
     input_dim=ml_model_input_dim,
-    output_dim=observation_dim,
-    query_dim=0 if args.is_history_conditioned else observation_dim,
+    output_dim=system.state_dim,
+    query_dim=0 if args.is_history_conditioned else system.state_dim,
     **args.model_kwargs,
     device=args.device,
 )
@@ -94,15 +99,14 @@ ml_model_class_loader = utils.ClassLoader(
 gen_model_class_loader = utils.ClassLoader(
     args.method,
     savepath=(args.savepath, "gen_model_config.pkl"),
-    system=args.system,  # System provides system-specific config
+    system=system,  # System provides all system-specific config (state_dim, manifold, etc.)
     # Model-specific params
-    prediction_length=args.horizon_length + args.history_length,
-    history_length=args.history_length,
+    prediction_length=system.history_length + system.horizon_length,
+    history_length=system.history_length,
     clip_denoised=args.clip_denoised,
     loss_type=args.loss_type,
     has_local_query=args.has_local_query,
     has_global_query=args.has_global_query,
-    manifold=manifold,  # Keep manifold for backward compat (may be wrapped)
     val_seed=args.val_seed,
     loss_weight_type=args.loss_weight_type,
     loss_weight_kwargs=args.loss_weight_kwargs,
@@ -162,7 +166,7 @@ trainer: utils.Trainer = trainer_class_loader(gen_model, args, train_dataset, va
 # # ---------------------------- update and save args ---------------------------#
 # # -----------------------------------------------------------------------------#
 
-args.observation_dim = observation_dim
+args.observation_dim = system.state_dim
 args.dataset_size = len(train_dataset)
 args.num_batches_per_epoch = trainer.num_steps_per_epoch
 args.num_steps_per_epoch = ceil(trainer.num_steps_per_epoch / trainer.gradient_accumulate_every)
@@ -213,7 +217,7 @@ if args.no_inference:
 # -----------------------------------------------------------------------------#
 # ------------------------------visualize trajectories-------------------------#
 # -----------------------------------------------------------------------------#
-if observation_dim <= 2:
+if system.state_dim <= 2:
     try:
         visualize_generated_trajectories(
             args.dataset,

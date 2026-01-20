@@ -393,12 +393,6 @@ class BaseSystem:
     # ------------------------------------------------------------------ #
     # Hooks to override
     # ------------------------------------------------------------------ #
-    def should_terminate(
-        self, state: np.ndarray, t: int, traj_so_far: Optional[np.ndarray]
-    ):
-        """Return Outcome to terminate or None to continue."""
-        return None
-
     def evaluate_final_state(self, state: np.ndarray) -> Outcome:
         raise NotImplementedError
 

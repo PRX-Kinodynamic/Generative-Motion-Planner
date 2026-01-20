@@ -18,12 +18,7 @@ class GenerativeModel(nn.Module, ABC):
     def __init__(
         self,
         model,
-        system=None,  # System instance - provides system-specific config
-        # System-specific params (for backward compatibility when system=None)
-        input_dim=None,
-        output_dim=None,
-        action_indices=None,
-        manifold=None,
+        system,  # System instance - REQUIRED, provides system-specific config
         # Model-specific params
         prediction_length=None,
         history_length=None,
@@ -36,24 +31,28 @@ class GenerativeModel(nn.Module, ABC):
         loss_weight_kwargs={},
         use_history_mask: bool = False,
         use_mask_loss_weighting: bool = False,  # NEW: Apply loss weighting by mask
+        # Deprecated parameters (for backward compatibility - will be ignored)
+        input_dim=None,
+        output_dim=None,
+        action_indices=None,
+        manifold=None,
         **kwargs,
     ):
         super().__init__()
 
+        if system is None:
+            raise ValueError(
+                "system parameter is required. GenerativeModel must receive a system instance "
+                "to extract state_dim, manifold, and other system-specific configuration."
+            )
+
         self.model: TemporalModel = model
 
-        # Extract parameters from system if provided
-        if system is not None:
-            self.input_dim = system.state_dim
-            self.output_dim = system.state_dim
-            action_indices = getattr(system, 'action_indices', None)
-            manifold = system.manifold
-        else:
-            # Backward compatibility: use directly provided params
-            if input_dim is None or output_dim is None:
-                raise ValueError("input_dim and output_dim must be provided when system is None")
-            self.input_dim = input_dim
-            self.output_dim = output_dim
+        # Extract parameters from system - single source of truth
+        self.input_dim = system.state_dim
+        self.output_dim = system.state_dim
+        action_indices = getattr(system, 'action_indices', None)
+        manifold = system.manifold
         self.clip_denoised = clip_denoised
         self.history_length = history_length
         self.prediction_length = prediction_length

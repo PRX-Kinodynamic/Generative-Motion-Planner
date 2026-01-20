@@ -82,9 +82,19 @@ class CartpolePyBulletSystem(BaseSystem):
         if valid_outcomes is None:
             valid_outcomes = [Outcome.SUCCESS, Outcome.FAILURE, Outcome.INVALID]
 
+        # Manifold unwrap functions
+        manifold_unwrap_fns = [shift_to_zero_center_angles]
+        manifold_unwrap_kwargs = {"angle_indices": angle_indices}
+
         # Create manifold if using manifold-based flow matching
         if use_manifold and manifold is None:
-            manifold = _create_cartpole_manifold()
+            from genMoPlan.utils.manifold import ManifoldWrapper
+            raw_manifold = _create_cartpole_manifold()
+            manifold = ManifoldWrapper(
+                raw_manifold,
+                manifold_unwrap_fns=manifold_unwrap_fns,
+                manifold_unwrap_kwargs=manifold_unwrap_kwargs
+            )
 
         # Set up metadata
         metadata = metadata or {}
@@ -96,25 +106,30 @@ class CartpolePyBulletSystem(BaseSystem):
         metadata.setdefault("invalid_labels", [metadata["invalid_label"]])
         metadata.setdefault("invalid_outcomes", ["INVALID"])
 
-        # Preprocessing functions for diffusion (Euclidean)
-        trajectory_preprocess_fns = [
-            handle_angle_wraparound,
-            augment_unwrapped_state_data,
-        ]
-        preprocess_kwargs = {
-            "trajectory": {
-                "angle_indices": angle_indices,
-            },
-            "plan": None,
-        }
+        # Preprocessing functions depend on whether using manifold
+        # - Manifold flow matching: manifold handles angle topology natively
+        # - Euclidean (diffusion): needs unwrapping and augmentation
+        if use_manifold:
+            trajectory_preprocess_fns = []
+            preprocess_kwargs = {
+                "trajectory": {},
+                "plan": None,
+            }
+        else:
+            trajectory_preprocess_fns = [
+                handle_angle_wraparound,
+                augment_unwrapped_state_data,
+            ]
+            preprocess_kwargs = {
+                "trajectory": {
+                    "angle_indices": angle_indices,
+                },
+                "plan": None,
+            }
 
         # Post-processing for inference
         post_process_fns = [process_angles]
         post_process_fn_kwargs = {"angle_indices": angle_indices}
-
-        # Manifold unwrap functions
-        manifold_unwrap_fns = [shift_to_zero_center_angles]
-        manifold_unwrap_kwargs = {"angle_indices": angle_indices}
 
         super().__init__(
             name=name,
@@ -132,8 +147,9 @@ class CartpolePyBulletSystem(BaseSystem):
             preprocess_kwargs=preprocess_kwargs,
             post_process_fns=post_process_fns,
             post_process_fn_kwargs=post_process_fn_kwargs,
-            manifold_unwrap_fns=manifold_unwrap_fns,
-            manifold_unwrap_kwargs=manifold_unwrap_kwargs,
+            # Unwrap functions are already in ManifoldWrapper if manifold is set
+            manifold_unwrap_fns=manifold_unwrap_fns if manifold is None else None,
+            manifold_unwrap_kwargs=manifold_unwrap_kwargs if manifold is None else None,
             valid_outcomes=valid_outcomes,
             normalizer=normalizer,
             metadata=metadata,
@@ -192,24 +208,6 @@ class CartpolePyBulletSystem(BaseSystem):
         outcomes[is_out_of_bounds] = Outcome.FAILURE.value  # Overrides SUCCESS if both true
 
         return outcomes
-
-    def should_terminate(
-        self, state: np.ndarray, t: int, traj_so_far: Optional[np.ndarray]
-    ):
-        """
-        Early termination check.
-
-        Terminate on out-of-bounds failure or immediate success.
-        """
-        state_vec = self._as_state_vector(state)
-
-        if self._is_out_of_bounds(state_vec):
-            return Outcome.FAILURE
-
-        if self._is_within_success_tolerance(state_vec):
-            return Outcome.SUCCESS
-
-        return None
 
     def _as_state_vector(self, state: np.ndarray) -> np.ndarray:
         state_np = np.asarray(state, dtype=np.float32)

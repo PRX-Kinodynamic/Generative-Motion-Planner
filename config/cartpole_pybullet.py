@@ -16,11 +16,6 @@ max_batch_size = int(2.5e5) if is_arrakis else int(1e4)
 
 # -------------------------------- System -------------------------------- #
 
-# Create default system for backward compatibility with scripts that import configs directly
-_default_system = CartpolePyBulletSystem.create(
-    stride=1, history_length=1, horizon_length=31
-)
-
 
 def get_system(config=None, use_manifold: bool = False, **kwargs):
     """
@@ -100,6 +95,7 @@ base = {
         "has_global_query": False,
         # -------------------------------- dataset --------------------------------#
         "loader": "datasets.TrajectoryDataset",
+        "shuffled_indices_fname": "shuffled_indices.txt",
         "plan_normalizer": None,
         "plan_preprocess_fns": None,
         "use_history_padding": False,
@@ -177,7 +173,7 @@ base = {
         "model": "models.temporal.TemporalUnet",
         "model_kwargs": {
             "base_hidden_dim": 32,
-            "hidden_dim_mult": (1, 2, 4, 8), 
+            "hidden_dim_mult": (1, 2, 4, 8),
             "conv_kernel_size": 5,
             "attention": False,
         },
@@ -266,6 +262,10 @@ dit_test = {
 
 stride_10 = {
     "stride": 10,
+}
+
+stride_25 = {
+    "stride": 25,
 }
 
 stride_30 = {
@@ -370,4 +370,8 @@ history_padding_mirror = {
     "history_length": 5,
     "history_padding_strategy": "mirror",
     "final_state_evaluation": False,
+}
+
+final_state_quick_eval = {
+    "eval_freq": 1,
 }

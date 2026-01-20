@@ -43,6 +43,7 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         # Training-specific params
         dataset_size: int = None,
         fnames: Optional[List[str]] = None,
+        shuffled_indices_fname: str = "shuffled_indices.txt",
         use_horizon_padding: bool = False,
         use_history_padding: bool = False,
         use_history_mask: bool = False,
@@ -74,6 +75,7 @@ class TrajectoryDataset(torch.utils.data.Dataset):
             preprocess_kwargs: Kwargs for preprocessing functions (if system=None)
             dataset_size: Maximum number of trajectories to load
             fnames: Specific filenames to load
+            shuffled_indices_fname: Filename for shuffled indices (in train_test_splits/)
             use_horizon_padding: Whether to pad horizon if too short
             use_history_padding: Whether to pad history without masking
             use_history_mask: Whether to use masking for variable-length history
@@ -150,11 +152,12 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         trajectories = self._load_data(
             dataset,
             read_trajectory_fn,
-            dataset_size, 
+            dataset_size,
             fnames,
-            trajectory_preprocess_fns, 
+            trajectory_preprocess_fns,
             preprocess_kwargs,
             is_validation,
+            shuffled_indices_fname,
         )
 
         traj_lengths = [len(trajectory) for trajectory in trajectories]
@@ -187,21 +190,23 @@ class TrajectoryDataset(torch.utils.data.Dataset):
 
 
     def _load_data(
-        self, 
-        dataset, 
-        read_trajectory_fn, 
-        dataset_size, 
-        fnames, 
-        trajectory_preprocess_fns, 
-        preprocess_kwargs, 
+        self,
+        dataset,
+        read_trajectory_fn,
+        dataset_size,
+        fnames,
+        trajectory_preprocess_fns,
+        preprocess_kwargs,
         is_validation,
+        shuffled_indices_fname="shuffled_indices.txt",
     ):
         trajectories = load_trajectories(
-            dataset, 
-            read_trajectory_fn, 
-            dataset_size, 
-            fnames=fnames, 
+            dataset,
+            read_trajectory_fn,
+            dataset_size,
+            fnames=fnames,
             load_reverse=is_validation,
+            shuffled_indices_fname=shuffled_indices_fname,
         )
         
         for trajectory_preprocess_fn in trajectory_preprocess_fns:

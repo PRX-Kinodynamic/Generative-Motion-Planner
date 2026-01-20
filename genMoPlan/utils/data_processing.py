@@ -404,6 +404,33 @@ def compute_max_path_length(
     return actual_history + num_inference_steps * actual_horizon
 
 
+def compute_total_predictions(
+    history_length: int,
+    num_inference_steps: int,
+    horizon_length: int,
+) -> int:
+    """Compute total number of model predictions (in model-space).
+
+    This is the number of states the model will output during generation,
+    which is useful for allocating trajectory buffers efficiently.
+
+    Args:
+        history_length: Number of history points the model takes as input
+        num_inference_steps: Number of autoregressive generation steps
+        horizon_length: Number of horizon points the model predicts per step
+
+    Returns:
+        Total number of model predictions
+
+    Examples:
+        >>> compute_total_predictions(1, 20, 31)
+        621  # 1 (history) + 20 * 31 (predictions)
+        >>> compute_total_predictions(3, 15, 5)
+        78  # 3 (history) + 15 * 5 (predictions)
+    """
+    return history_length + num_inference_steps * horizon_length
+
+
 def warn_stride_horizon_length(horizon_length, stride, context=""):
     """
     Warn if horizon_length=1 with stride>1, since stride has no effect in this case.

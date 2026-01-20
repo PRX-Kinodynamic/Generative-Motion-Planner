@@ -6,10 +6,10 @@ from genMoPlan.adaptive_training.animation_generator import AnimationGenerator
 from genMoPlan.utils.json_args import JSONArgs
 from genMoPlan import utils
 
-def load_start_point(fname, dataset_path, observation_dim):
+def load_start_point(fname, dataset_path, read_trajectory_fn):
     """Helper to load a single trajectory's start point."""
     fpath = os.path.join(dataset_path, "trajectories", fname)
-    trajectory = utils.read_trajectory(fpath, observation_dim)
+    trajectory = read_trajectory_fn(fpath)
     return trajectory[0]
 
 def load_all_start_points(exp_args):
@@ -18,10 +18,11 @@ def load_all_start_points(exp_args):
     trajectories_path = os.path.join(dataset_path, "trajectories")
 
     fnames = utils.get_fnames_to_load(dataset_path, trajectories_path)
-    args_list = [(fname, dataset_path, exp_args.observation_dim) for fname in fnames]
+    # Use system's read_trajectory method
+    args_list = [(fname, dataset_path, exp_args.system.read_trajectory) for fname in fnames]
 
     start_points = utils.parallelize_toggle(load_start_point, args_list, parallel=True, desc="Loading all start points")
-    
+
     return np.array(start_points)
 
 def find_iteration_dirs(exp_path):

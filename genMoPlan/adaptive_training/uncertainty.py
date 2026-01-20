@@ -15,8 +15,8 @@ from genMoPlan.utils import JSONArgs, get_non_angular_indices
 
 def _normalize_final_states(
     unnormalized_final_states: np.ndarray,
-    model_args: JSONArgs, 
-    inference_normalization_params: dict, 
+    system,  # System object is the source of truth
+    inference_normalization_params: dict,
 ):
     """Normalize final states to [-1, 1] for a uniform uncertainty computation across all dimensions."""
 
@@ -29,10 +29,11 @@ def _normalize_final_states(
         run_final_states = unnormalized_final_states[:, i, :]
 
         # Normalize the final states to [-1, 1] for a uniform uncertainty computation across all dimensions
-        normalizer: Normalizer = get_normalizer(model_args.trajectory_normalizer, inference_normalization_params)
+        trajectory_normalizer = system.get_dataset_config()["trajectory_normalizer"]
+        normalizer: Normalizer = get_normalizer(trajectory_normalizer, inference_normalization_params)
         final_states[:, i, :] = normalizer(run_final_states)
 
-    
+
     return final_states
 
 
@@ -62,21 +63,21 @@ class Uncertainty(ABC):
     def _compute_angular_uncertainty(self, final_states: np.ndarray, angle_indices: List[int]) -> np.ndarray: ...
 
     def compute_normalized_uncertainty(
-        self, 
-        unnormalized_final_states: np.ndarray, 
-        model_args: JSONArgs, 
-        start_states: np.ndarray, 
-        save_path: str, 
+        self,
+        unnormalized_final_states: np.ndarray,
+        system,  # System object is the source of truth
+        start_states: np.ndarray,
+        save_path: str,
         title_suffix: str,
     ) -> np.ndarray:
 
         final_states = _normalize_final_states(
             unnormalized_final_states,
-            model_args,
+            system,
             self.inference_normalization_params,
         )
 
-        angle_indices = model_args.angle_indices
+        angle_indices = system.angle_indices
 
         num_start_states, num_runs, dimensions = final_states.shape
         non_angular_indices = get_non_angular_indices(angle_indices, dimensions)

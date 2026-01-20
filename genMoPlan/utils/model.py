@@ -36,6 +36,23 @@ def load_model(
         system = None,  # System instance for reduced parameter passing
     ) -> Tuple[GenerativeModel, JSONArgs]:
     model_args = load_model_args(experiments_path)
+
+    # Handle old checkpoints that don't have system object saved
+    # Reconstruct system for inference (not training continuation)
+    if not hasattr(model_args, 'system') and system is None:
+        from genMoPlan.utils.setup import get_dataset_config
+        method_name = get_method_name(model_args)
+        infer_args = get_dataset_config(
+            dataset=model_args.dataset,
+            method=method_name,
+            variations=[]
+        )
+        system = infer_args.system
+        model_args.system = system
+    elif system is not None:
+        # Use provided system if given
+        model_args.system = system
+
     model_path = path.join(experiments_path, model_state_name)
 
     if verbose:
@@ -47,56 +64,41 @@ def load_model(
     ml_model_class = import_class(model_args.model, verbose)
     method_class = import_class(model_args.method, verbose)
 
-    if model_args.manifold is not None:
-        ml_model_input_dim = model_args.manifold.compute_feature_dim(model_args.observation_dim, n_fourier_features=model_args.method_kwargs.get("n_fourier_features", 1))
+    # Use system as single source of truth for manifold and dimensions
+    if model_args.system.manifold is not None:
+        ml_model_input_dim = model_args.system.manifold.compute_feature_dim(
+            model_args.system.state_dim,
+            n_fourier_features=model_args.method_kwargs.get("n_fourier_features", 1)
+        )
 
         if inference_params is not None and "manifold_unwrap_fns" in inference_params:
-            model_args.manifold.manifold_unwrap_fns = inference_params["manifold_unwrap_fns"]
-            model_args.manifold.manifold_unwrap_kwargs = inference_params["manifold_unwrap_kwargs"]
+            model_args.system.manifold.manifold_unwrap_fns = inference_params["manifold_unwrap_fns"]
+            model_args.system.manifold.manifold_unwrap_kwargs = inference_params["manifold_unwrap_kwargs"]
     else:
-        ml_model_input_dim = model_args.observation_dim
+        ml_model_input_dim = model_args.system.state_dim
 
     ml_model = ml_model_class(
         prediction_length=model_args.horizon_length + model_args.history_length,
         input_dim=ml_model_input_dim,
-        output_dim=model_args.observation_dim,
-        query_dim=0 if model_args.is_history_conditioned else model_args.observation_dim,
+        output_dim=model_args.system.state_dim,
+        query_dim=0 if model_args.is_history_conditioned else model_args.system.state_dim,
         verbose=verbose,
         **model_args.model_kwargs,
     ).to(device)
 
-    # Create generative model with system parameter if available
-    if system is not None:
-        method_model: GenerativeModel = method_class(
-            model=ml_model,
-            system=system,
-            prediction_length=model_args.horizon_length + model_args.history_length,
-            history_length=model_args.history_length,
-            clip_denoised=model_args.clip_denoised,
-            loss_type=model_args.loss_type,
-            has_local_query=model_args.has_local_query,
-            has_global_query=model_args.has_global_query,
-            manifold=model_args.manifold,  # Still pass manifold for backward compat
-            verbose=verbose,
-            **model_args.method_kwargs,
-        ).to(device)
-    else:
-        # Backward compatibility: pass individual parameters when system not available
-        method_model: GenerativeModel = method_class(
-            model=ml_model,
-            input_dim=model_args.observation_dim,
-            output_dim=model_args.observation_dim,
-            prediction_length=model_args.horizon_length + model_args.history_length,
-            history_length=model_args.history_length,
-            clip_denoised=model_args.clip_denoised,
-            loss_type=model_args.loss_type,
-            action_indices=model_args.action_indices,
-            has_local_query=model_args.has_local_query,
-            has_global_query=model_args.has_global_query,
-            manifold=model_args.manifold,
-            verbose=verbose,
-            **model_args.method_kwargs,
-        ).to(device)
+    # Create generative model with system (always available now)
+    method_model: GenerativeModel = method_class(
+        model=ml_model,
+        system=model_args.system,
+        prediction_length=model_args.horizon_length + model_args.history_length,
+        history_length=model_args.history_length,
+        clip_denoised=model_args.clip_denoised,
+        loss_type=model_args.loss_type,
+        has_local_query=model_args.has_local_query,
+        has_global_query=model_args.has_global_query,
+        verbose=verbose,
+        **model_args.method_kwargs,
+    ).to(device)
 
     # Load model state dict
     method_model.load_state_dict(diff_model_state, strict=False)
@@ -105,14 +107,27 @@ def load_model(
 
 
 def get_normalizer_params(model_args, normalizer_type: str = "trajectory"):
-    normalizer_params = None
+    """
+    Get normalizer parameters for the specified type.
 
+    Args:
+        model_args: Args object that should contain a system instance
+        normalizer_type: Type of normalizer ("trajectory" or "plan")
+
+    Returns:
+        Dict of normalizer parameters
+    """
+    # Use system as single source of truth for normalizer params
+    if hasattr(model_args, "system") and model_args.system is not None:
+        return model_args.system.get_normalizer_params()[normalizer_type]
+
+    # Fallback for old checkpoints
     if hasattr(model_args, "normalizer_params"):
         normalizer_params = model_args.normalizer_params[normalizer_type]
     elif hasattr(model_args, "normalization_params"):
         normalizer_params = model_args.normalization_params
     else:
-        raise ValueError("Normalizer params not found in model_args")
+        raise ValueError("Normalizer params not found in model_args or system")
 
     return normalizer_params
 

@@ -20,6 +20,7 @@ from genMoPlan.utils.data_processing import (
     compute_actual_length,
     compute_num_inference_steps,
     compute_max_path_length,
+    compute_total_predictions,
     warn_stride_horizon_length,
 )
 from genMoPlan.utils.generation_result import GenerationResult, TerminationResult
@@ -948,12 +949,26 @@ class TrajectoryGenerator:
         current_states = to_torch(start_states_normalized, dtype=torch.float32, device=device)
 
         # Initialize trajectory buffer if needed
+        # Store trajectories in MODEL-SPACE (just model predictions) for efficiency
+        # Shape: [batch, total_predictions, state_dim] where total_predictions includes history
         if return_trajectories:
+            total_predictions = compute_total_predictions(
+                params.history_length,
+                params.num_inference_steps,
+                params.horizon_length,
+            )
             trajectories = np.zeros(
-                (batch_size, params.max_path_length, params.state_dim),
+                (batch_size, total_predictions, params.state_dim),
                 dtype=np.float32,
             )
-            trajectories[:, 0] = start_states_normalized
+
+            # Initialize history portion
+            if start_histories_normalized is not None:
+                # Copy provided history
+                trajectories[:, :params.history_length] = start_histories_normalized
+            else:
+                # Store initial state at last history position
+                trajectories[:, params.history_length - 1] = start_states_normalized
         else:
             trajectories = None
 
@@ -974,16 +989,21 @@ class TrajectoryGenerator:
         termination_result = TerminationResult.none(batch_size)
         terminated_mask = np.zeros(batch_size, dtype=bool)
 
-        current_idx = params.history_length
+        # Track current position in MODEL-SPACE (index into trajectory buffer)
+        # This represents the number of model predictions made so far
+        prediction_idx = params.history_length
 
         with tqdm(total=params.num_inference_steps, disable=not verbose) as pbar:
             first_step = True
             step_count = 0
 
-            while current_idx < params.max_path_length and not terminated_mask.all():
+            while step_count < params.num_inference_steps and not terminated_mask.all():
                 # Compute how many steps to add this iteration
                 steps_to_add = min(
-                    params.horizon_length, params.max_path_length - current_idx
+                    params.horizon_length,
+                    compute_total_predictions(
+                        params.history_length, params.num_inference_steps, params.horizon_length
+                    ) - prediction_idx
                 )
 
                 # Build conditions from history window
@@ -1012,18 +1032,20 @@ class TrajectoryGenerator:
                     :, params.history_length : params.history_length + steps_to_add
                 ]
 
-                # Store predictions in trajectory buffer
+                # Store predictions in trajectory buffer (model-space indexing)
                 if trajectories is not None:
-                    trajectories[:, current_idx : current_idx + steps_to_add] = (
+                    trajectories[:, prediction_idx : prediction_idx + steps_to_add] = (
                         horizon_pred.cpu().numpy()
                     )
 
                 # Check termination on ALL states in the predicted horizon
+                # Pass model-space index so it can be converted to actual timesteps
                 if self._termination_enabled:
                     new_termination = self._check_termination_all_states(
                         horizon_pred,
                         normalizer,
-                        current_idx,
+                        prediction_idx,
+                        params.stride,
                         terminated_mask,
                     )
                     termination_result = termination_result.update(new_termination)
@@ -1036,7 +1058,7 @@ class TrajectoryGenerator:
 
                 # Update current states to last prediction
                 current_states = horizon_pred[:, -1]
-                current_idx += steps_to_add
+                prediction_idx += steps_to_add
                 first_step = False
                 step_count += 1
 
@@ -1058,13 +1080,32 @@ class TrajectoryGenerator:
         # Build final states array
         final_states = current_states.cpu().detach().numpy()
 
-        # Handle terminated trajectories - fill remaining with final state
+        # Handle terminated trajectories - fill remaining model predictions with final state
+        # Note: trajectories buffer is in MODEL-SPACE, but termination_step is in ACTUAL TIMESTEPS
+        # We need to convert termination timesteps back to model prediction indices
         if trajectories is not None and terminated_mask.any():
             for i in range(batch_size):
                 if termination_result.step[i] >= 0:
-                    term_idx = termination_result.step[i]
-                    if term_idx < params.max_path_length:
-                        trajectories[i, term_idx:, :] = trajectories[i, term_idx - 1, :]
+                    # Convert termination timestep to model prediction index
+                    # termination_step[i] is actual timestep, need to find which prediction it corresponds to
+                    term_timestep = termination_result.step[i]
+
+                    # Convert to model prediction index (approximately)
+                    # This is the inverse of: actual_timestep = compute_actual_length(model_idx, stride)
+                    # For now, approximate as: model_idx ≈ term_timestep // stride
+                    # More precise: need to account for history offset
+                    if params.stride > 1:
+                        # Rough approximation: convert back to model index
+                        term_model_idx = (term_timestep + params.stride - 1) // params.stride
+                    else:
+                        term_model_idx = term_timestep
+
+                    # Ensure we don't go out of bounds
+                    total_preds = compute_total_predictions(
+                        params.history_length, params.num_inference_steps, params.horizon_length
+                    )
+                    if term_model_idx < total_preds and term_model_idx > 0:
+                        trajectories[i, term_model_idx:, :] = trajectories[i, term_model_idx - 1, :]
 
         return GenerationResult(
             final_states=final_states,
@@ -1178,23 +1219,27 @@ class TrajectoryGenerator:
         self,
         horizon_pred: torch.Tensor,
         normalizer: Optional[Normalizer],
-        current_idx: int,
+        current_model_idx: int,
+        stride: int,
         already_terminated: np.ndarray,
     ) -> TerminationResult:
         """
-        Check termination for ALL states in the predicted horizon.
+        Check termination for ALL states in the predicted horizon using vectorized evaluation.
 
-        Unnormalizes predictions before checking since termination logic
-        operates on physical state values.
+        A trajectory terminates at the first state with SUCCESS or FAILURE outcome.
+        Only continues if all states in the horizon are INVALID.
+
+        Unnormalizes predictions before checking since evaluation logic operates on physical state values.
 
         Args:
             horizon_pred: Predicted horizon [batch, horizon_len, state_dim] (normalized)
             normalizer: Normalizer to unnormalize predictions
-            current_idx: Current timestep index
+            current_model_idx: Current index in model-space (number of predictions made)
+            stride: Temporal stride between predictions
             already_terminated: Boolean mask of already terminated trajectories
 
         Returns:
-            TerminationResult indicating which trajectories terminated
+            TerminationResult with termination steps in ACTUAL TIMESTEPS (not model-space)
         """
         if self.system is None:
             return TerminationResult.none(horizon_pred.shape[0])
@@ -1204,43 +1249,106 @@ class TrajectoryGenerator:
         # Convert to numpy and unnormalize
         pred_np = horizon_pred.detach().cpu().numpy()
         if normalizer is not None:
-            # Unnormalize for termination checking
+            # Unnormalize for evaluation
             pred_unnorm = normalizer.unnormalize(pred_np.reshape(-1, state_dim))
             pred_unnorm = pred_unnorm.reshape(batch_size, horizon_len, state_dim)
         else:
             pred_unnorm = pred_np
 
-        # Track termination for this horizon
+        # Vectorized evaluation: flatten all states and evaluate at once
+        states_flat = pred_unnorm.reshape(-1, state_dim)  # [batch*horizon_len, state_dim]
+        outcomes_flat = self.system.evaluate_final_states(states_flat)  # [batch*horizon_len]
+        outcomes = outcomes_flat.reshape(batch_size, horizon_len)  # [batch, horizon_len]
+
+        # Find first terminating state (SUCCESS or FAILURE) for each trajectory
+        # Terminate if ANY state is SUCCESS/FAILURE, continue only if ALL are INVALID
+        from genMoPlan.systems.base import Outcome
+        is_terminating = (outcomes == Outcome.SUCCESS.value) | (outcomes == Outcome.FAILURE.value)
+
         termination_step = np.full(batch_size, -1, dtype=np.int32)
         termination_outcome = np.full(batch_size, -1, dtype=np.int32)
 
-        # Check each timestep in the horizon
-        for t in range(horizon_len):
-            states_at_t = pred_unnorm[:, t, :]
-            timestep = current_idx + t
+        # Convert current model index to actual timestep
+        # current_model_idx is in model-space, need to convert to actual environment timesteps
+        current_actual_timestep = compute_actual_length(current_model_idx, stride)
 
-            for i in range(batch_size):
-                # Skip if already terminated (before this horizon or earlier in this horizon)
-                if already_terminated[i] or termination_step[i] >= 0:
-                    continue
+        for i in range(batch_size):
+            # Skip if already terminated in previous horizon
+            if already_terminated[i]:
+                continue
 
-                try:
-                    outcome = self.system.should_terminate(states_at_t[i], timestep)
-                    if outcome is not None:
-                        termination_step[i] = timestep
-                        termination_outcome[i] = outcome.value
-                except Exception as exc:
-                    if self.verbose:
-                        warnings.warn(
-                            f"[ utils/trajectory_generator ] Termination check failed: {exc}"
-                        )
+            # Check if any state in this horizon triggers termination
+            if is_terminating[i].any():
+                # Find first terminating state in horizon (index in horizon)
+                first_term_t = np.argmax(is_terminating[i])  # argmax returns index of first True
+
+                # Convert to actual timestep:
+                # Each prediction in horizon is stride timesteps apart
+                # Termination happens at: current_actual_timestep + first_term_t * stride
+                termination_step[i] = current_actual_timestep + first_term_t * stride
+                termination_outcome[i] = outcomes[i, first_term_t]
 
         return TerminationResult(
-            step=termination_step,
+            step=termination_step,  # In actual timesteps!
             outcome=termination_outcome,
             any_terminated=(termination_step >= 0).any(),
             all_terminated=(termination_step >= 0).all(),
         )
+
+    # ------------------------------------------------------------------
+    # Utility Functions
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def convert_trajectory_to_timesteps(
+        trajectory_model_space: np.ndarray,
+        stride: int,
+        max_timesteps: Optional[int] = None,
+        fill_value: Optional[float] = None,
+    ) -> np.ndarray:
+        """
+        Convert model-space trajectory to actual timestep representation.
+
+        Trajectories are stored densely in model-space (just the predictions).
+        This converts them to a sparse representation at actual environment timesteps.
+
+        Args:
+            trajectory_model_space: [batch, num_predictions, state_dim] dense predictions
+            stride: Temporal stride between predictions
+            max_timesteps: Maximum timesteps to allocate (if None, computed from trajectory)
+            fill_value: Value to fill non-prediction timesteps (default: None for zeros)
+
+        Returns:
+            trajectory_timesteps: [batch, max_timesteps, state_dim] sparse at strided indices
+
+        Example:
+            >>> # Model predicted 78 states with stride=10
+            >>> traj_model = result.trajectories  # [batch, 78, 4]
+            >>> traj_time = convert_trajectory_to_timesteps(traj_model, stride=10)
+            >>> # Now [batch, 770, 4] with predictions at [0, 10, 20, ...]
+        """
+        batch_size, num_predictions, state_dim = trajectory_model_space.shape
+
+        if max_timesteps is None:
+            # Compute from stride: last prediction is at index (num_predictions-1) * stride
+            max_timesteps = 1 + (num_predictions - 1) * stride
+
+        # Allocate sparse buffer
+        trajectory_timesteps = np.zeros(
+            (batch_size, max_timesteps, state_dim),
+            dtype=trajectory_model_space.dtype,
+        )
+
+        if fill_value is not None:
+            trajectory_timesteps[:] = fill_value
+
+        # Fill at strided positions
+        for pred_idx in range(num_predictions):
+            timestep_idx = pred_idx * stride
+            if timestep_idx < max_timesteps:
+                trajectory_timesteps[:, timestep_idx] = trajectory_model_space[:, pred_idx]
+
+        return trajectory_timesteps
 
     # ------------------------------------------------------------------
     # Loading / Saving utilities

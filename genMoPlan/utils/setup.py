@@ -310,13 +310,6 @@ class Parser(Tap):
             # Store the system instance - dataset and gen_model will extract what they need
             params['system'] = system
 
-            # For backward compatibility with inference scripts that access these directly,
-            # still inject a few commonly used values
-            system_inference_config = system.get_inference_config()
-            for key, value in system_inference_config.items():
-                if key not in params:  # Don't override training params
-                    params[key] = value
-
         self._dict = {}
         for key, val in params.items():
             setattr(args, key, val)

@@ -77,34 +77,49 @@ class CartpoleDMControlSystem(BaseSystem):
         if valid_outcomes is None:
             valid_outcomes = [Outcome.SUCCESS, Outcome.FAILURE, Outcome.INVALID]
 
+        # Manifold unwrap functions
+        manifold_unwrap_fns = [shift_to_zero_center_angles]
+        manifold_unwrap_kwargs = {"angle_indices": angle_indices}
+
         # Create manifold if using manifold-based flow matching
         if use_manifold and manifold is None:
-            manifold = _create_cartpole_dm_manifold()
+            from genMoPlan.utils.manifold import ManifoldWrapper
+            raw_manifold = _create_cartpole_dm_manifold()
+            manifold = ManifoldWrapper(
+                raw_manifold,
+                manifold_unwrap_fns=manifold_unwrap_fns,
+                manifold_unwrap_kwargs=manifold_unwrap_kwargs
+            )
 
         # Set up metadata
         metadata = metadata or {}
         metadata.setdefault("success_threshold", success_threshold)
         metadata.setdefault("angle_indices", angle_indices)
 
-        # Preprocessing functions for diffusion (Euclidean)
-        trajectory_preprocess_fns = [
-            handle_angle_wraparound,
-            augment_unwrapped_state_data,
-        ]
-        preprocess_kwargs = {
-            "trajectory": {
-                "angle_indices": angle_indices,
-            },
-            "plan": None,
-        }
+        # Preprocessing functions depend on whether using manifold
+        # - Manifold flow matching: manifold handles angle topology natively
+        # - Euclidean (diffusion): needs unwrapping and augmentation
+        if use_manifold:
+            trajectory_preprocess_fns = []
+            preprocess_kwargs = {
+                "trajectory": {},
+                "plan": None,
+            }
+        else:
+            trajectory_preprocess_fns = [
+                handle_angle_wraparound,
+                augment_unwrapped_state_data,
+            ]
+            preprocess_kwargs = {
+                "trajectory": {
+                    "angle_indices": angle_indices,
+                },
+                "plan": None,
+            }
 
         # Post-processing for inference
         post_process_fns = [process_angles]
         post_process_fn_kwargs = {"angle_indices": angle_indices}
-
-        # Manifold unwrap functions
-        manifold_unwrap_fns = [shift_to_zero_center_angles]
-        manifold_unwrap_kwargs = {"angle_indices": angle_indices}
 
         super().__init__(
             name=name,
@@ -122,8 +137,9 @@ class CartpoleDMControlSystem(BaseSystem):
             preprocess_kwargs=preprocess_kwargs,
             post_process_fns=post_process_fns,
             post_process_fn_kwargs=post_process_fn_kwargs,
-            manifold_unwrap_fns=manifold_unwrap_fns,
-            manifold_unwrap_kwargs=manifold_unwrap_kwargs,
+            # Unwrap functions are already in ManifoldWrapper if manifold is set
+            manifold_unwrap_fns=manifold_unwrap_fns if manifold is None else None,
+            manifold_unwrap_kwargs=manifold_unwrap_kwargs if manifold is None else None,
             valid_outcomes=valid_outcomes,
             normalizer=normalizer,
             metadata=metadata,
@@ -167,21 +183,6 @@ class CartpoleDMControlSystem(BaseSystem):
             Outcome.FAILURE.value
         )
         return outcomes.astype(np.int32)
-
-    def should_terminate(
-        self, state: np.ndarray, t: int, traj_so_far: Optional[np.ndarray]
-    ):
-        """
-        Early termination check.
-
-        Terminate early if the cart goes out of bounds.
-        """
-        x_limit = self.DEFAULT_MAXS[0]
-
-        if abs(state[0]) > x_limit:
-            return Outcome.FAILURE
-
-        return None
 
     @classmethod
     def create(

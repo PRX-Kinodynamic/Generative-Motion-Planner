@@ -1,5 +1,4 @@
-from os import cpu_count, path, listdir
-from random import shuffle
+from os import cpu_count, path
 from typing import List, Union, Sequence, Optional
 import matplotlib.pyplot as plt
 from tqdm import tqdm
@@ -148,24 +147,16 @@ def get_fnames_to_load(
     if trajectories_path is None:
         trajectories_path = path.join(dataset_path, "trajectories")
 
-    indices_fpath = path.join(dataset_path, shuffled_indices_fname)
+    indices_fpath = path.join(dataset_path, "train_test_splits", shuffled_indices_fname)
 
-    if path.exists(indices_fpath):
-        with open(indices_fpath, "r") as f:
-            fnames = f.readlines()
-            fnames = [f.strip() for f in fnames]
-
-    else:
-        print(
-            f"[ utils/trajectory ] Could not find shuffled indices at {indices_fpath}. Generating new shuffled indices for {trajectories_path}"
+    if not path.exists(indices_fpath):
+        raise FileNotFoundError(
+            f"[ utils/trajectory ] Could not find shuffled indices at {indices_fpath}"
         )
-        all_fnames = listdir(trajectories_path)
-        fnames = all_fnames.copy()
-        shuffle(fnames)
 
-        with open(indices_fpath, "w") as f:
-            for fname in fnames:
-                f.write(fname + "\n")
+    with open(indices_fpath, "r") as f:
+        fnames = f.readlines()
+        fnames = [f.strip() for f in fnames]
 
     if num_trajs is not None:
         if not load_reverse:
@@ -206,6 +197,7 @@ def load_trajectories(
     parallel=True,
     fnames=None,
     load_reverse=False,
+    shuffled_indices_fname="shuffled_indices.txt",
 ) -> List[np.ndarray]:
     """
     load dataset from directory
@@ -215,7 +207,8 @@ def load_trajectories(
 
     if fnames is None:
         fnames = get_fnames_to_load(
-            dataset_path, trajectories_path, dataset_size, load_reverse
+            dataset_path, trajectories_path, dataset_size, load_reverse,
+            shuffled_indices_fname=shuffled_indices_fname,
         )
 
     trajectories = []

@@ -193,22 +193,6 @@ class DoubleIntegrator1DSystem(BaseSystem):
         )
         return outcomes.astype(np.int32)
 
-    def should_terminate(
-        self, state: np.ndarray, t: int, traj_so_far: Optional[np.ndarray]
-    ):
-        """
-        Early termination check.
-
-        Terminate early if the state reaches the origin.
-        """
-        threshold = self.metadata.get("success_threshold", 0.1)
-        state_norm = np.linalg.norm(state)
-
-        if state_norm <= threshold:
-            return Outcome.SUCCESS
-
-        return None
-
     @classmethod
     def create(
         cls,
