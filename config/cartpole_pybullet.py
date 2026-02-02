@@ -10,6 +10,8 @@ max_batch_size = int(2.5e5) if is_arrakis else int(1e4)
 
 
 max_path_length = 613
+# new change to experiment with smaller path length with smaller strides
+# max_path_length = 150
 
 state_names = ["x", "theta", "x_dot", "theta_dot"]
 
@@ -214,7 +216,8 @@ base = {
 
         #-------------------------------evaluation--------------------------#
         "perform_final_state_evaluation": True,
-        "eval_freq": 10, # epochs
+        "eval_freq": 1,  # epochs - controls verbose validation output frequency
+        "detailed_eval_freq": 10,  # epochs - controls detailed evaluation (Final State, Sequential, Full Traj). 0=disabled
         "eval_batch_size": max_batch_size,
         "eval_seed": 42,
     },
@@ -310,6 +313,12 @@ data_lim_20000 = {
     "train_dataset_size": 20000,
     "num_epochs": 2000,
 }
+max_path_572 = {
+    "max_path_length": 572,
+    "validation_kwargs": {
+        "max_path_length": 572,
+    },
+}
 
 larger_hidden_dim = {
     "model_kwargs": {
@@ -351,12 +360,156 @@ dit_test = {
     "val_batch_size": int(6e4) if is_arrakis else int(1e4),
 }
 
+stride_2 = {
+    "stride": 2,
+}
+
+stride_3 = {
+    "stride": 3,
+}
+
+stride_5 = {
+    "stride": 5,
+}
+
 stride_10 = {
     "stride": 10,
 }
 
+# Combined variations with smaller strides for better swing-up coverage
+stride_2_horizon_15 = {
+    "stride": 2,
+    "horizon_length": 15,
+}
+
+stride_3_horizon_15 = {
+    "stride": 3,
+    "horizon_length": 15,
+}
+
 stride_30 = {
     "stride": 30,
+}
+
+data_lim_200 = {
+    "train_dataset_size": 200,
+    "num_epochs": 2000,
+}
+
+# Max path length variations (updates both base and validation_kwargs)
+path_length_150 = {
+    "max_path_length": 150,
+    "validation_kwargs": {
+        "max_path_length": 150,
+    },
+}
+
+path_length_300 = {
+    "max_path_length": 300,
+    "validation_kwargs": {
+        "max_path_length": 300,
+    },
+}
+
+path_length_450 = {
+    "max_path_length": 450,
+    "validation_kwargs": {
+        "max_path_length": 450,
+    },
+}
+
+path_length_613 = {
+    "max_path_length": 613,
+    "validation_kwargs": {
+        "max_path_length": 613,
+    },
+}
+
+horizon_7 = {
+    "horizon_length": 7,
+}
+
+horizon_15 = {
+    "horizon_length": 15,
+}
+
+horizon_31 = {
+    "horizon_length": 31,
+}
+
+# Stride 1 with short path - maximum temporal resolution
+stride_1_horizon_7_path_150 = {
+    "stride": 1,
+    "horizon_length": 7,
+    "max_path_length": 150,
+    "validation_kwargs": {
+        "max_path_length": 150,
+    },
+}
+
+stride_1_horizon_15_path_150 = {
+    "stride": 1,
+    "horizon_length": 15,
+    "max_path_length": 150,
+    "validation_kwargs": {
+        "max_path_length": 150,
+    },
+}
+
+stride_2_horizon_7_path_150 = {
+    "stride": 2,
+    "horizon_length": 7,
+    "max_path_length": 150,
+    "validation_kwargs": {
+        "max_path_length": 150,
+    },
+}
+
+# Combined variations with horizon_31 (total sequence=32, works with UNet)
+stride_2_horizon_31 = {
+    "stride": 2,
+    "horizon_length": 31,
+}
+
+stride_3_horizon_31 = {
+    "stride": 3,
+    "horizon_length": 31,
+}
+
+stride_5_horizon_31 = {
+    "stride": 5,
+    "horizon_length": 31,
+}
+
+# Single-step inference: stride=19 with horizon=31 gives actual_horizon=571
+# This allows single-step rollout for max_path_length=572
+stride_19_horizon_31_single_step = {
+    "stride": 19,
+    "horizon_length": 31,
+    "use_horizon_padding": True,  # Allow shorter validation trajectories
+}
+
+stride_25_horizon_31_single_step = {
+    "stride": 25,
+    "horizon_length": 31,
+    "use_horizon_padding": True,  # Allow shorter validation trajectories
+}
+
+# Combined variation for quick swing-up learning experiments
+# horizon_length=7 gives total sequence=8 (works with UNet)
+stride_5_horizon_7 = {
+    "stride": 5,
+    "horizon_length": 7,
+}
+
+# Alternative with original horizon (total sequence=16)
+stride_5_horizon_15 = {
+    "stride": 5,
+    "horizon_length": 15,
+}
+
+epochs_2000 = {
+    "num_epochs": 2000,
 }
 
 epochs_1000 = {
@@ -365,6 +518,14 @@ epochs_1000 = {
 
 epochs_500 = {
     "num_epochs": 500,
+}
+
+epochs_100 = {
+    "num_epochs": 100,
+}
+
+epochs_25 = {
+    "num_epochs": 25,
 }
 
 next_history_loss_weight = {

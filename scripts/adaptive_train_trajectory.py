@@ -38,6 +38,7 @@ gen_model_class_loader = utils.ClassLoader(
     output_dim=args.observation_dim,
     prediction_length=args.horizon_length + args.history_length,
     history_length=args.history_length,
+    stride=args.stride,
     clip_denoised=args.clip_denoised,
     loss_type=args.loss_type,
     action_indices=args.action_indices,

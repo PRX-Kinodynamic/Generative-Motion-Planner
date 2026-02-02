@@ -32,6 +32,7 @@ class GenerativeModel(nn.Module, ABC):
         loss_weight_type="none",
         loss_weight_kwargs={},
         use_history_mask: bool = False,
+        stride: int = 1,
         **kwargs,
     ):
         super().__init__()
@@ -43,6 +44,7 @@ class GenerativeModel(nn.Module, ABC):
         self.clip_denoised = clip_denoised
         self.history_length = history_length
         self.prediction_length = prediction_length
+        self.stride = stride
         self.action_indices = action_indices
         self.has_global_query = has_global_query
         self.has_local_query = has_local_query
