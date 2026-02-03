@@ -116,7 +116,6 @@ gen_model_class_loader = utils.ClassLoader(
     output_dim=observation_dim,
     prediction_length=args.horizon_length + args.history_length,
     history_length=args.history_length,
-    stride=args.stride,
     clip_denoised=args.clip_denoised,
     loss_type=args.loss_type,
     action_indices=args.action_indices,
@@ -163,7 +162,6 @@ trainer_class_loader = utils.ClassLoader(
     optimizer_kwargs=args.optimizer_kwargs,
     clip_grad_norm=args.safe_get("clip_grad_norm", None),
     eval_freq=args.eval_freq,
-    detailed_eval_freq=args.safe_get("detailed_eval_freq", 0),  # 0 = disabled
     eval_batch_size=args.eval_batch_size,
     eval_seed=args.eval_seed,
     perform_final_state_evaluation=args.perform_final_state_evaluation,

@@ -141,22 +141,12 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         traj_start_idx = 0
         traj_lengths = [len(traj) for traj in trajectories]
         
-        # Debug: print first trajectory info
-        print(f"[ datasets/trajectory ] normed_all_trajectories shape: {normed_all_trajectories.shape}")
-        print(f"[ datasets/trajectory ] First 3 traj_lengths: {traj_lengths[:3]}")
-        
         for traj_length in traj_lengths:
             traj_end_idx = traj_start_idx + traj_length
             normed_traj = normed_all_trajectories[traj_start_idx:traj_end_idx]
             
-            # Use torch.from_numpy for reliable tensor creation
-            normed_traj_tensor = torch.from_numpy(np.ascontiguousarray(normed_traj).astype(np.float32))
-            normed_trajectories.append(normed_traj_tensor)
+            normed_trajectories.append(torch.FloatTensor(normed_traj, device='cpu'))
             traj_start_idx = traj_end_idx
-        
-        # Debug: verify first trajectory shape
-        if normed_trajectories:
-            print(f"[ datasets/trajectory ] First normed trajectory shape: {normed_trajectories[0].shape}")
         
         return normed_trajectories
 
@@ -166,7 +156,6 @@ class TrajectoryDataset(torch.utils.data.Dataset):
 
         histories = []
         final_states = []
-        full_trajectories = []
 
         for trajectory in trajectories:
             history = trajectory[:history_end:self.stride]
@@ -174,14 +163,11 @@ class TrajectoryDataset(torch.utils.data.Dataset):
 
             histories.append(history)
             final_states.append(final_state)
-            full_trajectories.append(trajectory)
 
         histories = torch.stack(histories)
         final_states = torch.stack(final_states)
-        # Store full trajectories as a list (they may have different lengths)
-        # Or pad them if needed - for now keep as list
-        
-        return FinalStateDataSample(histories=histories, final_states=final_states, full_trajectories=full_trajectories)
+
+        return FinalStateDataSample(histories=histories, final_states=final_states)
 
     def get_conditions(self, history):
         """
