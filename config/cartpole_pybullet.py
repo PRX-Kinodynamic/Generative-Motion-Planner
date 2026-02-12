@@ -384,3 +384,11 @@ final_state_quick_eval = {
 two_horizons = {
     "stride": 9,
 }
+
+no_manifold = {
+    "use_manifold": False,
+    "method_kwargs": {
+        "path": "AffineProbPath",
+        "solver": "ODESolver",
+    },
+}

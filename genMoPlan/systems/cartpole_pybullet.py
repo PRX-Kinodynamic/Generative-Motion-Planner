@@ -5,10 +5,6 @@ import torch
 
 from genMoPlan.datasets.normalization import Normalizer
 from genMoPlan.systems.base import BaseSystem, Outcome
-from genMoPlan.utils.data_processing import (
-    handle_angle_wraparound,
-    augment_unwrapped_state_data,
-)
 from genMoPlan.utils.trajectory import process_angles
 
 
@@ -105,26 +101,13 @@ class CartpolePyBulletSystem(BaseSystem):
         metadata.setdefault("invalid_labels", [metadata["invalid_label"]])
         metadata.setdefault("invalid_outcomes", ["INVALID"])
 
-        # Preprocessing functions depend on whether using manifold
-        # - Manifold flow matching: manifold handles angle topology natively
-        # - Euclidean (diffusion): needs unwrapping and augmentation
-        if use_manifold:
-            trajectory_preprocess_fns = []
-            preprocess_kwargs = {
-                "trajectory": {},
-                "plan": None,
-            }
-        else:
-            trajectory_preprocess_fns = [
-                handle_angle_wraparound,
-                augment_unwrapped_state_data,
-            ]
-            preprocess_kwargs = {
-                "trajectory": {
-                    "angle_indices": angle_indices,
-                },
-                "plan": None,
-            }
+        # No preprocessing needed - ManifoldEmbeddingLayer handles angles
+        # by embedding them as (sin, cos), which naturally handles periodicity
+        trajectory_preprocess_fns = []
+        preprocess_kwargs = {
+            "trajectory": {},
+            "plan": None,
+        }
 
         # Post-processing for inference
         post_process_fns = [process_angles]
