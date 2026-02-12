@@ -55,13 +55,18 @@ class BaseSystem:
         history_length: int,
         horizon_length: int,
         max_path_length: int,
-        # State space limits
+        # Dataset name - REQUIRED for loading achieved bounds
+        dataset: str,
+        # State space limits (optional overrides)
         mins: Optional[List[float]] = None,
         maxs: Optional[List[float]] = None,
         state_names: Optional[List[str]] = None,
         angle_indices: Optional[List[int]] = None,
-        # Manifold (optional)
+        # Manifold - REQUIRED: true manifold always exists
         manifold: Optional[Any] = None,
+        model_manifold: Optional[
+            Any
+        ] = None,  # NEW: Manifold for generative model (None when use_manifold=False)
         manifold_mins: Optional[List[Optional[float]]] = None,
         manifold_maxs: Optional[List[Optional[float]]] = None,
         # Data loading
@@ -70,8 +75,6 @@ class BaseSystem:
         # Inference
         post_process_fns: Optional[List[Callable]] = None,
         post_process_fn_kwargs: Optional[Dict[str, Any]] = None,
-        manifold_unwrap_fns: Optional[List[Callable]] = None,
-        manifold_unwrap_kwargs: Optional[Dict[str, Any]] = None,
         # Outcomes and normalization
         valid_outcomes: Optional[Sequence[Outcome]] = None,
         normalizer: Optional[Normalizer] = None,
@@ -104,14 +107,47 @@ class BaseSystem:
         self.max_path_length = int(max_path_length)
         self.metadata = metadata
 
-        # State space limits
-        self.mins = mins if mins is not None else self.DEFAULT_MINS
-        self.maxs = maxs if maxs is not None else self.DEFAULT_MAXS
-        self.state_names = state_names if state_names is not None else self.DEFAULT_STATE_NAMES
-        self.angle_indices = angle_indices if angle_indices is not None else self.DEFAULT_ANGLE_INDICES
+        # State names and angle indices (needed before loading achieved bounds)
+        self.state_names = (
+            state_names if state_names is not None else self.DEFAULT_STATE_NAMES
+        )
+        self.angle_indices = (
+            angle_indices if angle_indices is not None else self.DEFAULT_ANGLE_INDICES
+        )
 
-        # Manifold structure (for flow matching on manifolds)
+        # Load achieved bounds from dataset_description.json (REQUIRED)
+        if not self.state_names:
+            raise ValueError(
+                "BaseSystem requires 'state_names' to map achieved_bounds from "
+                "dataset_description.json"
+            )
+
+        from genMoPlan.utils.paths import get_achieved_bounds
+
+        achieved_mins, achieved_maxs = get_achieved_bounds(dataset, self.state_names)
+        print(
+            f"[ system ] Loaded achieved bounds from {dataset}/dataset_description.json"
+        )
+        print(f"[ system ]   mins: {achieved_mins}")
+        print(f"[ system ]   maxs: {achieved_maxs}")
+
+        # Use achieved bounds (explicit params can still override if provided)
+        self.mins = mins if mins is not None else list(achieved_mins)
+        self.maxs = maxs if maxs is not None else list(achieved_maxs)
+        self.dataset = dataset
+
+        # Manifold structure
+        # - manifold: TRUE manifold reflecting actual state space topology (always exists)
+        #   Used for all distance computations, projection, and evaluation metrics.
+        # - model_manifold: What the generative model uses for its architecture
+        #   Equals manifold when use_manifold=True, None when use_manifold=False
+        if manifold is None:
+            raise ValueError(
+                "BaseSystem requires `manifold` (true manifold) and it must not be None. "
+                "If the system is Euclidean, pass an explicit Euclidean manifold wrapper."
+            )
         self.manifold = manifold
+        self.model_manifold = model_manifold
         self._manifold_mins = manifold_mins
         self._manifold_maxs = manifold_maxs
 
@@ -122,12 +158,18 @@ class BaseSystem:
         # Inference functions
         self.post_process_fns = post_process_fns or []
         self.post_process_fn_kwargs = post_process_fn_kwargs or {}
-        self.manifold_unwrap_fns = manifold_unwrap_fns or []
-        self.manifold_unwrap_kwargs = manifold_unwrap_kwargs or {}
 
         self.valid_outcomes: List[Outcome] = (
             list(valid_outcomes) if valid_outcomes else list(Outcome)
         )
+        # Normalizer is owned by the system
+        # If not provided, initialize deterministically from system bounds.
+        if normalizer is None:
+            from genMoPlan.datasets.normalization import get_normalizer
+
+            normalizer_name = "LimitsNormalizer"
+            params = self.get_normalizer_params()["trajectory"]
+            normalizer = get_normalizer(normalizer_name, params)
         self._normalizer = normalizer
 
         # Cached values
@@ -220,28 +262,24 @@ class BaseSystem:
     # ------------------------------------------------------------------ #
     # Configuration generation
     # ------------------------------------------------------------------ #
-    def get_normalizer_params(self, use_manifold: bool = False) -> Dict[str, Any]:
+    def get_normalizer_params(self) -> Dict[str, Any]:
         """
         Get normalizer parameters for the dataset.
 
-        Args:
-            use_manifold: If True, use manifold mins/maxs (None for angle indices)
+        ALWAYS uses manifold_mins/manifold_maxs which sets angle indices to None.
+        Angles are NEVER normalized because ManifoldEmbeddingLayer handles them
+        via sin/cos embedding, which naturally maps to [-1, 1].
+
 
         Returns:
             Dict with normalizer configuration
         """
-        if use_manifold:
-            return {
-                "trajectory": {
-                    "mins": self.manifold_mins,
-                    "maxs": self.manifold_maxs,
-                },
-                "plan": None,
-            }
+        # Always use manifold_mins/maxs - angle indices are set to None
+        # This ensures angles are never normalized; sin/cos embedding handles them
         return {
             "trajectory": {
-                "mins": self.mins,
-                "maxs": self.maxs,
+                "mins": self.manifold_mins,
+                "maxs": self.manifold_maxs,
             },
             "plan": None,
         }
@@ -262,15 +300,16 @@ class BaseSystem:
             "state_names": self.state_names,
             "max_path_length": self.max_path_length,
             "read_trajectory_fn": self.read_trajectory,
-            "trajectory_normalizer": "LimitsNormalizer",
-            "normalizer_params": self.get_normalizer_params(use_manifold=use_manifold),
-            "trajectory_preprocess_fns": self.trajectory_preprocess_fns if not use_manifold else [],
+            "trajectory_preprocess_fns": (
+                self.trajectory_preprocess_fns if not use_manifold else []
+            ),
             "preprocess_kwargs": self.preprocess_kwargs if not use_manifold else {},
         }
 
-        # Add manifold if using manifold flow matching
-        if use_manifold and self.manifold is not None:
-            config["manifold"] = self.manifold
+        # Add model_manifold if using manifold flow matching
+        # (model_manifold is what the generative model uses, not the true manifold)
+        if use_manifold and self.model_manifold is not None:
+            config["manifold"] = self.model_manifold
 
         return config
 
@@ -285,8 +324,6 @@ class BaseSystem:
             "max_path_length": self.max_path_length,
             "post_process_fns": self.post_process_fns,
             "post_process_fn_kwargs": self.post_process_fn_kwargs,
-            "manifold_unwrap_fns": self.manifold_unwrap_fns,
-            "manifold_unwrap_kwargs": self.manifold_unwrap_kwargs,
         }
         return config
 
@@ -298,12 +335,9 @@ class BaseSystem:
             Dict with flow matching configuration
         """
         config = {
-            "manifold": self.manifold,
-            "normalizer_params": self.get_normalizer_params(use_manifold=True),
+            "manifold": self.model_manifold,  # Use model_manifold for generative model
             "trajectory_preprocess_fns": [],  # Manifold flow matching typically skips preprocessing
             "preprocess_kwargs": {},
-            "manifold_unwrap_fns": self.manifold_unwrap_fns,
-            "manifold_unwrap_kwargs": self.manifold_unwrap_kwargs,
         }
         return config
 
@@ -313,6 +347,10 @@ class BaseSystem:
     @property
     def normalizer(self) -> Optional[Normalizer]:
         return self._normalizer
+
+    @normalizer.setter
+    def normalizer(self, value: Optional[Normalizer]):
+        self._normalizer = value
 
     # ------------------------------------------------------------------ #
     # Outcome helpers

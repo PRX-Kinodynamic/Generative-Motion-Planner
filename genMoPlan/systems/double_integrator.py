@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Union
 
 import numpy as np
+import torch
 
 from genMoPlan.datasets.normalization import Normalizer
 from genMoPlan.systems.base import BaseSystem, Outcome
@@ -43,13 +44,14 @@ class DoubleIntegrator1DSystem(BaseSystem):
         self,
         *,
         name: str = "double_integrator_1d",
+        dataset: str,  # REQUIRED - for loading achieved bounds
         state_dim: int = 2,
         stride: int,
         history_length: int,
         horizon_length: int,
         max_path_length: Optional[int] = None,
-        mins: Optional[List[float]] = None,
-        maxs: Optional[List[float]] = None,
+        mins: Optional[List[float]] = None,  # Optional override (normally from achieved bounds)
+        maxs: Optional[List[float]] = None,  # Optional override (normally from achieved bounds)
         state_names: Optional[List[str]] = None,
         angle_indices: Optional[List[int]] = None,
         valid_outcomes: Optional[Sequence[Outcome]] = None,
@@ -58,14 +60,10 @@ class DoubleIntegrator1DSystem(BaseSystem):
         success_threshold: float = 0.1,
         variant: str = "bang_bang",
     ):
-        # Set defaults from class constants, using variant-specific limits
+        # Set defaults from class constants
         if max_path_length is None:
             max_path_length = self.DEFAULT_MAX_PATH_LENGTH
-        variant_limits = self.VARIANT_LIMITS.get(variant, {})
-        if mins is None:
-            mins = variant_limits.get("mins", self.DEFAULT_MINS).copy()
-        if maxs is None:
-            maxs = variant_limits.get("maxs", self.DEFAULT_MAXS).copy()
+        # mins/maxs: don't set defaults here - let parent load from achieved bounds
         if state_names is None:
             state_names = self.DEFAULT_STATE_NAMES.copy()
         if angle_indices is None:
@@ -77,6 +75,16 @@ class DoubleIntegrator1DSystem(BaseSystem):
         metadata = metadata or {}
         metadata.setdefault("success_threshold", success_threshold)
         metadata.setdefault("variant", variant)
+
+        # Create Euclidean manifold (dist = |a - b|, projx = identity)
+        # Even pure Euclidean systems need a manifold for consistent distance API
+        from flow_matching.utils.manifolds import Euclidean
+        from genMoPlan.utils.manifold import ManifoldWrapper
+        raw_manifold = Euclidean()
+        manifold = ManifoldWrapper(raw_manifold)
+
+        # Double integrator is purely Euclidean - never uses manifold-aware model
+        model_manifold = None
 
         # No preprocessing needed for double integrator (pure Euclidean)
         trajectory_preprocess_fns = []
@@ -93,6 +101,7 @@ class DoubleIntegrator1DSystem(BaseSystem):
 
         super().__init__(
             name=f"{name}_{variant}" if variant else name,
+            dataset=dataset,
             state_dim=state_dim,
             stride=stride,
             history_length=history_length,
@@ -102,6 +111,8 @@ class DoubleIntegrator1DSystem(BaseSystem):
             maxs=maxs,
             state_names=state_names,
             angle_indices=angle_indices,
+            manifold=manifold,
+            model_manifold=model_manifold,
             trajectory_preprocess_fns=trajectory_preprocess_fns,
             preprocess_kwargs=preprocess_kwargs,
             post_process_fns=post_process_fns,
@@ -160,19 +171,20 @@ class DoubleIntegrator1DSystem(BaseSystem):
         """
         Evaluate the final state of a trajectory.
 
-        Success if the state is close to the origin (position ~= 0, velocity ~= 0).
+        Delegates to evaluate_final_states for consistency.
         """
-        threshold = self.metadata.get("success_threshold", 0.1)
-        state_norm = np.linalg.norm(state)
-
-        if state_norm <= threshold:
-            return Outcome.SUCCESS
-
-        return Outcome.FAILURE
+        states = np.asarray(state, dtype=np.float32)
+        if states.ndim == 1:
+            states = states[np.newaxis, :]
+        outcomes = self.evaluate_final_states(states)
+        return Outcome(outcomes[0])
 
     def evaluate_final_states(self, states: np.ndarray) -> np.ndarray:
         """
-        Evaluate a batch of final states using vectorized operations.
+        Evaluate a batch of final states using vectorized, manifold-aware operations.
+
+        For Euclidean manifold, this is equivalent to np.linalg.norm but uses
+        the manifold API for consistency with other systems.
 
         Args:
             states: Array of shape (batch_size, state_dim) containing final states
@@ -182,20 +194,27 @@ class DoubleIntegrator1DSystem(BaseSystem):
         """
         threshold = self.metadata.get("success_threshold", 0.1)
 
-        # Vectorized norm computation
-        state_norms = np.linalg.norm(states, axis=1)
+        # Use manifold-aware distance to origin
+        # Convert to torch for manifold.dist() (library is torch-based)
+        states_t = torch.from_numpy(states).float()
+        origin_t = torch.zeros_like(states_t)
+        per_dim_dist = self.manifold.dist(states_t, origin_t)
+
+        # Compute state norm from manifold distances
+        state_norms = torch.sqrt(torch.sum(per_dim_dist**2, dim=1))
 
         # Vectorized outcome assignment
-        outcomes = np.where(
+        outcomes = torch.where(
             state_norms <= threshold,
             Outcome.SUCCESS.value,
             Outcome.FAILURE.value
         )
-        return outcomes.astype(np.int32)
+        return outcomes.numpy().astype(np.int32)
 
     @classmethod
     def create(
         cls,
+        dataset: str,  # REQUIRED
         stride: int = 1,
         history_length: int = 1,
         horizon_length: int = 31,
@@ -207,6 +226,7 @@ class DoubleIntegrator1DSystem(BaseSystem):
         Factory method to create a DoubleIntegrator1DSystem with sensible defaults.
 
         Args:
+            dataset: Name of the dataset (required for loading achieved bounds)
             stride: Stride for trajectory sampling
             history_length: Length of history conditioning
             horizon_length: Length of prediction horizon
@@ -218,6 +238,7 @@ class DoubleIntegrator1DSystem(BaseSystem):
             DoubleIntegrator1DSystem instance
         """
         return cls(
+            dataset=dataset,
             stride=stride,
             history_length=history_length,
             horizon_length=horizon_length,
@@ -230,6 +251,7 @@ class DoubleIntegrator1DSystem(BaseSystem):
     def from_config(
         cls,
         config: Dict[str, Any],
+        dataset: str,  # REQUIRED
         variant: str = "bang_bang",
         **kwargs,
     ) -> "DoubleIntegrator1DSystem":
@@ -238,6 +260,7 @@ class DoubleIntegrator1DSystem(BaseSystem):
 
         Args:
             config: Configuration dictionary
+            dataset: Name of the dataset (required for loading achieved bounds)
             variant: Controller variant ("bang_bang" or "ppo")
             **kwargs: Additional arguments to override config values
 
@@ -247,6 +270,7 @@ class DoubleIntegrator1DSystem(BaseSystem):
         method_config = config.get("flow_matching", config.get("diffusion", {}))
 
         return cls(
+            dataset=dataset,
             stride=kwargs.get("stride", method_config.get("stride", 1)),
             history_length=kwargs.get(
                 "history_length", method_config.get("history_length", 1)

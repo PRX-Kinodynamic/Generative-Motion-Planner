@@ -1,11 +1,12 @@
 import argparse
 import importlib
 
-from genMoPlan.eval.roa import Classifier
+from genMoPlan.eval.classifier import Classifier
 from genMoPlan.utils import expand_model_paths
+from genMoPlan.utils.model import load_model_args
 
 
-def estimate_roa(
+def evaluate(
     model_state_name,
     model_path,
     n_runs=None,
@@ -17,6 +18,7 @@ def estimate_roa(
     analyze=False,
     verbose=True,
     outcome_prob_threshold=None,
+    use_validation_data=False,
 ):
 
     dataset = None
@@ -46,9 +48,18 @@ def estimate_roa(
             f"Config module for dataset '{dataset}' does not define get_system()."
         )
 
-    system = get_system()
+    # Load model args to determine system configuration (e.g., use_manifold)
+    model_args = load_model_args(model_path)
+    system = get_system(
+        config=getattr(config_module, "base"),
+        use_manifold=getattr(model_args, "use_manifold", False),
+        stride=getattr(model_args, "stride", 1),
+        history_length=getattr(model_args, "history_length", 1),
+        horizon_length=getattr(model_args, "horizon_length", 31),
+    )
 
-    roa_estimator = Classifier(
+
+    classifier = Classifier(
         dataset=dataset,
         model_state_name=model_state_name,
         model_path=model_path,
@@ -59,33 +70,44 @@ def estimate_roa(
         system=system,
     )
 
-    roa_estimator.load_ground_truth()
+    if use_validation_data:
+        classifier.load_validation_ground_truth()
+    else:
+        classifier.load_ground_truth()
 
     if outcome_prob_threshold is not None:
-        roa_estimator.set_outcome_prob_threshold(outcome_prob_threshold)
+        classifier.set_outcome_prob_threshold(outcome_prob_threshold)
 
     if analyze or continue_gen:
-        roa_estimator.load_final_states(timestamp=timestamp)
+        classifier.load_final_states(timestamp=timestamp)
 
     if not analyze:
-        roa_estimator.generate_trajectories(
+        classifier.generate_trajectories(
             save=True,
         )
 
     # Outcome-based analysis driven purely by the system-defined outcomes.
-    roa_estimator.compute_outcome_labels()
-    roa_estimator.compute_outcome_probabilities()
-    roa_estimator.predict_outcomes(save=True)
-    roa_estimator.derive_labels_from_outcomes()
+    classifier.compute_outcome_labels()
+    classifier.compute_outcome_probabilities()
+    classifier.predict_outcomes(save=True)
+    classifier.derive_labels_from_outcomes()
+
+    # Compute final state errors if ground truth final states available
+    if classifier.ground_truth_final_states is not None:
+        classifier.compute_final_state_errors(save=True)
+
+    classifier.compute_classification_results(save=True)
 
     if not no_img:
         try:
-            roa_estimator.plot_roas(plot_separatrix=True)
-        except Exception:
-            pass
-
-    roa_estimator.compute_classification_results(save=True)
-    roa_estimator.plot_classification_results()
+            classifier.plot_roas(plot_separatrix=True)
+            classifier.plot_classification_results()
+        except ValueError as e:
+            if "more than 2D" in str(e):
+                if verbose:
+                    print(f"[ scripts/evaluate ] Skipping plots (state dim > 2)")
+            else:
+                raise
 
 
 if __name__ == "__main__":
@@ -147,12 +169,6 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--no_parallel",
-        action="store_true",
-        help="Do not use parallel processing",
-    )
-
-    parser.add_argument(
         "--outcome_prob_threshold",
         type=float,
         help="Outcome probability threshold for assigning a label/outcome",
@@ -164,12 +180,20 @@ if __name__ == "__main__":
         help="Do not print anything",
     )
 
+    parser.add_argument(
+        "--use_validation_data",
+        action="store_true",
+        help="Use validation dataset as ground truth instead of test_set.txt. "
+             "Reads val_dataset_size and shuffled_indices_fname from saved model args. "
+             "Outputs are saved to results_val/ and final_states_val/ directories.",
+    )
+
     args = parser.parse_args()
 
     if args.model_paths:
         for model_path in args.model_paths:
-            print(f"\n\n[ scripts/estimate_roa ] Estimating ROA for {model_path}\n\n")
-            estimate_roa(
+            print(f"\n\n[ scripts/evaluate ] Evaluating {model_path}\n\n")
+            evaluate(
                 model_state_name=args.model_state_name,
                 model_path=model_path,
                 n_runs=args.n_runs,
@@ -181,9 +205,10 @@ if __name__ == "__main__":
                 analyze=args.analyze,
                 outcome_prob_threshold=args.outcome_prob_threshold,
                 verbose=not args.silent,
+                use_validation_data=args.use_validation_data,
             )
     else:
-        estimate_roa(
+        evaluate(
             model_state_name=args.model_state_name,
             model_path=args.model_path,
             n_runs=args.n_runs,
@@ -195,4 +220,5 @@ if __name__ == "__main__":
             analyze=args.analyze,
             outcome_prob_threshold=args.outcome_prob_threshold,
             verbose=not args.silent,
+            use_validation_data=args.use_validation_data,
         )

@@ -4,7 +4,8 @@ import importlib
 import numpy as np
 
 from genMoPlan.utils import load_trajectories, get_dataset_config
-from genMoPlan.eval.roa import Classifier
+from genMoPlan.eval.classifier import Classifier
+from genMoPlan.utils.model import load_model_args
 
 
 def visualize_generated_trajectories(
@@ -28,9 +29,18 @@ def visualize_generated_trajectories(
         raise ValueError(
             f"Config module for dataset '{dataset}' does not define get_system()."
         )
-    system = get_system()
 
     for model_path in model_paths:
+        # Load model args to determine system configuration (e.g., use_manifold)
+        model_args = load_model_args(model_path)
+        system = get_system(
+            config=getattr(config_module, "base"),
+            use_manifold=getattr(model_args, "use_manifold", False),
+            stride=getattr(model_args, "stride", 1),
+            history_length=getattr(model_args, "history_length", 1),
+            horizon_length=getattr(model_args, "horizon_length", 31),
+        )
+
         classifier = Classifier(
             dataset=dataset,
             model_state_name=model_state_name,
@@ -41,7 +51,7 @@ def visualize_generated_trajectories(
             system=system,
         )
         classifier.start_states = start_states
-        classifier.generate_trajectories(discard_trajectories=False, save=False)
+        classifier.generate_trajectories(return_trajectories=True, save=False)
         classifier.plot_trajectories()
 
 

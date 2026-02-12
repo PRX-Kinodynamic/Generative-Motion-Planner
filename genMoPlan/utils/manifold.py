@@ -29,15 +29,12 @@ class ManifoldType(Enum):
     EUCLIDEAN = auto()
 
 class ManifoldWrapper:
-    def __init__(self, manifold: Manifold, manifold_unwrap_fns: List[Callable] = None, manifold_unwrap_kwargs: Dict = None):
+    def __init__(self, manifold: Manifold):
         self._manifold = manifold
         self.manifold_type = _determine_manifold_type(manifold)
         self.manifold_types = None
         self._only_zero_center = True # To optimize the wrap function for product manifolds with only zero center manifolds
 
-        self.manifold_unwrap_fns = manifold_unwrap_fns
-        self.manifold_unwrap_kwargs = manifold_unwrap_kwargs
-        
         # Pre-compute manifold types if using a product manifold
         if self.manifold_type == ManifoldType.PRODUCT:
             manifold_types = []
@@ -72,47 +69,58 @@ class ManifoldWrapper:
                     manifold_info.append(('Euclidean', d))
                 else:
                     raise ValueError(f"Unsupported manifold type for pickling: {m}")
-            
-            # Include all other attributes except _manifold
-            state = {k: v for k, v in self.__dict__.items() if k != '_manifold'}
-            
+
+            # Include cached attributes (manifold_type, manifold_types, _only_zero_center)
+            cached_state = {
+                'manifold_type': self.manifold_type,
+                'manifold_types': self.manifold_types,
+                '_only_zero_center': self._only_zero_center,
+            }
+
             # Return constructor and args
-            return (self._reconstruct_wrapper, 
-                    ('Product', manifold_info),  # What we need to reconstruct the manifold
-                    state)                       # Other instance state
+            return (self._reconstruct_wrapper,
+                    ('Product', manifold_info, cached_state))
         else:
-            # For non-product manifolds, just store their type and dimension
+            # For non-product manifolds, just store their type
             if self.manifold_type == ManifoldType.SPHERE:
-                manifold_info = ('Sphere', None)
+                manifold_type_str = 'Sphere'
             elif self.manifold_type == ManifoldType.FLAT_TORUS:
-                manifold_info = ('FlatTorus', None)
+                manifold_type_str = 'FlatTorus'
             elif self.manifold_type == ManifoldType.EUCLIDEAN:
-                manifold_info = ('Euclidean', None)
+                manifold_type_str = 'Euclidean'
             else:
                 raise ValueError(f"Unsupported manifold type for pickling: {self.manifold_type}")
-            
-            # Include all other attributes except _manifold
-            state = {k: v for k, v in self.__dict__.items() if k != '_manifold'}
-            
+
+            # Include cached attributes
+            cached_state = {
+                'manifold_type': self.manifold_type,
+                'manifold_types': self.manifold_types,
+                '_only_zero_center': self._only_zero_center,
+            }
+
             # Return constructor and args
-            return (self._reconstruct_wrapper, 
-                    manifold_info,    # What we need to reconstruct the manifold
-                    state)            # Other instance state
-    
+            return (self._reconstruct_wrapper,
+                    (manifold_type_str, None, cached_state))
+
     @staticmethod
-    def _reconstruct_wrapper(manifold_info, state):
+    def _reconstruct_wrapper(manifold_type_str, manifold_info, cached_state=None):
         """
         Static method to reconstruct a ManifoldWrapper from pickle data.
 
         IMPORTANT: This bypasses __init__ to avoid re-running initialization code
         (like printing) when unpickling in multiprocessing workers.
+
+        Args:
+            manifold_type_str: Type of manifold ('Product', 'Sphere', 'FlatTorus', 'Euclidean')
+            manifold_info: For Product manifolds, list of (type, dim) tuples; None otherwise
+            cached_state: Optional dict of cached attributes. If None (old pickles),
+                         the state will be recomputed from the manifold.
         """
         # Product manifold case
-        if manifold_info == 'Product':
+        if manifold_type_str == 'Product':
             sub_manifolds = []
             total_dim = 0
-            for sub_info in state:
-                sub_type, sub_dim = sub_info
+            for sub_type, sub_dim in manifold_info:
                 if sub_type == 'Sphere':
                     sub_manifolds.append((Sphere(), sub_dim))
                 elif sub_type == 'FlatTorus':
@@ -123,22 +131,36 @@ class ManifoldWrapper:
                     raise ValueError(f"Unknown manifold type: {sub_type}")
                 total_dim += sub_dim
             manifold = Product(input_dim=total_dim, manifolds=sub_manifolds)
-        # Single manifold case
-        elif manifold_info == 'Sphere':
+        # Single manifold cases
+        elif manifold_type_str == 'Sphere':
             manifold = Sphere()
-        elif manifold_info == 'FlatTorus':
+        elif manifold_type_str == 'FlatTorus':
             manifold = FlatTorus()
-        elif manifold_info == 'Euclidean':
+        elif manifold_type_str == 'Euclidean':
             manifold = Euclidean()
         else:
-            raise ValueError(f"Invalid manifold info: {manifold_info}")
+            raise ValueError(f"Invalid manifold type: {manifold_type_str}")
 
         # Create wrapper without calling __init__ (avoids prints/initialization)
         wrapper = ManifoldWrapper.__new__(ManifoldWrapper)
         wrapper._manifold = manifold
 
-        # Restore the saved state (contains manifold_type, manifold_types, etc.)
-        wrapper.__dict__.update(state)
+        # Restore the cached state if provided, otherwise recompute
+        if cached_state is not None:
+            wrapper.__dict__.update(cached_state)
+        else:
+            # Old pickle format - recompute cached state from manifold
+            wrapper.manifold_type = _determine_manifold_type(manifold)
+            wrapper._only_zero_center = True
+            if wrapper.manifold_type == ManifoldType.PRODUCT:
+                wrapper.manifold_types = []
+                for m in manifold.manifolds:
+                    mt = _determine_manifold_type(m)
+                    wrapper.manifold_types.append(mt)
+                    if mt == ManifoldType.SPHERE:
+                        wrapper._only_zero_center = False
+            else:
+                wrapper.manifold_types = None
 
         return wrapper
     
@@ -316,8 +338,3 @@ class ManifoldWrapper:
             return u
         else:
             return self._manifold.proju(x, u)
-
-    def unwrap(self, x):
-        for fn in self.manifold_unwrap_fns:
-            x = fn(x, **self.manifold_unwrap_kwargs)
-        return x

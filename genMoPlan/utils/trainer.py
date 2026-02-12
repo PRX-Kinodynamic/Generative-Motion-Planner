@@ -164,6 +164,10 @@ class Trainer(object):
         system = None,
     ):
         super().__init__()
+        if system is None:
+            raise ValueError(
+                "Trainer requires a `system` instance; system=None is no longer supported."
+            )
         self.model = model
         self.model_args = model_args
         self.ema = EMA(ema_decay)
@@ -194,6 +198,17 @@ class Trainer(object):
         self.perform_final_state_evaluation = perform_final_state_evaluation
         self.system = system
 
+        # Normalization single source of truth:
+        # the system owns the normalizer instance, and datasets reuse it.
+        if getattr(system, "normalizer", None) is None:
+            raise ValueError(
+                "Trainer requires system.normalizer to be initialized; "
+                "the system should construct it during __init__."
+            )
+        train_dataset.normalizer = system.normalizer
+        if val_dataset is not None:
+            val_dataset.normalizer = system.normalizer
+
         # Initialize TrajectoryGenerator for final state evaluation if needed
         if perform_final_state_evaluation:
             if system is None:
@@ -201,8 +216,6 @@ class Trainer(object):
                     "Final state evaluation requires a system. "
                     "Pass system=... or set perform_final_state_evaluation=False."
                 )
-            # Get normalizer from dataset if available
-            normalizer = getattr(train_dataset, 'normalizer', None)
             inference_params = {
                 "max_path_length": validation_kwargs.get("max_path_length"),
                 "batch_size": eval_batch_size,
@@ -214,7 +227,6 @@ class Trainer(object):
                 inference_params=inference_params,
                 device=device,
                 verbose=False,
-                require_system=True,
             )
         else:
             self._eval_generator = None
@@ -632,7 +644,7 @@ class Trainer(object):
                 if 'unnorm_val_mae' in val_losses:
                     print(f"    Unnormalized trajectory MAE: {val_losses['unnorm_val_mae']:.6f}")
                     # Print per-dim MAE if available
-                    state_names = self.system.state_names if self.system is not None else None
+                    state_names = self.system.state_names
                     if state_names is not None:
                         per_dim_str = ", ".join([f"{name}: {val_losses.get(f'unnorm_val_mae_{name}', 0):.4f}" for name in state_names if f'unnorm_val_mae_{name}' in val_losses])
                         if per_dim_str:
@@ -727,8 +739,8 @@ class Trainer(object):
         eval_data = self.val_dataset.eval_data
         num_evals = eval_data.final_states.shape[0]
 
-        # Get normalizer for unnormalizing data
-        normalizer = getattr(self.val_dataset, 'normalizer', None)
+        # Unnormalization always uses the system normalizer (single source of truth)
+        normalizer = self.system.normalizer
 
         # Get max_path_length from eval_data or validation_kwargs
         max_path_length = eval_data.max_path_length
@@ -749,6 +761,13 @@ class Trainer(object):
         else:
             target_final_states = target_final_states_normalized_np
 
+        # Apply same post-processing as predictions for consistent comparison
+        post_fns = self._eval_generator.post_process_fns
+        post_fn_kwargs = dict(self._eval_generator.post_process_fn_kwargs or {})
+        if post_fns:
+            for fn in post_fns:
+                target_final_states = fn(target_final_states, **post_fn_kwargs)
+
         # Generate trajectories using TrajectoryGenerator
         # (returns unnormalized final states)
         with torch.no_grad():
@@ -761,15 +780,17 @@ class Trainer(object):
 
         predicted_final_states = result.final_states
 
-        # Compute absolute error (manifold-aware if available)
-        manifold = getattr(self.model, 'manifold', None)
-        if manifold is not None:
-            # Convert to tensors for manifold distance computation
-            pred_t = torch.from_numpy(predicted_final_states).to(self.device)
-            target_t = torch.from_numpy(target_final_states).to(self.device)
-            abs_error = manifold.dist(pred_t, target_t).cpu().numpy()
-        else:
-            abs_error = np.abs(predicted_final_states - target_final_states)
+        # Compute absolute error (ALWAYS via system.manifold; no Euclidean fallback allowed)
+        if self.system is None or getattr(self.system, "manifold", None) is None:
+            raise ValueError(
+                "Final state evaluation requires system.manifold (true manifold). "
+                "Provide a system with a valid manifold; no Euclidean fallback is allowed."
+            )
+
+        # Convert to tensors for manifold distance computation
+        pred_t = torch.from_numpy(predicted_final_states).to(self.device)
+        target_t = torch.from_numpy(target_final_states).to(self.device)
+        abs_error = self.system.manifold.dist(pred_t, target_t).cpu().numpy()
 
         # Compute losses
         eval_losses = {}
@@ -778,7 +799,7 @@ class Trainer(object):
         # Per-dim MAE (only if abs_error has same dimensionality as state)
         if abs_error.ndim == 2 and abs_error.shape[-1] == predicted_final_states.shape[-1]:
             per_dim_mae = abs_error.mean(axis=0)
-            state_names = self.system.state_names if self.system is not None else None
+            state_names = self.system.state_names
             if state_names is not None and len(state_names) == len(per_dim_mae):
                 for i, name in enumerate(state_names):
                     eval_losses[f'final_rollout_mae_{name}'] = float(per_dim_mae[i])
@@ -796,14 +817,16 @@ class Trainer(object):
         num_batches = 0
         self.model.eval()
 
-        # Get normalizer for unnormalized loss computation
-        normalizer = getattr(self.val_dataset, 'normalizer', None)
+        # Unnormalized metrics always use system.normalizer (single source of truth)
+        normalizer = self.system.normalizer
 
         with torch.no_grad(), self.swap_to_ema():
             for i, batch in enumerate(self.dataloader_val):
                 batch = batch_to_device(batch, device=self.device)
 
-                loss, infos = self.model.validation_loss(*batch, normalizer=normalizer, **self.validation_kwargs)
+                loss, infos = self.model.validation_loss(
+                    *batch, normalizer=normalizer, **self.validation_kwargs
+                )
 
                 # Check if loss is valid
                 if torch.isnan(loss) or torch.isinf(loss):
@@ -830,7 +853,7 @@ class Trainer(object):
             val_losses[key] /= num_batches
 
         # Average and expand per-dim vectors
-        state_names = self.system.state_names if self.system is not None else None
+        state_names = self.system.state_names
         for key, vec in per_dim_accumulators.items():
             vec = vec / num_batches
             # Expand into named entries if state_names available

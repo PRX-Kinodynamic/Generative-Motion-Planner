@@ -299,9 +299,11 @@ class Parser(Tap):
             use_manifold = params.get('use_manifold', False)
 
             # Create system instance with training params (stride, history_length, horizon_length)
+            # Dataset name is required for loading achieved bounds from dataset_description.json
             system = module.get_system(
                 config=getattr(module, "base"),
                 use_manifold=use_manifold,
+                dataset=args.dataset,  # REQUIRED: for loading achieved bounds
                 stride=params.get('stride', 1),
                 history_length=params.get('history_length', 1),
                 horizon_length=params.get('horizon_length', 31),

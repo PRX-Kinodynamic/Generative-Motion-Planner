@@ -13,7 +13,7 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-from genMoPlan.datasets.normalization import get_normalizer, Normalizer
+from genMoPlan.datasets.normalization import Normalizer
 from genMoPlan.utils.constants import MASK_ON, MASK_OFF
 from genMoPlan.utils.arrays import to_torch
 from genMoPlan.utils.data_processing import (
@@ -24,7 +24,7 @@ from genMoPlan.utils.data_processing import (
     warn_stride_horizon_length,
 )
 from genMoPlan.utils.generation_result import GenerationResult, TerminationResult
-from genMoPlan.utils.model import load_model, get_normalizer_params
+from genMoPlan.utils.model import load_model
 from genMoPlan.utils.params import load_inference_params
 from genMoPlan.utils.progress import ETAIterator
 from genMoPlan.utils.trajectory import plot_trajectories
@@ -41,7 +41,7 @@ VALID_INFERENCE_MASK_STRATEGIES = [
 DEFAULT_INFERENCE_MASK_STRATEGY = INFERENCE_MASK_FIRST_STEP_ONLY
 
 if TYPE_CHECKING:
-    from genMoPlan.systems import BaseSystem, Outcome
+    from genMoPlan.systems import BaseSystem
 
 
 @dataclass
@@ -152,7 +152,6 @@ class TrajectoryGenerator:
         verbose: Whether to print progress information
         default_batch_size: Default batch size for generation
         system: System instance for termination checking and normalization
-        require_system: If True, raise error if system is not provided (fail-fast)
     """
 
     def __init__(
@@ -168,13 +167,10 @@ class TrajectoryGenerator:
         verbose: bool = True,
         default_batch_size: Optional[int] = None,
         system: Optional["BaseSystem"] = None,
-        require_system: bool = False,
     ):
-        # Fail-fast validation for system requirement
-        if require_system and system is None:
+        if system is None:
             raise ValueError(
-                "TrajectoryGenerator requires a system for termination checking. "
-                "Pass system=... or set require_system=False to disable termination."
+                "TrajectoryGenerator requires a `system` instance; system=None is no longer supported."
             )
 
         if inference_params is None:
@@ -183,7 +179,7 @@ class TrajectoryGenerator:
                     "`dataset` or `model_path` must be provided when inference_params is None."
                 )
             if dataset is not None:
-                inference_params = load_inference_params(dataset)
+                inference_params = load_inference_params(dataset, system=system)
             else:
                 inference_params = {}
 
@@ -219,13 +215,12 @@ class TrajectoryGenerator:
         self._timestamp: Optional[str] = None
         self.gen_traj_path: Optional[str] = None
 
-        # Generation parameters (set by _setup_params_from_source)
+        # Generation parameters (mirrors system; set by _setup_params_from_source)
         self.history_length: Optional[int] = None
         self.horizon_length: Optional[int] = None
         self.max_path_length: Optional[int] = None
         self.stride: int = 1
-        self._termination_enabled: bool = False
-        self._params_source: str = "uninitialized"
+        self._termination_enabled: bool = True
 
         self._load_model(model=model, model_args=model_args)
         self._initialize_method_state()
@@ -265,11 +260,16 @@ class TrajectoryGenerator:
             raise ValueError("Model args were not loaded correctly.")
 
         self.method_name = _infer_method_name(self.model_args)
-        self.history_length = int(getattr(self.model_args, "history_length"))
-        self.horizon_length = int(getattr(self.model_args, "horizon_length"))
-        self.stride = int(getattr(self.model_args, "stride", 1))
-
-        warn_stride_horizon_length(self.horizon_length, self.stride, context="TrajectoryGenerator")
+        # Ensure model args match system (single source of truth)
+        hist = int(getattr(self.model_args, "history_length"))
+        horz = int(getattr(self.model_args, "horizon_length"))
+        strd = int(getattr(self.model_args, "stride", 1))
+        if hist != int(self.system.history_length) or horz != int(self.system.horizon_length) or strd != int(self.system.stride):
+            raise ValueError(
+                "Mismatch between model_args step parameters and system. "
+                f"model_args(history={hist}, horizon={horz}, stride={strd}) vs "
+                f"system(history={self.system.history_length}, horizon={self.system.horizon_length}, stride={self.system.stride})."
+            )
 
         if self.method_name and self.method_name in self.inference_params:
             self.conditional_sample_kwargs = dict(
@@ -278,51 +278,23 @@ class TrajectoryGenerator:
 
     def _setup_params_from_source(self):
         """
-        Set generation parameters from either system or model_args.
-
-        If system is provided, its values take precedence and termination is enabled.
-        If system is not provided, values come from model_args and termination is disabled.
+        Set generation parameters from the system (single source of truth).
         """
-        if self.system is not None:
-            # Use system values - termination enabled
-            self._params_source = "system"
-            self._termination_enabled = True
-            self.history_length = int(self.system.history_length)
-            self.horizon_length = int(self.system.horizon_length)
-            self.stride = int(self.system.stride)
-            if getattr(self.system, "max_path_length", None) is not None:
-                self.max_path_length = int(self.system.max_path_length)
-            else:
-                self.max_path_length = self.inference_params.get("max_path_length")
+        self.history_length = int(self.system.history_length)
+        self.horizon_length = int(self.system.horizon_length)
+        self.stride = int(self.system.stride)
+        self.max_path_length = int(self.system.max_path_length)
 
-            warn_stride_horizon_length(
-                self.horizon_length, self.stride, context="TrajectoryGenerator (system)"
+        warn_stride_horizon_length(
+            self.horizon_length, self.stride, context="TrajectoryGenerator (system)"
+        )
+
+        if self.verbose:
+            print(
+                f"[ utils/trajectory_generator ] Using system parameters: "
+                f"history={self.history_length}, horizon={self.horizon_length}, "
+                f"stride={self.stride}, max_path={self.max_path_length}"
             )
-
-            if self.verbose:
-                print(
-                    f"[ utils/trajectory_generator ] Using system parameters: "
-                    f"history={self.history_length}, horizon={self.horizon_length}, "
-                    f"stride={self.stride}, max_path={self.max_path_length}"
-                )
-        else:
-            # Use model_args values - termination disabled
-            self._params_source = "model_args"
-            self._termination_enabled = False
-            # history_length and horizon_length are already set in _initialize_method_state
-            # Just set max_path_length from inference_params
-            self.max_path_length = self.inference_params.get("max_path_length")
-
-            if self.verbose:
-                print(
-                    f"[ utils/trajectory_generator ] Using model_args parameters: "
-                    f"history={self.history_length}, horizon={self.horizon_length}, "
-                    f"stride={self.stride}, max_path={self.max_path_length}"
-                )
-                if not self._termination_enabled:
-                    print(
-                        "[ utils/trajectory_generator ] Termination checking disabled (no system provided)"
-                    )
 
         # Keep inference params in sync for downstream consumers and saving
         self.inference_params["history_length"] = self.history_length
@@ -334,21 +306,13 @@ class TrajectoryGenerator:
     # Normalization / processing helpers
     # ------------------------------------------------------------------
     def _get_normalizer(self) -> Optional[Normalizer]:
-        if (
-            self.system is not None
-            and getattr(self.system, "normalizer", None) is not None
-        ):
-            return self.system.normalizer
-
-        if self.model_args is None:
-            return None
-
-        normalizer_name = getattr(self.model_args, "trajectory_normalizer", None)
-        if normalizer_name is None:
-            return None
-
-        params = get_normalizer_params(self.model_args)
-        return get_normalizer(normalizer_name, params)
+        # System is always present and owns the normalizer
+        normalizer = getattr(self.system, "normalizer", None)
+        if normalizer is None:
+            raise ValueError(
+                "TrajectoryGenerator requires system.normalizer to be initialized."
+            )
+        return normalizer
 
     @staticmethod
     def _process_states(
@@ -502,42 +466,45 @@ class TrajectoryGenerator:
 
         # Allocate output arrays
         all_final_states = np.zeros((total, params.state_dim), dtype=np.float32)
-        all_trajectories: Optional[List[np.ndarray]] = [] if return_trajectories else None
+        all_trajectories: Optional[List[np.ndarray]] = (
+            [] if return_trajectories else None
+        )
         all_termination_steps = np.full(total, -1, dtype=np.int32)
         all_termination_outcomes = np.full(total, -1, dtype=np.int32)
 
         # Process in batches
         for idx in range(0, total, params.batch_size):
             batch_start = start_states_normalized[idx : idx + params.batch_size]
-            batch_start_unnormalized = start_states[idx : idx + params.batch_size]
             actual_batch_size = len(batch_start)
 
             # Get batch histories if provided
             batch_histories = None
-            batch_histories_unnormalized = None
             if start_histories_normalized is not None:
-                batch_histories = start_histories_normalized[idx : idx + params.batch_size]
-                batch_histories_unnormalized = start_histories[idx : idx + params.batch_size]
+                batch_histories = start_histories_normalized[
+                    idx : idx + params.batch_size
+                ]
 
             # Generate this batch
             batch_result = self._generate_batch(
                 batch_start,
-                batch_start_unnormalized,
                 params=params,
                 normalizer=normalizer,
                 return_trajectories=return_trajectories,
                 conditional_sample_kwargs=cond_kwargs,
                 verbose=verbose,
                 start_histories_normalized=batch_histories,
-                start_histories_unnormalized=batch_histories_unnormalized,
             )
 
             # Store results
             all_final_states[idx : idx + actual_batch_size] = batch_result.final_states
             if batch_result.termination_steps is not None:
-                all_termination_steps[idx : idx + actual_batch_size] = batch_result.termination_steps
+                all_termination_steps[idx : idx + actual_batch_size] = (
+                    batch_result.termination_steps
+                )
             if batch_result.termination_outcomes is not None:
-                all_termination_outcomes[idx : idx + actual_batch_size] = batch_result.termination_outcomes
+                all_termination_outcomes[idx : idx + actual_batch_size] = (
+                    batch_result.termination_outcomes
+                )
             if all_trajectories is not None and batch_result.trajectories is not None:
                 all_trajectories.append(batch_result.trajectories)
 
@@ -595,7 +562,10 @@ class TrajectoryGenerator:
         else:
             # Convert num_inference_steps to max_path_length for storage
             self.max_path_length = compute_max_path_length(
-                num_inference_steps, self.history_length, self.horizon_length, self.stride
+                num_inference_steps,
+                self.history_length,
+                self.horizon_length,
+                self.stride,
             )
 
         self.inference_params["max_path_length"] = self.max_path_length
@@ -658,21 +628,20 @@ class TrajectoryGenerator:
             )
 
         # Save the system snapshot as a separate JSON file for auditability.
-        if self.system is not None:
-            try:
-                system_state = self.system.to_dict()
-                system_path = path.join(save_path, "system_state.json")
-                with open(system_path, "w") as f:
-                    json.dump(system_state, f, indent=4)
-                if self.verbose:
-                    print(
-                        f"[ utils/trajectory_generator ] System state saved to {system_path}"
-                    )
-            except Exception as exc:
-                if self.verbose:
-                    warnings.warn(
-                        f"[ utils/trajectory_generator ] Failed to save system_state.json: {exc}"
-                    )
+        try:
+            system_state = self.system.to_dict()
+            system_path = path.join(save_path, "system_state.json")
+            with open(system_path, "w") as f:
+                json.dump(system_state, f, indent=4)
+            if self.verbose:
+                print(
+                    f"[ utils/trajectory_generator ] System state saved to {system_path}"
+                )
+        except Exception as exc:
+            if self.verbose:
+                warnings.warn(
+                    f"[ utils/trajectory_generator ] Failed to save system_state.json: {exc}"
+                )
 
     def _prepare_save_directory(
         self, n_runs: Optional[int], batch_size: Optional[int], timestamp: Optional[str]
@@ -775,7 +744,9 @@ class TrajectoryGenerator:
             )
 
         final_state_runs: List[np.ndarray] = []
-        trajectory_runs: Optional[List[np.ndarray]] = [] if return_trajectories else None
+        trajectory_runs: Optional[List[np.ndarray]] = (
+            [] if return_trajectories else None
+        )
 
         iterator = ETAIterator(iter(range(n_runs)), n_runs)
         for run_idx in iterator:
@@ -804,7 +775,9 @@ class TrajectoryGenerator:
                 trajectory_runs.append(result.trajectories)
 
             if save:
-                self._save_single_run(run_offset + run_idx, start_states, result.final_states)
+                self._save_single_run(
+                    run_offset + run_idx, start_states, result.final_states
+                )
 
             # Clean up after each run
             gc.collect()
@@ -893,7 +866,9 @@ class TrajectoryGenerator:
             raise ValueError("Could not determine state dimension from model_args.")
 
         # Model sequence length (what the model was trained on)
-        model_sequence_length = int(self.history_length + self.model_args.horizon_length)
+        model_sequence_length = int(
+            self.history_length + self.model_args.horizon_length
+        )
 
         return ResolvedParams(
             history_length=int(self.history_length),
@@ -909,7 +884,6 @@ class TrajectoryGenerator:
     def _generate_batch(
         self,
         start_states_normalized: np.ndarray,
-        start_states_unnormalized: np.ndarray,
         *,
         params: ResolvedParams,
         normalizer: Optional[Normalizer],
@@ -917,7 +891,6 @@ class TrajectoryGenerator:
         conditional_sample_kwargs: dict,
         verbose: bool,
         start_histories_normalized: Optional[np.ndarray] = None,
-        start_histories_unnormalized: Optional[np.ndarray] = None,
     ) -> GenerationResult:
         """
         Generate trajectories for a single batch.
@@ -946,7 +919,9 @@ class TrajectoryGenerator:
         batch_size = len(start_states_normalized)
 
         # Convert to torch
-        current_states = to_torch(start_states_normalized, dtype=torch.float32, device=device)
+        current_states = to_torch(
+            start_states_normalized, dtype=torch.float32, device=device
+        )
 
         # Initialize trajectory buffer if needed
         # Store trajectories in MODEL-SPACE (just model predictions) for efficiency
@@ -965,7 +940,7 @@ class TrajectoryGenerator:
             # Initialize history portion
             if start_histories_normalized is not None:
                 # Copy provided history
-                trajectories[:, :params.history_length] = start_histories_normalized
+                trajectories[:, : params.history_length] = start_histories_normalized
             else:
                 # Store initial state at last history position
                 trajectories[:, params.history_length - 1] = start_states_normalized
@@ -974,7 +949,9 @@ class TrajectoryGenerator:
 
         # Initialize history window - use provided histories if available
         if start_histories_normalized is not None:
-            history_window = to_torch(start_histories_normalized, dtype=torch.float32, device=device)
+            history_window = to_torch(
+                start_histories_normalized, dtype=torch.float32, device=device
+            )
         else:
             history_window = self._init_history_window(current_states, params)
 
@@ -1002,12 +979,17 @@ class TrajectoryGenerator:
                 steps_to_add = min(
                     params.horizon_length,
                     compute_total_predictions(
-                        params.history_length, params.num_inference_steps, params.horizon_length
-                    ) - prediction_idx
+                        params.history_length,
+                        params.num_inference_steps,
+                        params.horizon_length,
+                    )
+                    - prediction_idx,
                 )
 
                 # Build conditions from history window
-                conditions = {t: history_window[:, t, :] for t in range(params.history_length)}
+                conditions = {
+                    t: history_window[:, t, :] for t in range(params.history_length)
+                }
 
                 # Build sample kwargs with mask handling
                 sample_kwargs = self._build_sample_kwargs(
@@ -1096,22 +1078,32 @@ class TrajectoryGenerator:
                     # More precise: need to account for history offset
                     if params.stride > 1:
                         # Rough approximation: convert back to model index
-                        term_model_idx = (term_timestep + params.stride - 1) // params.stride
+                        term_model_idx = (
+                            term_timestep + params.stride - 1
+                        ) // params.stride
                     else:
                         term_model_idx = term_timestep
 
                     # Ensure we don't go out of bounds
                     total_preds = compute_total_predictions(
-                        params.history_length, params.num_inference_steps, params.horizon_length
+                        params.history_length,
+                        params.num_inference_steps,
+                        params.horizon_length,
                     )
                     if term_model_idx < total_preds and term_model_idx > 0:
-                        trajectories[i, term_model_idx:, :] = trajectories[i, term_model_idx - 1, :]
+                        trajectories[i, term_model_idx:, :] = trajectories[
+                            i, term_model_idx - 1, :
+                        ]
 
         return GenerationResult(
             final_states=final_states,
             trajectories=trajectories,
-            termination_steps=termination_result.step if self._termination_enabled else None,
-            termination_outcomes=termination_result.outcome if self._termination_enabled else None,
+            termination_steps=(
+                termination_result.step if self._termination_enabled else None
+            ),
+            termination_outcomes=(
+                termination_result.outcome if self._termination_enabled else None
+            ),
         )
 
     def _init_history_window(
@@ -1121,7 +1113,9 @@ class TrajectoryGenerator:
     ) -> torch.Tensor:
         """Initialize history window for autoregressive generation."""
         batch_size = current_states.shape[0]
-        use_history_padding = bool(getattr(self.model_args, "use_history_padding", True))
+        use_history_padding = bool(
+            getattr(self.model_args, "use_history_padding", True)
+        )
 
         if use_history_padding:
             # Repeat initial state across all history positions
@@ -1142,7 +1136,9 @@ class TrajectoryGenerator:
         params: ResolvedParams,
     ) -> Optional[torch.Tensor]:
         """Initialize mask for first step if history masking is used."""
-        use_history_padding = bool(getattr(self.model_args, "use_history_padding", True))
+        use_history_padding = bool(
+            getattr(self.model_args, "use_history_padding", True)
+        )
 
         if use_history_padding:
             return None
@@ -1208,11 +1204,13 @@ class TrajectoryGenerator:
             # Roll and update (more efficient than concat+slice for large tensors)
             if new_states_count >= params.history_length:
                 # Replace entire history
-                return horizon_pred[:, -params.history_length:, :].clone()
+                return horizon_pred[:, -params.history_length :, :].clone()
             else:
                 # Partial update - roll left and fill from right
                 history_window = torch.roll(history_window, -new_states_count, dims=1)
-                history_window[:, -new_states_count:, :] = horizon_pred[:, -new_states_count:, :]
+                history_window[:, -new_states_count:, :] = horizon_pred[
+                    :, -new_states_count:, :
+                ]
                 return history_window
 
     def _check_termination_all_states(
@@ -1241,29 +1239,37 @@ class TrajectoryGenerator:
         Returns:
             TerminationResult with termination steps in ACTUAL TIMESTEPS (not model-space)
         """
-        if self.system is None:
-            return TerminationResult.none(horizon_pred.shape[0])
+        if normalizer is None:
+            raise ValueError(
+                "Termination checking requires a normalizer (expected: system.normalizer)."
+            )
 
         batch_size, horizon_len, state_dim = horizon_pred.shape
 
         # Convert to numpy and unnormalize
         pred_np = horizon_pred.detach().cpu().numpy()
-        if normalizer is not None:
-            # Unnormalize for evaluation
-            pred_unnorm = normalizer.unnormalize(pred_np.reshape(-1, state_dim))
-            pred_unnorm = pred_unnorm.reshape(batch_size, horizon_len, state_dim)
-        else:
-            pred_unnorm = pred_np
+        # Unnormalize for evaluation
+        pred_unnorm = normalizer.unnormalize(pred_np.reshape(-1, state_dim))
+        pred_unnorm = pred_unnorm.reshape(batch_size, horizon_len, state_dim)
 
         # Vectorized evaluation: flatten all states and evaluate at once
-        states_flat = pred_unnorm.reshape(-1, state_dim)  # [batch*horizon_len, state_dim]
-        outcomes_flat = self.system.evaluate_final_states(states_flat)  # [batch*horizon_len]
-        outcomes = outcomes_flat.reshape(batch_size, horizon_len)  # [batch, horizon_len]
+        states_flat = pred_unnorm.reshape(
+            -1, state_dim
+        )  # [batch*horizon_len, state_dim]
+        outcomes_flat = self.system.evaluate_final_states(
+            states_flat
+        )  # [batch*horizon_len]
+        outcomes = outcomes_flat.reshape(
+            batch_size, horizon_len
+        )  # [batch, horizon_len]
 
         # Find first terminating state (SUCCESS or FAILURE) for each trajectory
         # Terminate if ANY state is SUCCESS/FAILURE, continue only if ALL are INVALID
         from genMoPlan.systems.base import Outcome
-        is_terminating = (outcomes == Outcome.SUCCESS.value) | (outcomes == Outcome.FAILURE.value)
+
+        is_terminating = (outcomes == Outcome.SUCCESS.value) | (
+            outcomes == Outcome.FAILURE.value
+        )
 
         termination_step = np.full(batch_size, -1, dtype=np.int32)
         termination_outcome = np.full(batch_size, -1, dtype=np.int32)
@@ -1280,7 +1286,9 @@ class TrajectoryGenerator:
             # Check if any state in this horizon triggers termination
             if is_terminating[i].any():
                 # Find first terminating state in horizon (index in horizon)
-                first_term_t = np.argmax(is_terminating[i])  # argmax returns index of first True
+                first_term_t = np.argmax(
+                    is_terminating[i]
+                )  # argmax returns index of first True
 
                 # Convert to actual timestep:
                 # Each prediction in horizon is stride timesteps apart
@@ -1346,7 +1354,9 @@ class TrajectoryGenerator:
         for pred_idx in range(num_predictions):
             timestep_idx = pred_idx * stride
             if timestep_idx < max_timesteps:
-                trajectory_timesteps[:, timestep_idx] = trajectory_model_space[:, pred_idx]
+                trajectory_timesteps[:, timestep_idx] = trajectory_model_space[
+                    :, pred_idx
+                ]
 
         return trajectory_timesteps
 

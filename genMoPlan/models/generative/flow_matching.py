@@ -1,6 +1,4 @@
 import warnings
-import numpy as np
-from typing import Callable
 
 import torch
 
@@ -17,6 +15,7 @@ except ImportError:
 from genMoPlan.models.helpers import apply_conditioning
 from genMoPlan.utils.arrays import torch_randn_like
 from genMoPlan.utils.constants import MASK_ON, MASK_OFF
+from genMoPlan.models.manifold import ManifoldEmbeddingLayer
 
 from .base import GenerativeModel, Sample
 
@@ -46,7 +45,9 @@ class FlowMatching(GenerativeModel):
         **kwargs,
     ):
         if not FLOW_MATCHING_AVAILABLE:
-            raise ImportError("Flow matching is not available. Please install flow_matching to use the flow matching method.")
+            raise ImportError(
+                "Flow matching is not available. Please install flow_matching to use the flow matching method."
+            )
 
         super().__init__(
             model=model,
@@ -57,19 +58,20 @@ class FlowMatching(GenerativeModel):
             loss_type=loss_type,
             has_local_query=has_local_query,
             has_global_query=has_global_query,
-            **kwargs
+            **kwargs,
         )
 
         self.n_timesteps = 1
         self.history_length = history_length
 
+        # Validate Riemannian mode configuration
         if self.manifold is not None:
             if path != "GeodesicProbPath":
                 raise ValueError("Manifold is not supported for non-geodesic paths")
-            
+
             if solver != "RiemannianODESolver":
                 raise ValueError("Riemannian solver is required for geodesic paths")
-        
+
         # ------------------------------ Setup flow matching components ------------------------------#
 
         if type(scheduler) == str:
@@ -79,18 +81,20 @@ class FlowMatching(GenerativeModel):
 
         path_args = [scheduler]
 
-        if self.manifold is not None:
-            from genMoPlan.models.manifold import ProjectToTangent
 
+        self.model = ManifoldEmbeddingLayer(
+            model,
+            manifold=self.system.manifold,
+            input_dim=self.input_dim,
+            n_fourier_features=n_fourier_features,
+            use_history_mask=self.use_mask,
+        )
+
+        # Path/solver use model_manifold (self.manifold) for Riemannian geometry.
+        # When model_manifold is None, we use Euclidean path/solver.
+        if self.manifold is not None:
             path_args.append(self.manifold)
             solver_args = [self.manifold]
-            self.model = ProjectToTangent(
-                model,
-                manifold=self.manifold,
-                input_dim=self.input_dim,
-                n_fourier_features=n_fourier_features,
-                use_history_mask=self.use_mask,
-            )
         else:
             solver_args = []
 
@@ -103,8 +107,8 @@ class FlowMatching(GenerativeModel):
 
         self.transformed_model = ScheduleTransformedModel(
             velocity_model=self.vector_field,
-            original_scheduler = scheduler,
-            new_scheduler = CondOTScheduler(),
+            original_scheduler=scheduler,
+            new_scheduler=CondOTScheduler(),
         )
 
         solver_args.append(self.transformed_model)
@@ -113,12 +117,14 @@ class FlowMatching(GenerativeModel):
 
     # --------------------------------------- vector field ----------------------------------------#
 
-    def vector_field(self, x=None, t=None, global_query=None, local_query=None, mask=None):
+    def vector_field(
+        self, x=None, t=None, global_query=None, local_query=None, mask=None
+    ):
         if x is None or t is None:
             raise ValueError("x and t must be provided")
         if getattr(self, "use_mask", False) and mask is None:
             raise ValueError("Mask expected but not provided")
-        
+
         if t.ndim == 0:
             batch_size = x.shape[0]
             t = t.unsqueeze(0).repeat(batch_size)
@@ -126,17 +132,23 @@ class FlowMatching(GenerativeModel):
         # The model expects parameters in the order: (x, global_query, local_query, t, mask)
         # Require mask if experiment expects it
 
-        vector_field = self.model(x, global_query, local_query, t, mask=mask) if mask is not None else self.model(x, global_query, local_query, t)
+        vector_field = (
+            self.model(x, global_query, local_query, t, mask=mask)
+            if mask is not None
+            else self.model(x, global_query, local_query, t)
+        )
 
         # Zero out the vector field for the history portion
         if self.history_length > 0:
-            vector_field[:, :self.history_length, :] = 0.0
-            
+            vector_field[:, : self.history_length, :] = 0.0
+
         return vector_field
 
     # ------------------------------------------ training ------------------------------------------#
 
-    def compute_loss(self, x_target, cond, global_query=None, local_query=None, seed=None, mask=None):
+    def compute_loss(
+        self, x_target, cond, global_query=None, local_query=None, seed=None, mask=None
+    ):
         """
         Choose a random timestep t and calculate the loss for the model.
 
@@ -172,7 +184,9 @@ class FlowMatching(GenerativeModel):
         if self.use_mask_loss_weighting and mask is not None:
             # Create mask weights: MASK_OFF (1) = count in loss, MASK_ON (0) = ignore
             # Expand mask from [batch, seq] to [batch, seq, 1] for broadcasting
-            mask_weights = mask.unsqueeze(-1).to(dtype=x_target.dtype, device=x_target.device)
+            mask_weights = mask.unsqueeze(-1).to(
+                dtype=x_target.dtype, device=x_target.device
+            )
 
             if combined_loss_weights is not None:
                 # Combine with existing loss weights
@@ -181,7 +195,13 @@ class FlowMatching(GenerativeModel):
                 combined_loss_weights = mask_weights
 
         loss, info = self.loss_fn(
-            self.vector_field(x=path_sample.x_t, t=path_sample.t, global_query=global_query, local_query=local_query, mask=mask),
+            self.vector_field(
+                x=path_sample.x_t,
+                t=path_sample.t,
+                global_query=global_query,
+                local_query=local_query,
+                mask=mask,
+            ),
             path_sample.dx_t,
             ignore_manifold=True,
             loss_weights=combined_loss_weights,
@@ -193,18 +213,32 @@ class FlowMatching(GenerativeModel):
             num_valid = (mask == MASK_OFF).sum().item()
             info["num_masked_positions"] = num_masked
             info["num_valid_positions"] = num_valid
-            info["percent_masked"] = 100.0 * num_masked / mask.numel() if mask.numel() > 0 else 0.0
+            info["percent_masked"] = (
+                100.0 * num_masked / mask.numel() if mask.numel() > 0 else 0.0
+            )
 
         return loss, info
 
-    
     # ------------------------------------------ inference ------------------------------------------#
 
     @torch.no_grad()
-    def conditional_sample(self, cond, shape, global_query=None, local_query=None, n_timesteps=5, integration_method="euler", return_chain=False, n_intermediate_steps=0, seed=None, mask=None, **kwargs) -> Sample:
+    def conditional_sample(
+        self,
+        cond,
+        shape,
+        global_query=None,
+        local_query=None,
+        n_timesteps=5,
+        integration_method="euler",
+        return_chain=False,
+        n_intermediate_steps=0,
+        seed=None,
+        mask=None,
+        **kwargs,
+    ) -> Sample:
         """
         Generate samples by running the flow matching ODE solver from noise to target.
-        
+
         Args:
             cond: Conditioning information that will be applied to the samples
             shape: Shape of the output samples
@@ -216,7 +250,7 @@ class FlowMatching(GenerativeModel):
             n_intermediate_steps: Number of intermediate steps to save (if return_chain=True)
             mask: Optional mask to apply to the samples
             **kwargs: Additional arguments passed to the solver
-            
+
         Returns:
             Sample: An object containing the generated trajectories and optional intermediate chains
         """
@@ -230,7 +264,9 @@ class FlowMatching(GenerativeModel):
             mask = None
 
         if n_intermediate_steps == 0 and return_chain:
-            warnings.warn("n_intermediate_steps is 0 and return_chain is True, this will return only the noisy and final samples")
+            warnings.warn(
+                "n_intermediate_steps is 0 and return_chain is True, this will return only the noisy and final samples"
+            )
 
         T = torch.linspace(0, 1, n_intermediate_steps + 2)
 
@@ -240,7 +276,7 @@ class FlowMatching(GenerativeModel):
             generator = None
 
         x_noisy = torch.randn(shape, device=device, generator=generator)
-        
+
         apply_conditioning(x_noisy, cond)
 
         if self.manifold is not None:
@@ -249,19 +285,19 @@ class FlowMatching(GenerativeModel):
         model_extras = {}
 
         if global_query is not None:
-            model_extras['global_query'] = global_query
+            model_extras["global_query"] = global_query
         if local_query is not None:
-            model_extras['local_query'] = local_query
+            model_extras["local_query"] = local_query
         if mask is not None:
-            model_extras['mask'] = mask
+            model_extras["mask"] = mask
 
         sol = self.solver.sample(
-            x_init=x_noisy, 
-            step_size=1.0/n_timesteps, 
-            time_grid=T, 
-            method=integration_method, 
+            x_init=x_noisy,
+            step_size=1.0 / n_timesteps,
+            time_grid=T,
+            method=integration_method,
             return_intermediates=return_chain,
-            **model_extras
+            **model_extras,
         )
 
         if return_chain:
@@ -273,15 +309,22 @@ class FlowMatching(GenerativeModel):
         if self.clip_denoised:
             sol = torch.clamp(sol, -1.0, 1.0)
 
-        if self.manifold is not None:
-            sol = self.manifold.wrap(sol) # Wrap the samples to the manifold for safety
-            sol = self.manifold.unwrap(sol) # Unwrap the samples to the original space
+        sol = self.system.manifold.projx(sol)
 
         return Sample(trajectories=sol, values=None, chains=chains)
-    
+
     # ------------------------------------------ validation ------------------------------------------#
 
-    def validation_loss(self, x, cond, global_query=None, local_query=None, mask=None, normalizer=None, **sample_kwargs):
+    def validation_loss(
+        self,
+        x,
+        cond,
+        global_query=None,
+        local_query=None,
+        mask=None,
+        normalizer=None,
+        **sample_kwargs,
+    ):
         if not self.has_local_query:
             local_query = None
         if not self.has_global_query:
@@ -302,6 +345,11 @@ class FlowMatching(GenerativeModel):
         loss, info = self.loss_fn(sol.trajectories, x, loss_weights=self.loss_weights)
 
         # Compute unnormalized MAE losses (manifold-aware)
+        if normalizer is None:
+            raise ValueError(
+                "FlowMatching.validation_loss requires `normalizer` "
+                "(expected: system.normalizer)."
+            )
         if normalizer is not None:
             pred_np = sol.trajectories.detach().cpu().numpy()
             target_np = x.detach().cpu().numpy()
@@ -310,29 +358,31 @@ class FlowMatching(GenerativeModel):
 
             # Convert back to tensors
             pred_unnorm_t = torch.from_numpy(pred_unnorm).to(x.device, dtype=x.dtype)
-            target_unnorm_t = torch.from_numpy(target_unnorm).to(x.device, dtype=x.dtype)
+            target_unnorm_t = torch.from_numpy(target_unnorm).to(
+                x.device, dtype=x.dtype
+            )
 
-            # Full trajectory unnormalized MAE (manifold-aware): [batch, horizon, state_dim]
-            if self.manifold is not None:
-                abs_error = self.manifold.dist(pred_unnorm_t, target_unnorm_t)
-            else:
-                abs_error = torch.abs(pred_unnorm_t - target_unnorm_t)
+
+            abs_error = self.system.manifold.dist(pred_unnorm_t, target_unnorm_t)
 
             info["unnorm_val_mae"] = abs_error.mean().item()
             # Per-dim only if output matches state_dim (not for Sphere which returns single value)
             if abs_error.shape[-1] == pred_unnorm_t.shape[-1]:
-                info["unnorm_val_mae_per_dim"] = abs_error.mean(dim=(0, 1)).detach().cpu().numpy()
+                info["unnorm_val_mae_per_dim"] = (
+                    abs_error.mean(dim=(0, 1)).detach().cpu().numpy()
+                )
 
             # Final horizon step unnormalized MAE: [batch, state_dim]
             pred_final_unnorm_t = pred_unnorm_t[:, -1, :]
             target_final_unnorm_t = target_unnorm_t[:, -1, :]
-            if self.manifold is not None:
-                abs_error_final = self.manifold.dist(pred_final_unnorm_t, target_final_unnorm_t)
-            else:
-                abs_error_final = torch.abs(pred_final_unnorm_t - target_final_unnorm_t)
+            abs_error_final = self.system.manifold.dist(
+                pred_final_unnorm_t, target_final_unnorm_t
+            )
 
             info["unnorm_final_horizon_step_mae"] = abs_error_final.mean().item()
             if abs_error_final.shape[-1] == pred_final_unnorm_t.shape[-1]:
-                info["unnorm_final_horizon_step_mae_per_dim"] = abs_error_final.mean(dim=0).detach().cpu().numpy()
+                info["unnorm_final_horizon_step_mae_per_dim"] = (
+                    abs_error_final.mean(dim=0).detach().cpu().numpy()
+                )
 
         return loss, info

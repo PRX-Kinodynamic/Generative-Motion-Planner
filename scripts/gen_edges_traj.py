@@ -1,6 +1,6 @@
 import importlib
 
-from genMoPlan.eval.roa import Classifier
+from genMoPlan.eval.classifier import Classifier
 
 
 dataset = "pendulum_lqr_50k"
@@ -46,6 +46,6 @@ roa_estimator.expected_labels = roa_estimator.expected_labels[edge_indices]
 roa_estimator.timestamp = "limited_trajectories"
 
 roa_estimator.generate_trajectories(
-    discard_trajectories=True,
+    return_trajectories=True,
     save=True,
 )

@@ -70,16 +70,19 @@ class ValueLoss(nn.Module):
 
 class WeightedL1(WeightedLoss):
     def _loss(self, pred, targ, ignore_manifold=False):
-        return torch.abs(pred - targ)
+        # manifold is REQUIRED (always exists); use ignore_manifold to opt-out (e.g., dx_t loss)
+        if ignore_manifold:
+            return torch.abs(pred - targ)
+        return self.manifold.dist(pred, targ)
 
 
 class WeightedL2(WeightedLoss):
     def _loss(self, pred, targ, ignore_manifold=False):
         # Output shape: [batch_size, horizon, output_dim], not performing any reduction over the output_dim
-        if self.manifold is not None and not ignore_manifold:
-            return self.manifold.dist(pred, targ)
-
-        return F.mse_loss(pred, targ, reduction="none")
+        # manifold is REQUIRED (always exists); use ignore_manifold to opt-out (e.g., dx_t loss)
+        if ignore_manifold:
+            return F.mse_loss(pred, targ, reduction="none")
+        return self.manifold.dist(pred, targ)
 
 
 class ValueL1(ValueLoss):

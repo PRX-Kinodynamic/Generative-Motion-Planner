@@ -7,7 +7,6 @@ from genMoPlan.systems.base import BaseSystem, Outcome
 from genMoPlan.utils.data_processing import (
     handle_angle_wraparound,
     augment_unwrapped_state_data,
-    shift_to_zero_center_angles,
 )
 from genMoPlan.utils.trajectory import process_angles
 
@@ -74,13 +73,15 @@ class HumanoidGetUpSystem(BaseSystem):
         self,
         *,
         name: str = "humanoid_get_up",
+        dataset: str,  # REQUIRED - for loading achieved bounds
         state_dim: int = 67,
         stride: int,
         history_length: int,
         horizon_length: int,
         max_path_length: Optional[int] = None,
-        mins: Optional[List[float]] = None,
-        maxs: Optional[List[float]] = None,
+        mins: Optional[List[float]] = None,  # Optional override (normally from achieved bounds)
+        maxs: Optional[List[float]] = None,  # Optional override (normally from achieved bounds)
+        state_names: Optional[List[str]] = None,
         angle_indices: Optional[List[int]] = None,
         manifold: Optional[Any] = None,
         valid_outcomes: Optional[Sequence[Outcome]] = None,
@@ -92,10 +93,9 @@ class HumanoidGetUpSystem(BaseSystem):
         # Set defaults from class constants
         if max_path_length is None:
             max_path_length = self.DEFAULT_MAX_PATH_LENGTH
-        if mins is None:
-            mins = self.DEFAULT_MINS.copy()
-        if maxs is None:
-            maxs = self.DEFAULT_MAXS.copy()
+        # mins/maxs: don't set defaults here - let parent load from achieved bounds
+        if state_names is None:
+            state_names = self.DEFAULT_STATE_NAMES.copy()
         if angle_indices is None:
             angle_indices = self.DEFAULT_ANGLE_INDICES.copy()
         if valid_outcomes is None:
@@ -103,19 +103,17 @@ class HumanoidGetUpSystem(BaseSystem):
             # INVALID can be used by higher-level analysis when labels are uncertain.
             valid_outcomes = [Outcome.SUCCESS, Outcome.FAILURE, Outcome.INVALID]
 
-        # Manifold unwrap functions (use index 0 for sphere coords)
-        manifold_unwrap_fns = [shift_to_zero_center_angles]
-        manifold_unwrap_kwargs = {"angle_indices": [0]}
-
-        # Create manifold if using manifold-based flow matching
-        if use_manifold and manifold is None:
+        # Always create the TRUE manifold - reflects actual state space topology
+        # Used for distance computations, projection, and evaluation metrics
+        if manifold is None:
             from genMoPlan.utils.manifold import ManifoldWrapper
             raw_manifold = _create_humanoid_manifold()
-            manifold = ManifoldWrapper(
-                raw_manifold,
-                manifold_unwrap_fns=manifold_unwrap_fns,
-                manifold_unwrap_kwargs=manifold_unwrap_kwargs
-            )
+            manifold = ManifoldWrapper(raw_manifold)
+
+        # model_manifold: what the generative model uses for its architecture
+        # - When use_manifold=True: model operates on manifold (GeodesicProbPath, RiemannianODESolver)
+        # - When use_manifold=False: model operates in Euclidean space (model_manifold=None)
+        model_manifold = manifold if use_manifold else None
 
         # Set up metadata
         metadata = metadata or {}
@@ -159,6 +157,7 @@ class HumanoidGetUpSystem(BaseSystem):
 
         super().__init__(
             name=name,
+            dataset=dataset,
             state_dim=state_dim,
             stride=stride,
             history_length=history_length,
@@ -166,17 +165,16 @@ class HumanoidGetUpSystem(BaseSystem):
             max_path_length=max_path_length,
             mins=mins,
             maxs=maxs,
+            state_names=state_names,
             angle_indices=angle_indices,
             manifold=manifold,
+            model_manifold=model_manifold,
             manifold_mins=manifold_mins,
             manifold_maxs=manifold_maxs,
             trajectory_preprocess_fns=trajectory_preprocess_fns,
             preprocess_kwargs=preprocess_kwargs,
             post_process_fns=post_process_fns,
             post_process_fn_kwargs=post_process_fn_kwargs,
-            # Unwrap functions are already in ManifoldWrapper if manifold is set
-            manifold_unwrap_fns=manifold_unwrap_fns if manifold is None else None,
-            manifold_unwrap_kwargs=manifold_unwrap_kwargs if manifold is None else None,
             valid_outcomes=valid_outcomes,
             normalizer=normalizer,
             metadata=metadata,
@@ -229,6 +227,7 @@ class HumanoidGetUpSystem(BaseSystem):
     @classmethod
     def create(
         cls,
+        dataset: str,  # REQUIRED
         stride: int = 1,
         history_length: int = 1,
         horizon_length: int = 31,
@@ -240,6 +239,7 @@ class HumanoidGetUpSystem(BaseSystem):
         Factory method to create a HumanoidGetUpSystem with sensible defaults.
 
         Args:
+            dataset: Name of the dataset (required for loading achieved bounds)
             stride: Stride for trajectory sampling
             history_length: Length of history conditioning
             horizon_length: Length of prediction horizon
@@ -251,6 +251,7 @@ class HumanoidGetUpSystem(BaseSystem):
             HumanoidGetUpSystem instance
         """
         return cls(
+            dataset=dataset,
             stride=stride,
             history_length=history_length,
             horizon_length=horizon_length,
@@ -263,6 +264,7 @@ class HumanoidGetUpSystem(BaseSystem):
     def from_config(
         cls,
         config: Dict[str, Any],
+        dataset: str,  # REQUIRED
         **kwargs,
     ) -> "HumanoidGetUpSystem":
         """
@@ -273,6 +275,7 @@ class HumanoidGetUpSystem(BaseSystem):
 
         Args:
             config: Configuration dictionary
+            dataset: Name of the dataset (required for loading achieved bounds)
             **kwargs: Additional arguments to override config values
 
         Returns:
@@ -283,6 +286,7 @@ class HumanoidGetUpSystem(BaseSystem):
 
         return cls(
             name=kwargs.get("name", "humanoid_get_up"),
+            dataset=dataset,
             stride=kwargs.get("stride", method_config.get("stride", 1)),
             history_length=kwargs.get(
                 "history_length", method_config.get("history_length", 1)

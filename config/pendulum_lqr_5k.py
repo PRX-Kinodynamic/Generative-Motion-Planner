@@ -10,12 +10,13 @@ from genMoPlan.systems import PendulumLQRSystem
 
 # -------------------------------- System -------------------------------- #
 
-def get_system(config=None, **kwargs):
+def get_system(config=None, dataset: str = None, **kwargs):
     """
     Create a PendulumLQRSystem from this config.
 
     Args:
         config: Optional config dict override. If None, uses the base config.
+        dataset: Name of the dataset (required for loading achieved bounds).
         **kwargs: Additional arguments to override system parameters.
 
     Returns:
@@ -24,18 +25,19 @@ def get_system(config=None, **kwargs):
     if config is None:
         config = base
 
+    # Dataset name is required
+    if dataset is None:
+        dataset = "pendulum_lqr_5k"  # Default to config name
+
     method_config = config.get("flow_matching", config.get("diffusion", {}))
     return PendulumLQRSystem(
         name="pendulum_lqr_5k",
+        dataset=dataset,
         stride=kwargs.get("stride", method_config.get("stride", 1)),
         history_length=kwargs.get("history_length", method_config.get("history_length", 1)),
         horizon_length=kwargs.get("horizon_length", method_config.get("horizon_length", 31)),
-        **{k: v for k, v in kwargs.items() if k not in ["stride", "history_length", "horizon_length"]},
+        **{k: v for k, v in kwargs.items() if k not in ["stride", "history_length", "horizon_length", "dataset"]},
     )
-
-
-# Create default system for backward compatibility with scripts that import configs directly
-_default_system = PendulumLQRSystem.create(stride=1, history_length=1, horizon_length=31)
 
 
 

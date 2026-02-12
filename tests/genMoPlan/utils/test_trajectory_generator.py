@@ -8,6 +8,7 @@ from unittest.mock import Mock, MagicMock, patch
 from collections import namedtuple
 
 from genMoPlan.utils.trajectory_generator import TrajectoryGenerator
+from genMoPlan.systems import Outcome
 
 
 # Mock objects for testing
@@ -50,6 +51,23 @@ class MockNormalizer:
         return data * 10.0  # Scale up
 
 
+class MockSystem:
+    """Minimal mock system required by TrajectoryGenerator."""
+    def __init__(self, *, state_dim: int, history_length: int, horizon_length: int, stride: int, max_path_length: int):
+        self.state_dim = state_dim
+        self.state_names = [f"dim_{i}" for i in range(state_dim)]
+        self.history_length = history_length
+        self.horizon_length = horizon_length
+        self.stride = stride
+        self.max_path_length = max_path_length
+        # Provide a normalizer instance (single source of truth)
+        self.normalizer = MockNormalizer()
+
+    def evaluate_final_states(self, states):
+        # Never terminate in these tests unless explicitly needed
+        return np.full(states.shape[0], Outcome.INVALID.value, dtype=np.int32)
+
+
 @pytest.fixture
 def temp_dir():
     """Create a temporary directory for testing file operations"""
@@ -82,6 +100,13 @@ def trajectory_generator(mock_inference_params):
     """Create a TrajectoryGenerator instance with mocked model"""
     model = MockModel()
     model_args = MockArgs()
+    system = MockSystem(
+        state_dim=model_args.observation_dim,
+        history_length=model_args.history_length,
+        horizon_length=model_args.horizon_length,
+        stride=model_args.stride,
+        max_path_length=mock_inference_params["max_path_length"],
+    )
 
     generator = TrajectoryGenerator(
         dataset="test_dataset",
@@ -90,6 +115,7 @@ def trajectory_generator(mock_inference_params):
         inference_params=mock_inference_params,
         device="cpu",
         verbose=False,
+        system=system,
     )
     return generator
 
@@ -101,6 +127,13 @@ class TestTrajectoryGeneratorInitialization:
         """Test initialization with pre-loaded model and args"""
         model = MockModel()
         model_args = MockArgs()
+        system = MockSystem(
+            state_dim=model_args.observation_dim,
+            history_length=model_args.history_length,
+            horizon_length=model_args.horizon_length,
+            stride=model_args.stride,
+            max_path_length=mock_inference_params["max_path_length"],
+        )
 
         generator = TrajectoryGenerator(
             dataset="test_dataset",
@@ -108,6 +141,7 @@ class TestTrajectoryGeneratorInitialization:
             model_args=model_args,
             inference_params=mock_inference_params,
             device="cpu",
+            system=system,
         )
 
         assert generator.model is model
@@ -119,6 +153,7 @@ class TestTrajectoryGeneratorInitialization:
 
     def test_init_without_model_requires_model_path(self, mock_inference_params):
         """Test that initialization without model requires model_path"""
+        system = MockSystem(state_dim=2, history_length=2, horizon_length=3, stride=1, max_path_length=10)
         with pytest.raises(ValueError, match="model_path.*is required"):
             TrajectoryGenerator(
                 dataset="test_dataset",
@@ -126,11 +161,13 @@ class TestTrajectoryGeneratorInitialization:
                 model_args=None,
                 inference_params=mock_inference_params,
                 device="cpu",
+                system=system,
             )
 
     def test_init_with_model_requires_args(self, mock_inference_params):
         """Test that providing model requires model_args"""
         model = MockModel()
+        system = MockSystem(state_dim=2, history_length=2, horizon_length=3, stride=1, max_path_length=10)
 
         with pytest.raises(ValueError, match="model_args.*must be provided"):
             TrajectoryGenerator(
@@ -139,12 +176,14 @@ class TestTrajectoryGeneratorInitialization:
                 model_args=None,
                 inference_params=mock_inference_params,
                 device="cpu",
+                system=system,
             )
 
     def test_init_without_inference_params_requires_dataset(self):
         """Test that initialization without inference_params requires dataset"""
         model = MockModel()
         model_args = MockArgs()
+        system = MockSystem(state_dim=2, history_length=2, horizon_length=3, stride=1, max_path_length=10)
 
         with pytest.raises(ValueError, match="dataset.*must be provided"):
             TrajectoryGenerator(
@@ -153,6 +192,7 @@ class TestTrajectoryGeneratorInitialization:
                 model_args=model_args,
                 inference_params=None,
                 device="cpu",
+                system=system,
             )
 
 

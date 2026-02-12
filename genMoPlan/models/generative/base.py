@@ -46,20 +46,35 @@ class GenerativeModel(nn.Module, ABC):
                 "to extract state_dim, manifold, and other system-specific configuration."
             )
 
+        if getattr(system, "manifold", None) is None:
+            raise ValueError(
+                "system.manifold (true manifold) is required and must not be None. "
+                "No Euclidean fallback is allowed; every system must provide a manifold "
+                "(use an explicit Euclidean manifold if needed)."
+            )
+
+        # Single source of truth
+        self.system = system
+
         self.model: TemporalModel = model
 
         # Extract parameters from system - single source of truth
         self.input_dim = system.state_dim
         self.output_dim = system.state_dim
         action_indices = getattr(system, 'action_indices', None)
-        manifold = system.manifold
+
+        # Use model_manifold for the generative model architecture
+        # model_manifold is None when use_manifold=False (Euclidean mode)
+        # model_manifold is the manifold when use_manifold=True
+        model_manifold = system.model_manifold
+
         self.clip_denoised = clip_denoised
         self.history_length = history_length
         self.prediction_length = prediction_length
         self.action_indices = action_indices
         self.has_global_query = has_global_query
         self.has_local_query = has_local_query
-        self.manifold = manifold
+        self.manifold = model_manifold  # Model's manifold (None for Euclidean mode)
         self.use_mask = bool(use_history_mask)
         self.use_mask_loss_weighting = bool(use_mask_loss_weighting)
         if loss_weight_type is not None and loss_weight_type != "none":
@@ -67,7 +82,11 @@ class GenerativeModel(nn.Module, ABC):
             self.register_buffer("loss_weights", loss_weights)
         else:
             self.loss_weights = None
-        self.loss_fn = Losses[loss_type](history_length, action_indices, manifold=manifold)
+        # ALWAYS use the true manifold for distances (system.manifold).
+        # Specific methods can opt out via ignore_manifold=True at call sites (e.g. flow matching dx_t loss).
+        self.loss_fn = Losses[loss_type](
+            history_length, action_indices, manifold=self.system.manifold
+        )
 
         self.val_seed = val_seed
 

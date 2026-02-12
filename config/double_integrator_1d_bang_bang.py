@@ -15,12 +15,13 @@ max_batch_size = int(1e6) if is_arrakis else int(266e3)
 
 # -------------------------------- System -------------------------------- #
 
-def get_system(config=None, **kwargs):
+def get_system(config=None, dataset: str = None, **kwargs):
     """
     Create a DoubleIntegrator1DSystem from this config.
 
     Args:
         config: Optional config dict override. If None, uses the base config.
+        dataset: Name of the dataset (required for loading achieved bounds).
         **kwargs: Additional arguments to override system parameters.
 
     Returns:
@@ -29,18 +30,19 @@ def get_system(config=None, **kwargs):
     if config is None:
         config = base
 
+    # Dataset name is required
+    if dataset is None:
+        dataset = "double_integrator_1d_bang_bang"  # Default to config name
+
     method_config = config.get("flow_matching", config.get("diffusion", {}))
     return DoubleIntegrator1DSystem(
+        dataset=dataset,
         stride=kwargs.get("stride", method_config.get("stride", 1)),
         history_length=kwargs.get("history_length", method_config.get("history_length", 1)),
         horizon_length=kwargs.get("horizon_length", method_config.get("horizon_length", 31)),
         variant="bang_bang",
-        **{k: v for k, v in kwargs.items() if k not in ["stride", "history_length", "horizon_length"]},
+        **{k: v for k, v in kwargs.items() if k not in ["stride", "history_length", "horizon_length", "dataset"]},
     )
-
-
-# Create default system for backward compatibility with scripts that import configs directly
-_default_system = DoubleIntegrator1DSystem.create(stride=1, history_length=1, horizon_length=31, variant="bang_bang")
 
 
 

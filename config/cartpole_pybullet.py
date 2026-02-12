@@ -10,20 +10,21 @@ import socket
 from genMoPlan.utils import watch, watch_dict, get_experiments_path
 from genMoPlan.systems import CartpolePyBulletSystem
 
-is_arrakis = "arrakis" in socket.gethostname()
-max_batch_size = int(2.5e5) if is_arrakis else int(1e4)
+is_westeros = "westeros" in socket.gethostname()
+max_batch_size = int(1e4) if is_westeros else int(2.5e5)
 
 
 # -------------------------------- System -------------------------------- #
 
 
-def get_system(config=None, use_manifold: bool = False, **kwargs):
+def get_system(config=None, use_manifold: bool = False, dataset: str = None, **kwargs):
     """
     Create a CartpolePyBulletSystem from this config.
 
     Args:
         config: Optional config dict override. If None, uses the base config.
         use_manifold: Whether to use manifold-based flow matching.
+        dataset: Name of the dataset (required for loading achieved bounds).
         **kwargs: Additional arguments to override system parameters.
 
     Returns:
@@ -32,8 +33,13 @@ def get_system(config=None, use_manifold: bool = False, **kwargs):
     if config is None:
         config = base
 
+    # Dataset name is required
+    if dataset is None:
+        dataset = "cartpole_pybullet"  # Default to config name
+
     method_config = config.get("flow_matching", config.get("diffusion", {}))
     return CartpolePyBulletSystem(
+        dataset=dataset,
         stride=kwargs.get("stride", method_config.get("stride", 1)),
         history_length=kwargs.get(
             "history_length", method_config.get("history_length", 1)
@@ -45,7 +51,7 @@ def get_system(config=None, use_manifold: bool = False, **kwargs):
         **{
             k: v
             for k, v in kwargs.items()
-            if k not in ["stride", "history_length", "horizon_length"]
+            if k not in ["stride", "history_length", "horizon_length", "dataset"]
         },
     )
 
@@ -196,7 +202,6 @@ base = {
 
 
 # -------------------------------- Overrides -------------------------------- #
-
 data_lim_10 = {
     "train_dataset_size": 10,
     "num_epochs": 200000,
@@ -257,7 +262,7 @@ dit_test = {
         "weight_decay": 0.02,
     },
     "clip_grad_norm": 1.0,
-    "val_batch_size": int(6e4) if is_arrakis else int(1e4),
+    "val_batch_size": int(1e4) if is_westeros else int(6e4),
 }
 
 stride_10 = {
@@ -374,4 +379,8 @@ history_padding_mirror = {
 
 final_state_quick_eval = {
     "eval_freq": 1,
+}
+
+two_horizons = {
+    "stride": 9,
 }

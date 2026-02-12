@@ -15,13 +15,11 @@ print(f"Using device: {utils.DEVICE}\n")
 # Get system object - single source of truth for system-specific parameters
 system = args.system
 
-if system.manifold is not None:
-    ml_model_input_dim = system.manifold.compute_feature_dim(
-        system.state_dim,
-        n_fourier_features=args.method_kwargs.get("n_fourier_features", 1)
-    )
-else:
-    ml_model_input_dim = system.state_dim
+# system.manifold (true manifold) is required and always exists.
+ml_model_input_dim = system.manifold.compute_feature_dim(
+    system.state_dim,
+    n_fourier_features=args.method_kwargs.get("n_fourier_features", 1),
+)
 
 ml_model_class_loader = utils.ClassLoader(
     args.model,

@@ -1,13 +1,13 @@
 from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
+import torch
 
 from genMoPlan.datasets.normalization import Normalizer
 from genMoPlan.systems.base import BaseSystem, Outcome
 from genMoPlan.utils.data_processing import (
     handle_angle_wraparound,
     augment_unwrapped_state_data,
-    shift_to_zero_center_angles,
 )
 
 
@@ -45,13 +45,14 @@ class PendulumLQRSystem(BaseSystem):
         self,
         *,
         name: str = "pendulum_lqr",
+        dataset: str,  # REQUIRED - for loading achieved bounds
         state_dim: int = 2,
         stride: int,
         history_length: int,
         horizon_length: int,
         max_path_length: Optional[int] = None,
-        mins: Optional[List[float]] = None,
-        maxs: Optional[List[float]] = None,
+        mins: Optional[List[float]] = None,  # Optional override (normally from achieved bounds)
+        maxs: Optional[List[float]] = None,  # Optional override (normally from achieved bounds)
         state_names: Optional[List[str]] = None,
         angle_indices: Optional[List[int]] = None,
         manifold: Optional[Any] = None,
@@ -64,10 +65,7 @@ class PendulumLQRSystem(BaseSystem):
         # Set defaults from class constants
         if max_path_length is None:
             max_path_length = self.DEFAULT_MAX_PATH_LENGTH
-        if mins is None:
-            mins = self.DEFAULT_MINS.copy()
-        if maxs is None:
-            maxs = self.DEFAULT_MAXS.copy()
+        # mins/maxs: don't set defaults here - let parent load from achieved bounds
         if state_names is None:
             state_names = self.DEFAULT_STATE_NAMES.copy()
         if angle_indices is None:
@@ -77,19 +75,17 @@ class PendulumLQRSystem(BaseSystem):
             # INVALID can be used by higher-level analysis when labels are uncertain.
             valid_outcomes = [Outcome.SUCCESS, Outcome.FAILURE, Outcome.INVALID]
 
-        # Manifold unwrap functions for manifold-based flow matching
-        manifold_unwrap_fns = [shift_to_zero_center_angles]
-        manifold_unwrap_kwargs = {"angle_indices": angle_indices}
-
-        # Create manifold if using manifold-based flow matching
-        if use_manifold and manifold is None:
+        # Always create the TRUE manifold - reflects actual state space topology
+        # Used for distance computations, projection, and evaluation metrics
+        if manifold is None:
             from genMoPlan.utils.manifold import ManifoldWrapper
             raw_manifold = _create_pendulum_manifold()
-            manifold = ManifoldWrapper(
-                raw_manifold,
-                manifold_unwrap_fns=manifold_unwrap_fns,
-                manifold_unwrap_kwargs=manifold_unwrap_kwargs
-            )
+            manifold = ManifoldWrapper(raw_manifold)
+
+        # model_manifold: what the generative model uses for its architecture
+        # - When use_manifold=True: model operates on manifold (GeodesicProbPath, RiemannianODESolver)
+        # - When use_manifold=False: model operates in Euclidean space (model_manifold=None)
+        model_manifold = manifold if use_manifold else None
 
         # Set up metadata
         metadata = metadata or {}
@@ -123,6 +119,7 @@ class PendulumLQRSystem(BaseSystem):
 
         super().__init__(
             name=name,
+            dataset=dataset,
             state_dim=state_dim,
             stride=stride,
             history_length=history_length,
@@ -133,44 +130,34 @@ class PendulumLQRSystem(BaseSystem):
             state_names=state_names,
             angle_indices=angle_indices,
             manifold=manifold,
+            model_manifold=model_manifold,
             trajectory_preprocess_fns=trajectory_preprocess_fns,
             preprocess_kwargs=preprocess_kwargs,
             post_process_fns=post_process_fns,
             post_process_fn_kwargs=post_process_fn_kwargs,
-            # Unwrap functions are already in ManifoldWrapper if manifold is set
-            manifold_unwrap_fns=manifold_unwrap_fns if manifold is None else None,
-            manifold_unwrap_kwargs=manifold_unwrap_kwargs if manifold is None else None,
             valid_outcomes=valid_outcomes,
             normalizer=normalizer,
             metadata=metadata,
         )
 
-    def _wrap_angle(self, theta: float) -> float:
-        """Wrap angle to [-pi, pi]."""
-        return ((theta + np.pi) % (2 * np.pi)) - np.pi
-
     def evaluate_final_state(self, state: np.ndarray) -> Outcome:
         """
         Evaluate the final state of a trajectory.
 
-        Success if pendulum is near upright (theta ~= 0) with low velocity.
+        Delegates to evaluate_final_states for consistency.
         """
-        threshold = self.metadata.get("success_threshold", self.SUCCESS_THRESHOLD)
-
-        theta = self._wrap_angle(state[0])
-        theta_dot = state[1]
-
-        # Check distance to upright position
-        upright_distance = np.sqrt(theta**2 + theta_dot**2)
-
-        if upright_distance <= threshold:
-            return Outcome.SUCCESS
-
-        return Outcome.FAILURE
+        states = np.asarray(state, dtype=np.float32)
+        if states.ndim == 1:
+            states = states[np.newaxis, :]
+        outcomes = self.evaluate_final_states(states)
+        return Outcome(outcomes[0])
 
     def evaluate_final_states(self, states: np.ndarray) -> np.ndarray:
         """
-        Evaluate a batch of final states using vectorized operations.
+        Evaluate a batch of final states using vectorized, manifold-aware operations.
+
+        Uses manifold.dist() for geodesic distance computation on the theta angle.
+        This correctly handles angle wrapping regardless of convention.
 
         Args:
             states: Array of shape (batch_size, state_dim) containing final states
@@ -180,24 +167,27 @@ class PendulumLQRSystem(BaseSystem):
         """
         threshold = self.metadata.get("success_threshold", self.SUCCESS_THRESHOLD)
 
-        # Vectorized angle wrapping: wrap to [-pi, pi]
-        theta = ((states[:, 0] + np.pi) % (2 * np.pi)) - np.pi
-        theta_dot = states[:, 1]
+        # Use manifold-aware distance to origin (upright position)
+        # Convert to torch for manifold.dist() (library is torch-based)
+        states_t = torch.from_numpy(states).float()
+        origin_t = torch.zeros_like(states_t)
+        per_dim_dist = self.manifold.dist(states_t, origin_t)  # Geodesic for angle
 
-        # Vectorized distance computation
-        upright_distance = np.sqrt(theta**2 + theta_dot**2)
+        # Compute state norm from manifold distances
+        upright_distance = torch.sqrt(torch.sum(per_dim_dist**2, dim=1))
 
         # Vectorized outcome assignment
-        outcomes = np.where(
+        outcomes = torch.where(
             upright_distance <= threshold,
             Outcome.SUCCESS.value,
             Outcome.FAILURE.value
         )
-        return outcomes.astype(np.int32)
+        return outcomes.numpy().astype(np.int32)
 
     @classmethod
     def create(
         cls,
+        dataset: str,  # REQUIRED
         stride: int = 1,
         history_length: int = 1,
         horizon_length: int = 31,
@@ -209,6 +199,7 @@ class PendulumLQRSystem(BaseSystem):
         Factory method to create a PendulumLQRSystem with sensible defaults.
 
         Args:
+            dataset: Name of the dataset (required for loading achieved bounds)
             stride: Stride for trajectory sampling
             history_length: Length of history conditioning
             horizon_length: Length of prediction horizon
@@ -220,6 +211,7 @@ class PendulumLQRSystem(BaseSystem):
             PendulumLQRSystem instance
         """
         return cls(
+            dataset=dataset,
             stride=stride,
             history_length=history_length,
             horizon_length=horizon_length,
@@ -232,6 +224,7 @@ class PendulumLQRSystem(BaseSystem):
     def from_config(
         cls,
         config: Dict[str, Any],
+        dataset: str,  # REQUIRED
         dataset_size: Optional[str] = None,
         use_manifold: bool = False,
         **kwargs,
@@ -244,6 +237,7 @@ class PendulumLQRSystem(BaseSystem):
 
         Args:
             config: Configuration dictionary
+            dataset: Name of the dataset (required for loading achieved bounds)
             dataset_size: Optional dataset size indicator (e.g., "5k" or "50k")
             use_manifold: Whether to use manifold-based flow matching
             **kwargs: Additional arguments to override config values
@@ -265,6 +259,7 @@ class PendulumLQRSystem(BaseSystem):
 
         return cls(
             name=name,
+            dataset=dataset,
             stride=kwargs.get("stride", method_config.get("stride", 1)),
             history_length=kwargs.get(
                 "history_length", method_config.get("history_length", 1)

@@ -4,7 +4,7 @@ from math import ceil
 import torch
 import genMoPlan.utils as utils
 from genMoPlan.models import GenerativeModel, TemporalModel
-from scripts.estimate_roa import estimate_roa
+from scripts.evaluate import evaluate
 from scripts.viz_model import visualize_generated_trajectories
 
 parser = utils.Parser()
@@ -54,12 +54,12 @@ if args.val_dataset_size is not None:
         **args.safe_get("dataset_kwargs", {}),
     )
 
-print(f"[ scripts/train_trajectory ] Loading dataset")
+print("[ scripts/train_trajectory ] Loading dataset")
 train_dataset = train_dataset_class_loader()
 print(f"[ scripts/train_trajectory ] Training Data Size: {len(train_dataset)}")
 
 if args.val_dataset_size is not None:
-    print(f"[ scripts/train_trajectory ] Loading validation dataset")
+    print("[ scripts/train_trajectory ] Loading validation dataset")
     val_dataset = val_dataset_class_loader()
     print(f"[ scripts/train_trajectory ] Validation Data Size: {len(val_dataset)}")
 
@@ -71,15 +71,11 @@ system = args.system
 # ------------------------------ manifold -------------------------------------#
 # -----------------------------------------------------------------------------#
 
-if system.manifold is not None:
-    # System already provides a ManifoldWrapper when use_manifold=True
-    args.manifold = system.manifold
-    ml_model_input_dim = system.manifold.compute_feature_dim(
-        system.state_dim,
-        n_fourier_features=args.method_kwargs.get("n_fourier_features", 1)
-    )
-else:
-    ml_model_input_dim = system.state_dim
+# system.manifold (true manifold) is required and always exists.
+ml_model_input_dim = system.manifold.compute_feature_dim(
+    system.state_dim,
+    n_fourier_features=args.method_kwargs.get("n_fourier_features", 1),
+)
 
 # # -----------------------------------------------------------------------------#
 # # ------------------------------ model & trainer ------------------------------#
@@ -149,7 +145,7 @@ trainer_class_loader = utils.ClassLoader(
     eval_batch_size=args.eval_batch_size,
     eval_seed=args.eval_seed,
     perform_final_state_evaluation=args.perform_final_state_evaluation,
-    system=args.safe_get("system", None),
+    system=args.system,
 )
 
 # # -----------------------------------------------------------------------------#
@@ -228,23 +224,23 @@ if system.state_dim <= 2:
     except Exception as e:
         print(f"Error visualizing trajectories: {e}")
         print(f"Error type: {type(e).__name__}")
-        print(f"Error traceback:")
+        print("Error traceback:")
         import traceback
         traceback.print_exc()
 
 
 # -----------------------------------------------------------------------------#
-# ---------------------------------- estimate roa -----------------------------#
+# ---------------------------------- evaluate ---------------------------------#
 # -----------------------------------------------------------------------------#
 
 try:
-    estimate_roa(
+    evaluate(
         model_state_name="best.pt",
         model_path=args.savepath,
     )
 except Exception as e:
     print(f"Error estimating ROA: {e}")
     print(f"Error type: {type(e).__name__}")
-    print(f"Error traceback:")
+    print("Error traceback:")
     import traceback
     traceback.print_exc()

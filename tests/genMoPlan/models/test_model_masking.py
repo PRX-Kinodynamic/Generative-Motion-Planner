@@ -257,6 +257,9 @@ class TestFlowMatchingMaskLossWeighting:
         """Factory to create FlowMatching model with masking support."""
         from genMoPlan.models.generative.flow_matching import FlowMatching
         from genMoPlan.models.temporal.diffusionTransformer import TemporalDiffusionTransformer
+        from genMoPlan.utils.manifold import ManifoldWrapper
+        from flow_matching.utils.manifolds import Euclidean
+        from unittest.mock import MagicMock
 
         def _create(use_history_mask=True, use_mask_loss_weighting=False):
             temporal_model = TemporalDiffusionTransformer(
@@ -269,10 +272,16 @@ class TestFlowMatchingMaskLossWeighting:
                 verbose=False,
             )
 
+            # Create mock system with required attributes
+            mock_system = MagicMock()
+            mock_system.state_dim = 4
+            mock_system.model_manifold = None  # No manifold for Euclidean mode
+            mock_system.manifold = ManifoldWrapper(Euclidean())
+            mock_system.action_indices = None
+
             return FlowMatching(
                 model=temporal_model,
-                input_dim=4,
-                output_dim=4,
+                system=mock_system,
                 prediction_length=10,
                 history_length=3,
                 use_history_mask=use_history_mask,

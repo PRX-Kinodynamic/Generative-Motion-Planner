@@ -1,27 +1,17 @@
 import torch
 import numpy as np
-from typing import List, Optional, Callable
-
-from tqdm import tqdm
-
-from genMoPlan.datasets.normalization import *
+from typing import List, Optional
 from genMoPlan.datasets.utils import EMPTY_DICT, apply_padding, make_indices, DataSample, NONE_TENSOR, FinalStateDataSample
 from genMoPlan.utils.constants import (
     MASK_ON,
     MASK_OFF,
-    PADDING_STRATEGY_ZEROS,
-    PADDING_STRATEGY_FIRST,
-    PADDING_STRATEGY_LAST,
-    PADDING_STRATEGY_MIRROR,
-    VALID_PADDING_STRATEGIES,
     DEFAULT_HISTORY_MASK_PADDING_VALUE,
     DEFAULT_HISTORY_PADDING_STRATEGY,
     validate_padding_strategy,
 )
 from genMoPlan.utils.trajectory import load_trajectories
 from genMoPlan.utils.data_processing import compute_actual_length, warn_stride_horizon_length
-from genMoPlan.utils.arrays import batchify
-
+from genMoPlan.systems import BaseSystem
 
 class TrajectoryDataset(torch.utils.data.Dataset):
     normed_trajectories = None
@@ -29,17 +19,7 @@ class TrajectoryDataset(torch.utils.data.Dataset):
     def __init__(
         self,
         dataset: str,
-        system = None,  # System instance - provides system-specific config
-        # System-specific params (for backward compatibility when system=None)
-        read_trajectory_fn: Callable = None,
-        horizon_length: int = None,
-        history_length: int = None,
-        stride: int = None,
-        observation_dim: int = None,
-        trajectory_normalizer: str = None,
-        normalizer_params: dict = None,
-        trajectory_preprocess_fns: tuple = None,
-        preprocess_kwargs: dict = None,
+        system: BaseSystem, 
         # Training-specific params
         dataset_size: int = None,
         fnames: Optional[List[str]] = None,
@@ -61,18 +41,7 @@ class TrajectoryDataset(torch.utils.data.Dataset):
 
         Args:
             dataset: Name of the dataset
-            system: System instance providing system-specific configuration.
-                If provided, system-specific params are extracted from it.
-                If None, params must be provided directly (backward compatibility).
-            read_trajectory_fn: Function to read trajectory files (if system=None)
-            horizon_length: Length of the horizon (future) portion (if system=None)
-            history_length: Length of the history (past) portion (if system=None)
-            stride: Stride for subsampling trajectories (if system=None)
-            observation_dim: Dimension of observations (if system=None)
-            trajectory_normalizer: Normalizer class name (if system=None)
-            normalizer_params: Parameters for the normalizer (if system=None)
-            trajectory_preprocess_fns: Preprocessing functions to apply (if system=None)
-            preprocess_kwargs: Kwargs for preprocessing functions (if system=None)
+            system: System instance providing system-specific configuration (required).
             dataset_size: Maximum number of trajectories to load
             fnames: Specific filenames to load
             shuffled_indices_fname: Filename for shuffled indices (in train_test_splits/)
@@ -87,51 +56,20 @@ class TrajectoryDataset(torch.utils.data.Dataset):
             is_validation: Whether this is a validation dataset
             perform_final_state_evaluation: Whether to prepare final state evaluation data
         """
-        # Extract parameters from system if provided
-        if system is not None:
-            # System-provided values
-            self.horizon_length = system.horizon_length
-            self.history_length = system.history_length
-            self.stride = system.stride
-            self.observation_dim = system.state_dim
-            read_trajectory_fn = system.read_trajectory
-            trajectory_preprocess_fns = system.trajectory_preprocess_fns
-            preprocess_kwargs = system.preprocess_kwargs
+        # System is REQUIRED (single source of truth; no fallback allowed).
+        self.system = system
 
-            # Get normalizer params from system
-            # Determine if we should use manifold normalization
-            use_manifold = system.manifold is not None
-            normalizer_params = system.get_normalizer_params(use_manifold=use_manifold)
-
-            # Use default normalizer
-            if trajectory_normalizer is None:
-                trajectory_normalizer = "LimitsNormalizer"
-        else:
-            # Backward compatibility: use directly provided params
-            self.horizon_length = horizon_length if horizon_length is not None else 31
-            self.history_length = history_length if history_length is not None else 1
-            self.stride = stride if stride is not None else 1
-            self.observation_dim = observation_dim
-
-            # Set defaults for optional params
-            if trajectory_normalizer is None:
-                trajectory_normalizer = "LimitsNormalizer"
-            if normalizer_params is None:
-                normalizer_params = {}
-            if trajectory_preprocess_fns is None:
-                trajectory_preprocess_fns = ()
-            if preprocess_kwargs is None:
-                preprocess_kwargs = {}
         self.use_horizon_padding = use_horizon_padding
         self.use_history_padding = use_history_padding
         self.use_history_mask = use_history_mask
         self.history_padding_anywhere = history_padding_anywhere
         self.history_padding_k = history_padding_k
         self.is_history_conditioned = is_history_conditioned
-        self.observation_dim = observation_dim
 
         # Warn if stride has no effect on horizon
-        warn_stride_horizon_length(horizon_length, stride, context="TrajectoryDataset")
+        warn_stride_horizon_length(
+            self.system.horizon_length, self.system.stride, context="TrajectoryDataset"
+        )
 
         # Set padding strategy defaults based on mode
         if history_mask_padding_value is None:
@@ -151,11 +89,8 @@ class TrajectoryDataset(torch.utils.data.Dataset):
 
         trajectories = self._load_data(
             dataset,
-            read_trajectory_fn,
             dataset_size,
             fnames,
-            trajectory_preprocess_fns,
-            preprocess_kwargs,
             is_validation,
             shuffled_indices_fname,
         )
@@ -164,11 +99,11 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         
         self.indices = make_indices(
             traj_lengths,
-            self.history_length,
+            self.system.history_length,
             self.use_history_padding,
-            self.horizon_length,
+            self.system.horizon_length,
             self.use_horizon_padding,
-            self.stride,
+            self.system.stride,
             use_history_mask=self.use_history_mask,
             history_padding_anywhere=self.history_padding_anywhere,
             history_padding_k=self.history_padding_k,
@@ -181,8 +116,6 @@ class TrajectoryDataset(torch.utils.data.Dataset):
 
         self.normed_trajectories = self._normalize(
             trajectories, 
-            trajectory_normalizer, 
-            normalizer_params
         )
 
         if perform_final_state_evaluation:
@@ -192,28 +125,27 @@ class TrajectoryDataset(torch.utils.data.Dataset):
     def _load_data(
         self,
         dataset,
-        read_trajectory_fn,
         dataset_size,
         fnames,
-        trajectory_preprocess_fns,
-        preprocess_kwargs,
         is_validation,
         shuffled_indices_fname="shuffled_indices.txt",
     ):
         trajectories = load_trajectories(
             dataset,
-            read_trajectory_fn,
+            self.system.read_trajectory,
             dataset_size,
             fnames=fnames,
             load_reverse=is_validation,
             shuffled_indices_fname=shuffled_indices_fname,
         )
         
-        for trajectory_preprocess_fn in trajectory_preprocess_fns:
-            trajectories = trajectory_preprocess_fn(trajectories, **preprocess_kwargs.get("trajectory", {}))
+        for trajectory_preprocess_fn in self.system.trajectory_preprocess_fns:
+            trajectories = trajectory_preprocess_fn(
+                trajectories, **self.system.preprocess_kwargs.get("trajectory", {})
+            )
         return trajectories
 
-    def _normalize(self, trajectories, trajectory_normalizer=None, normalizer_params=None):
+    def _normalize(self, trajectories):
         """
         normalize fields that will be predicted
 
@@ -221,21 +153,14 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         Then, normalize the aggregated array
         Then, split the normalized array back into individual trajectories.
         """
-        if trajectory_normalizer is None:
-            self.normalizer = None
-            return [
-                torch.FloatTensor(trajectory)
-                for trajectory in trajectories
-            ]
-
-        print(f"[ datasets/trajectory ] Normalizing trajectories")
+        print("[ datasets/trajectory ] Normalizing trajectories")
 
         all_trajectories = np.concatenate(trajectories, axis=0)
 
-        if type(trajectory_normalizer) == str:
-            trajectory_normalizer = eval(trajectory_normalizer)
-
-        normalizer_instance = trajectory_normalizer(X=trajectories, params=normalizer_params["trajectory"])
+        # System is the single source of truth for normalization.
+        normalizer_instance = getattr(self.system, "normalizer", None)
+        if normalizer_instance is None:
+            raise ValueError("TrajectoryDataset requires system.normalizer to be initialized.")
         normed_all_trajectories = normalizer_instance(all_trajectories)
 
         # Store the normalizer for later use (e.g., unnormalized loss computation)
@@ -257,14 +182,19 @@ class TrajectoryDataset(torch.utils.data.Dataset):
 
     
     def _prepare_evaluation_data(self, trajectories):
-        history_end = compute_actual_length(self.history_length, self.stride)
+        history_end = compute_actual_length(self.system.history_length, self.system.stride)
 
         histories = []
         final_states = []
         max_path_length = 0
 
         for trajectory in trajectories:
-            history = trajectory[:history_end:self.stride]
+            history = trajectory[:history_end:self.system.stride]
+
+            # Use the actual final state of the trajectory as ground truth.
+            # This is consistent with horizon_padding which pads with trajectory[-1],
+            # treating the final state as an attractor the model should learn to
+            # reach and stay at.
             final_state = trajectory[-1]
 
             histories.append(history)
@@ -318,8 +248,8 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         trajectory_data = self.normed_trajectories[path_ind]
         
         # Get actual data for history and horizon
-        history = trajectory_data[history_start:history_end:self.stride]
-        horizon = trajectory_data[horizon_start:horizon_end:self.stride]
+        history = trajectory_data[history_start:history_end:self.system.stride]
+        horizon = trajectory_data[horizon_start:horizon_end:self.system.stride]
 
         assert len(history) > 0, "History is empty"
 
@@ -329,7 +259,7 @@ class TrajectoryDataset(torch.utils.data.Dataset):
             # Apply history padding using the configured strategy
             history = apply_padding(
                 history,
-                self.history_length,
+                self.system.history_length,
                 pad_left=True,
                 strategy=self.history_padding_strategy,
             )
@@ -337,12 +267,12 @@ class TrajectoryDataset(torch.utils.data.Dataset):
             # Apply history masking: pad with configured strategy and create mask
             # Mask convention: MASK_OFF=1 (valid/present), MASK_ON=0 (masked/missing)
             provided = len(history)
-            pad = self.history_length - provided
+            pad = self.system.history_length - provided
             if pad > 0:
                 # Apply padding using configured strategy
                 history = apply_padding(
                     history,
-                    self.history_length,
+                    self.system.history_length,
                     pad_left=True,
                     strategy=self.history_mask_padding_value,
                 )
@@ -350,7 +280,7 @@ class TrajectoryDataset(torch.utils.data.Dataset):
             # Build mask for full prediction length (history + horizon)
             # Start with all positions valid (MASK_OFF=1)
             hist_mask = torch.full(
-                (self.history_length,),
+                (self.system.history_length,),
                 MASK_OFF,
                 dtype=torch.float32,
                 device=history.device
@@ -361,7 +291,7 @@ class TrajectoryDataset(torch.utils.data.Dataset):
 
             # Horizon positions are always valid (never masked)
             hor_mask = torch.full(
-                (self.horizon_length,),
+                (self.system.horizon_length,),
                 MASK_OFF,
                 dtype=torch.float32,
                 device=history.device
@@ -369,15 +299,22 @@ class TrajectoryDataset(torch.utils.data.Dataset):
             mask = torch.cat([hist_mask, hor_mask], dim=0)
 
         if self.use_horizon_padding:
-            if len(horizon) > 0:
-                pad_value = horizon[-1]
-            else:
-                pad_value = history[-1]
+            # Always pad with trajectory's actual last state so model learns
+            # to stay at the final state once the trajectory ends.
+            pad_value = trajectory_data[-1]
+            horizon = apply_padding(
+                horizon,
+                self.system.horizon_length,
+                pad_left=False,
+                pad_value=pad_value,
+            )
 
-            horizon = apply_padding(horizon, self.horizon_length, pad_left=False, pad_value=pad_value)
-
-        assert len(history) == self.history_length, f"History length is {len(history)}, expected {self.history_length}"
-        assert len(horizon) == self.horizon_length, f"Horizon length is {len(horizon)}, expected {self.horizon_length}"
+        assert len(history) == self.system.history_length, (
+            f"History length is {len(history)}, expected {self.system.history_length}"
+        )
+        assert len(horizon) == self.system.horizon_length, (
+            f"Horizon length is {len(horizon)}, expected {self.system.horizon_length}"
+        )
         
 
         trajectory = self.get_trajectory(history, horizon)

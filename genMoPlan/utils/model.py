@@ -33,25 +33,17 @@ def load_model(
         verbose: bool = False,
         inference_params: dict = None,
         load_ema: bool = False,
-        system = None,  # System instance for reduced parameter passing
+        system = None,
     ) -> Tuple[GenerativeModel, JSONArgs]:
     model_args = load_model_args(experiments_path)
 
-    # Handle old checkpoints that don't have system object saved
-    # Reconstruct system for inference (not training continuation)
-    if not hasattr(model_args, 'system') and system is None:
-        from genMoPlan.utils.setup import get_dataset_config
-        method_name = get_method_name(model_args)
-        infer_args = get_dataset_config(
-            dataset=model_args.dataset,
-            method=method_name,
-            variations=[]
+    # System is REQUIRED to avoid brittle JSONArgs object reconstruction and
+    # to enforce a single source of truth for manifold + normalization.
+    if system is None:
+        raise ValueError(
+            "load_model(...) requires a `system` instance; system=None is not supported."
         )
-        system = infer_args.system
-        model_args.system = system
-    elif system is not None:
-        # Use provided system if given
-        model_args.system = system
+    model_args.system = system
 
     model_path = path.join(experiments_path, model_state_name)
 
@@ -64,18 +56,14 @@ def load_model(
     ml_model_class = import_class(model_args.model, verbose)
     method_class = import_class(model_args.method, verbose)
 
-    # Use system as single source of truth for manifold and dimensions
-    if model_args.system.manifold is not None:
-        ml_model_input_dim = model_args.system.manifold.compute_feature_dim(
-            model_args.system.state_dim,
-            n_fourier_features=model_args.method_kwargs.get("n_fourier_features", 1)
-        )
-
-        if inference_params is not None and "manifold_unwrap_fns" in inference_params:
-            model_args.system.manifold.manifold_unwrap_fns = inference_params["manifold_unwrap_fns"]
-            model_args.system.manifold.manifold_unwrap_kwargs = inference_params["manifold_unwrap_kwargs"]
-    else:
-        ml_model_input_dim = model_args.system.state_dim
+    # Use TRUE manifold for feature dim computation (determines model input size)
+    # ManifoldEmbeddingLayer ALWAYS embeds angles as (sin, cos), so model input
+    # dimension is always the embedded dimension regardless of use_manifold setting.
+    # Note: system.manifold is REQUIRED and always exists; no fallback.
+    ml_model_input_dim = model_args.system.manifold.compute_feature_dim(
+        model_args.system.state_dim,
+        n_fourier_features=model_args.method_kwargs.get("n_fourier_features", 1)
+    )
 
     ml_model = ml_model_class(
         prediction_length=model_args.horizon_length + model_args.history_length,
@@ -117,19 +105,10 @@ def get_normalizer_params(model_args, normalizer_type: str = "trajectory"):
     Returns:
         Dict of normalizer parameters
     """
-    # Use system as single source of truth for normalizer params
-    if hasattr(model_args, "system") and model_args.system is not None:
-        return model_args.system.get_normalizer_params()[normalizer_type]
-
-    # Fallback for old checkpoints
-    if hasattr(model_args, "normalizer_params"):
-        normalizer_params = model_args.normalizer_params[normalizer_type]
-    elif hasattr(model_args, "normalization_params"):
-        normalizer_params = model_args.normalization_params
-    else:
-        raise ValueError("Normalizer params not found in model_args or system")
-
-    return normalizer_params
+    # System is the single source of truth.
+    if not hasattr(model_args, "system") or model_args.system is None:
+        raise ValueError("model_args.system is required to resolve normalizer params.")
+    return model_args.system.get_normalizer_params()[normalizer_type]
 
 
 def get_parameter_groups(model: nn.Module, weight_decay: float):

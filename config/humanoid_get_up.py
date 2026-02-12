@@ -15,13 +15,14 @@ max_batch_size = int(1e5) if is_arrakis else int(4e3)
 
 # -------------------------------- System -------------------------------- #
 
-def get_system(config=None, use_manifold: bool = False, **kwargs):
+def get_system(config=None, use_manifold: bool = False, dataset: str = None, **kwargs):
     """
     Create a HumanoidGetUpSystem from this config.
 
     Args:
         config: Optional config dict override. If None, uses the base config.
         use_manifold: Whether to use manifold-based flow matching.
+        dataset: Name of the dataset (required for loading achieved bounds).
         **kwargs: Additional arguments to override system parameters.
 
     Returns:
@@ -30,18 +31,19 @@ def get_system(config=None, use_manifold: bool = False, **kwargs):
     if config is None:
         config = base
 
+    # Dataset name is required
+    if dataset is None:
+        dataset = "humanoid_get_up"  # Default to config name
+
     method_config = config.get("flow_matching", config.get("diffusion", {}))
     return HumanoidGetUpSystem(
+        dataset=dataset,
         stride=kwargs.get("stride", method_config.get("stride", 1)),
         history_length=kwargs.get("history_length", method_config.get("history_length", 1)),
         horizon_length=kwargs.get("horizon_length", method_config.get("horizon_length", 31)),
         use_manifold=use_manifold,
-        **{k: v for k, v in kwargs.items() if k not in ["stride", "history_length", "horizon_length"]},
+        **{k: v for k, v in kwargs.items() if k not in ["stride", "history_length", "horizon_length", "dataset"]},
     )
-
-
-# Create default system for backward compatibility with scripts that import configs directly
-_default_system = HumanoidGetUpSystem.create(stride=1, history_length=1, horizon_length=31)
 
 
 
