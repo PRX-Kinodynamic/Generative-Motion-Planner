@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-from typing import List, Optional
+from typing import List, Optional, TYPE_CHECKING
 from genMoPlan.datasets.utils import EMPTY_DICT, apply_padding, make_indices, DataSample, NONE_TENSOR, FinalStateDataSample
 from genMoPlan.utils.constants import (
     MASK_ON,
@@ -11,7 +11,9 @@ from genMoPlan.utils.constants import (
 )
 from genMoPlan.utils.trajectory import load_trajectories
 from genMoPlan.utils.data_processing import compute_actual_length, warn_stride_horizon_length
-from genMoPlan.systems import BaseSystem
+
+if TYPE_CHECKING:
+    from genMoPlan.systems import BaseSystem
 
 class TrajectoryDataset(torch.utils.data.Dataset):
     normed_trajectories = None
@@ -19,7 +21,7 @@ class TrajectoryDataset(torch.utils.data.Dataset):
     def __init__(
         self,
         dataset: str,
-        system: BaseSystem, 
+        system: "BaseSystem",
         # Training-specific params
         dataset_size: int = None,
         fnames: Optional[List[str]] = None,
