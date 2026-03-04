@@ -7,6 +7,7 @@ from genMoPlan.systems.double_integrator import DoubleIntegrator1DSystem
 from genMoPlan.systems.humanoid import HumanoidGetUpSystem
 from genMoPlan.systems.pendulum import PendulumLQRSystem
 from genMoPlan.systems.quadrotor2d_rl import Quadrotor2DRLSystem
+from genMoPlan.systems.quadrotor3d_lqr import Quadrotor3DLQRSystem
 
 __all__ = [
     "BaseSystem",
@@ -17,4 +18,5 @@ __all__ = [
     "HumanoidGetUpSystem",
     "PendulumLQRSystem",
     "Quadrotor2DRLSystem",
+    "Quadrotor3DLQRSystem",
 ]
