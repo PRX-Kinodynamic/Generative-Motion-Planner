@@ -4,10 +4,6 @@ import numpy as np
 
 from genMoPlan.datasets.normalization import Normalizer
 from genMoPlan.systems.base import BaseSystem, Outcome
-from genMoPlan.utils.data_processing import (
-    handle_angle_wraparound,
-    augment_unwrapped_state_data,
-)
 from genMoPlan.utils.trajectory import process_angles
 
 
@@ -122,27 +118,6 @@ class HumanoidGetUpSystem(BaseSystem):
         # Position indices for the torso/head height (typically z-coordinate)
         metadata.setdefault("height_index", 2)
 
-        # Preprocessing functions depend on whether using manifold
-        # - Manifold flow matching: manifold handles geometry natively (sphere for orientation)
-        # - Euclidean (diffusion): needs unwrapping and augmentation for angles
-        if use_manifold:
-            trajectory_preprocess_fns = []
-            preprocess_kwargs = {
-                "trajectory": {},
-                "plan": None,
-            }
-        else:
-            trajectory_preprocess_fns = [
-                handle_angle_wraparound,
-                augment_unwrapped_state_data,
-            ]
-            preprocess_kwargs = {
-                "trajectory": {
-                    "angle_indices": angle_indices,
-                },
-                "plan": None,
-            }
-
         # Post-processing for inference (use index 0 for sphere coords)
         post_process_fns = [process_angles]
         post_process_fn_kwargs = {"angle_indices": [0]}
@@ -171,8 +146,6 @@ class HumanoidGetUpSystem(BaseSystem):
             model_manifold=model_manifold,
             manifold_mins=manifold_mins,
             manifold_maxs=manifold_maxs,
-            trajectory_preprocess_fns=trajectory_preprocess_fns,
-            preprocess_kwargs=preprocess_kwargs,
             post_process_fns=post_process_fns,
             post_process_fn_kwargs=post_process_fn_kwargs,
             valid_outcomes=valid_outcomes,

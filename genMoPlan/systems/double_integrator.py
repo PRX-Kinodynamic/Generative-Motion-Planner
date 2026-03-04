@@ -86,15 +86,6 @@ class DoubleIntegrator1DSystem(BaseSystem):
         # Double integrator is purely Euclidean - never uses manifold-aware model
         model_manifold = None
 
-        # No preprocessing needed for double integrator (pure Euclidean)
-        trajectory_preprocess_fns = []
-        preprocess_kwargs = {
-            "trajectory": {
-                "angle_indices": [],
-            },
-            "plan": None,
-        }
-
         # No post-processing needed
         post_process_fns = []
         post_process_fn_kwargs = {}
@@ -113,8 +104,6 @@ class DoubleIntegrator1DSystem(BaseSystem):
             angle_indices=angle_indices,
             manifold=manifold,
             model_manifold=model_manifold,
-            trajectory_preprocess_fns=trajectory_preprocess_fns,
-            preprocess_kwargs=preprocess_kwargs,
             post_process_fns=post_process_fns,
             post_process_fn_kwargs=post_process_fn_kwargs,
             valid_outcomes=valid_outcomes,

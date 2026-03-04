@@ -5,10 +5,6 @@ import torch
 
 from genMoPlan.datasets.normalization import Normalizer
 from genMoPlan.systems.base import BaseSystem, Outcome
-from genMoPlan.utils.data_processing import (
-    handle_angle_wraparound,
-    augment_unwrapped_state_data,
-)
 
 
 def _create_pendulum_manifold():
@@ -92,27 +88,6 @@ class PendulumLQRSystem(BaseSystem):
         metadata.setdefault("success_threshold", success_threshold)
         metadata.setdefault("angle_indices", angle_indices)
 
-        # Preprocessing functions depend on whether using manifold
-        # - Manifold flow matching: manifold handles angle topology natively
-        # - Euclidean (diffusion): needs unwrapping and augmentation
-        if use_manifold:
-            trajectory_preprocess_fns = []
-            preprocess_kwargs = {
-                "trajectory": {},
-                "plan": None,
-            }
-        else:
-            trajectory_preprocess_fns = [
-                handle_angle_wraparound,
-                augment_unwrapped_state_data,
-            ]
-            preprocess_kwargs = {
-                "trajectory": {
-                    "angle_indices": angle_indices,
-                },
-                "plan": None,
-            }
-
         # No special post-processing for pendulum (angles stay in natural range)
         post_process_fns = []
         post_process_fn_kwargs = {}
@@ -131,8 +106,6 @@ class PendulumLQRSystem(BaseSystem):
             angle_indices=angle_indices,
             manifold=manifold,
             model_manifold=model_manifold,
-            trajectory_preprocess_fns=trajectory_preprocess_fns,
-            preprocess_kwargs=preprocess_kwargs,
             post_process_fns=post_process_fns,
             post_process_fn_kwargs=post_process_fn_kwargs,
             valid_outcomes=valid_outcomes,

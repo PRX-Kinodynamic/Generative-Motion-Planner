@@ -5,10 +5,6 @@ import torch
 
 from genMoPlan.datasets.normalization import Normalizer
 from genMoPlan.systems.base import BaseSystem, Outcome
-from genMoPlan.utils.data_processing import (
-    handle_angle_wraparound,
-    augment_unwrapped_state_data,
-)
 from genMoPlan.utils.trajectory import process_angles
 
 
@@ -116,25 +112,6 @@ class Quadrotor2DRLSystem(BaseSystem):
         metadata.setdefault("invalid_labels", [metadata["invalid_label"]])
         metadata.setdefault("invalid_outcomes", ["INVALID"])
 
-        # Preprocessing functions depend on whether using manifold
-        if use_manifold:
-            trajectory_preprocess_fns = []
-            preprocess_kwargs = {
-                "trajectory": {},
-                "plan": None,
-            }
-        else:
-            trajectory_preprocess_fns = [
-                handle_angle_wraparound,
-                augment_unwrapped_state_data,
-            ]
-            preprocess_kwargs = {
-                "trajectory": {
-                    "angle_indices": angle_indices,
-                },
-                "plan": None,
-            }
-
         # Post-processing for inference
         post_process_fns = [process_angles]
         post_process_fn_kwargs = {"angle_indices": angle_indices}
@@ -153,8 +130,6 @@ class Quadrotor2DRLSystem(BaseSystem):
             angle_indices=angle_indices,
             manifold=manifold,
             model_manifold=model_manifold,
-            trajectory_preprocess_fns=trajectory_preprocess_fns,
-            preprocess_kwargs=preprocess_kwargs,
             post_process_fns=post_process_fns,
             post_process_fn_kwargs=post_process_fn_kwargs,
             valid_outcomes=valid_outcomes,

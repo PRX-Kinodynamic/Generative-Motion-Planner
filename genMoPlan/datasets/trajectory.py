@@ -132,20 +132,16 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         is_validation,
         shuffled_indices_fname="shuffled_indices.txt",
     ):
-        trajectories = load_trajectories(
-            dataset,
+        # Use system.dataset for filesystem paths (system is the single source of
+        # truth for the dataset directory name, which may differ from the config name).
+        return load_trajectories(
+            self.system.dataset,
             self.system.read_trajectory,
             dataset_size,
             fnames=fnames,
             load_reverse=is_validation,
             shuffled_indices_fname=shuffled_indices_fname,
         )
-        
-        for trajectory_preprocess_fn in self.system.trajectory_preprocess_fns:
-            trajectories = trajectory_preprocess_fn(
-                trajectories, **self.system.preprocess_kwargs.get("trajectory", {})
-            )
-        return trajectories
 
     def _normalize(self, trajectories):
         """

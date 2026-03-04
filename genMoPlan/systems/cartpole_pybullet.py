@@ -101,14 +101,6 @@ class CartpolePyBulletSystem(BaseSystem):
         metadata.setdefault("invalid_labels", [metadata["invalid_label"]])
         metadata.setdefault("invalid_outcomes", ["INVALID"])
 
-        # No preprocessing needed - ManifoldEmbeddingLayer handles angles
-        # by embedding them as (sin, cos), which naturally handles periodicity
-        trajectory_preprocess_fns = []
-        preprocess_kwargs = {
-            "trajectory": {},
-            "plan": None,
-        }
-
         # Post-processing for inference
         post_process_fns = [process_angles]
         post_process_fn_kwargs = {"angle_indices": angle_indices}
@@ -127,8 +119,6 @@ class CartpolePyBulletSystem(BaseSystem):
             angle_indices=angle_indices,
             manifold=manifold,
             model_manifold=model_manifold,
-            trajectory_preprocess_fns=trajectory_preprocess_fns,
-            preprocess_kwargs=preprocess_kwargs,
             post_process_fns=post_process_fns,
             post_process_fn_kwargs=post_process_fn_kwargs,
             valid_outcomes=valid_outcomes,

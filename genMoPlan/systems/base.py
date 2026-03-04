@@ -69,9 +69,6 @@ class BaseSystem:
         ] = None,  # NEW: Manifold for generative model (None when use_manifold=False)
         manifold_mins: Optional[List[Optional[float]]] = None,
         manifold_maxs: Optional[List[Optional[float]]] = None,
-        # Data loading
-        trajectory_preprocess_fns: Optional[List[Callable]] = None,
-        preprocess_kwargs: Optional[Dict[str, Any]] = None,
         # Inference
         post_process_fns: Optional[List[Callable]] = None,
         post_process_fn_kwargs: Optional[Dict[str, Any]] = None,
@@ -150,10 +147,6 @@ class BaseSystem:
         self.model_manifold = model_manifold
         self._manifold_mins = manifold_mins
         self._manifold_maxs = manifold_maxs
-
-        # Data loading functions
-        self.trajectory_preprocess_fns = trajectory_preprocess_fns or []
-        self.preprocess_kwargs = preprocess_kwargs or {}
 
         # Inference functions
         self.post_process_fns = post_process_fns or []
@@ -300,10 +293,6 @@ class BaseSystem:
             "state_names": self.state_names,
             "max_path_length": self.max_path_length,
             "read_trajectory_fn": self.read_trajectory,
-            "trajectory_preprocess_fns": (
-                self.trajectory_preprocess_fns if not use_manifold else []
-            ),
-            "preprocess_kwargs": self.preprocess_kwargs if not use_manifold else {},
         }
 
         # Add model_manifold if using manifold flow matching
@@ -336,8 +325,6 @@ class BaseSystem:
         """
         config = {
             "manifold": self.model_manifold,  # Use model_manifold for generative model
-            "trajectory_preprocess_fns": [],  # Manifold flow matching typically skips preprocessing
-            "preprocess_kwargs": {},
         }
         return config
 

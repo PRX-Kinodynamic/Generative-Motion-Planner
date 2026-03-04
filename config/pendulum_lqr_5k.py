@@ -78,8 +78,6 @@ base = {
         # -------------------------------- dataset --------------------------------#
         "loader": "datasets.TrajectoryDataset",
         "shuffled_indices_fname": "shuffled_indices.txt",
-        "plan_normalizer": None,
-        "plan_preprocess_fns": None,
         "use_history_padding": False,
         "use_horizon_padding": True,
         "use_history_mask": False,
