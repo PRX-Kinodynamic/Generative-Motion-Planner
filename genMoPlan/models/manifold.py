@@ -46,7 +46,8 @@ class ProductFeatureLayer(nn.Module):
         input_layers = []
 
         for i, manifold_type in enumerate(manifold.manifold_types):
-            if manifold_type == ManifoldType.SPHERE or manifold_type == ManifoldType.EUCLIDEAN:
+            if manifold_type in (ManifoldType.SPHERE, ManifoldType.EUCLIDEAN, ManifoldType.SO3):
+                # SO3: quaternion (4D) passed directly to model, no embedding needed
                 input_layers.append(IdentityFeatureLayer(manifold.dimensions[i]))
 
             elif manifold_type == ManifoldType.FLAT_TORUS:
@@ -76,15 +77,15 @@ class ManifoldEmbeddingLayer(nn.Module):
     manifold geometry (GeodesicProbPath, RiemannianODESolver).
     """
 
-    def __init__(self, model: nn.Module, manifold: ManifoldWrapper, input_dim: int, n_fourier_features: int = 1, use_history_mask: bool = False):
+    def __init__(self, model: nn.Module, manifold: ManifoldWrapper, input_dim: int, n_fourier_features: int = 1, use_history_mask: bool = False, model_manifold: ManifoldWrapper = None):
         super().__init__()
         self.model = model
         self.manifold = manifold
+        self.model_manifold = model_manifold
         self.use_history_mask = use_history_mask
 
-        if self.manifold.manifold_type == ManifoldType.SPHERE:
-            self.manifold_features_layer = IdentityFeatureLayer(input_dim)
-        elif self.manifold.manifold_type == ManifoldType.EUCLIDEAN:
+        if self.manifold.manifold_type in (ManifoldType.SPHERE, ManifoldType.EUCLIDEAN, ManifoldType.SO3):
+            # SO3: quaternion passed directly, no embedding
             self.manifold_features_layer = IdentityFeatureLayer(input_dim)
         elif self.manifold.manifold_type == ManifoldType.FLAT_TORUS:
             self.manifold_features_layer = FlatTorusFeatureLayer(input_dim, n_fourier_features)
@@ -100,7 +101,11 @@ class ManifoldEmbeddingLayer(nn.Module):
             v = self.model(manifold_features, global_query, local_query, t, mask=mask)
         else:
             v = self.model(manifold_features, global_query, local_query, t)
-        v = self.manifold.proju(x, v)
+        # Only project to tangent space when using manifold-mode flow matching.
+        # In Euclidean mode (model_manifold=None), the velocity field lives in
+        # the full ambient space and proju must not be applied.
+        if self.model_manifold is not None:
+            v = self.model_manifold.proju(x, v)
         return v
 
 

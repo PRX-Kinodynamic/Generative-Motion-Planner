@@ -88,6 +88,7 @@ class FlowMatching(GenerativeModel):
             input_dim=self.input_dim,
             n_fourier_features=n_fourier_features,
             use_history_mask=self.use_mask,
+            model_manifold=self.manifold,  # None for Euclidean mode
         )
 
         # Path/solver use model_manifold (self.manifold) for Riemannian geometry.

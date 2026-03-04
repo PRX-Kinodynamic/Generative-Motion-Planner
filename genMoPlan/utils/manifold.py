@@ -2,7 +2,7 @@ from typing import List, Callable
 from typing_extensions import Dict
 import warnings
 from torch import nn
-from flow_matching.utils.manifolds import Manifold, Sphere, Product, FlatTorus, Euclidean
+from flow_matching.utils.manifolds import Manifold, Sphere, Product, FlatTorus, Euclidean, SO3
 import torch
 from enum import Enum, auto
 import copy
@@ -15,6 +15,8 @@ def _determine_manifold_type(manifold):
         return ManifoldType.SPHERE
     elif isinstance(manifold, FlatTorus):
         return ManifoldType.FLAT_TORUS
+    elif isinstance(manifold, SO3):
+        return ManifoldType.SO3
     elif isinstance(manifold, Product):
         return ManifoldType.PRODUCT
     elif isinstance(manifold, Euclidean):
@@ -27,6 +29,7 @@ class ManifoldType(Enum):
     FLAT_TORUS = auto()
     PRODUCT = auto()
     EUCLIDEAN = auto()
+    SO3 = auto()
 
 class ManifoldWrapper:
     def __init__(self, manifold: Manifold):
@@ -42,7 +45,7 @@ class ManifoldWrapper:
             for m in self._manifold.manifolds:
                 manifold_types.append(_determine_manifold_type(m))
 
-                if manifold_types[-1] == ManifoldType.SPHERE:
+                if manifold_types[-1] in (ManifoldType.SPHERE, ManifoldType.SO3):
                     self._only_zero_center = False
 
                 if manifold_types[-1] == ManifoldType.PRODUCT:
@@ -59,14 +62,17 @@ class ManifoldWrapper:
         """Implementation for pickling support."""
         if self.manifold_type == ManifoldType.PRODUCT:
             # For product manifolds, we need to capture each sub-manifold
+            # SO3 requires (type, state_dim, tangent_dim) format
             manifold_info = []
-            for m, d in zip(self.manifold_types, self._manifold.dimensions):
+            for m, sd, td in zip(self.manifold_types, self._manifold.dimensions, self._manifold.tangent_dims):
                 if m == ManifoldType.SPHERE:
-                    manifold_info.append(('Sphere', d))
+                    manifold_info.append(('Sphere', sd))
                 elif m == ManifoldType.FLAT_TORUS:
-                    manifold_info.append(('FlatTorus', d))
+                    manifold_info.append(('FlatTorus', sd))
                 elif m == ManifoldType.EUCLIDEAN:
-                    manifold_info.append(('Euclidean', d))
+                    manifold_info.append(('Euclidean', sd))
+                elif m == ManifoldType.SO3:
+                    manifold_info.append(('SO3', sd, td))
                 else:
                     raise ValueError(f"Unsupported manifold type for pickling: {m}")
 
@@ -88,6 +94,8 @@ class ManifoldWrapper:
                 manifold_type_str = 'FlatTorus'
             elif self.manifold_type == ManifoldType.EUCLIDEAN:
                 manifold_type_str = 'Euclidean'
+            elif self.manifold_type == ManifoldType.SO3:
+                manifold_type_str = 'SO3'
             else:
                 raise ValueError(f"Unsupported manifold type for pickling: {self.manifold_type}")
 
@@ -120,16 +128,26 @@ class ManifoldWrapper:
         if manifold_type_str == 'Product':
             sub_manifolds = []
             total_dim = 0
-            for sub_type, sub_dim in manifold_info:
-                if sub_type == 'Sphere':
-                    sub_manifolds.append((Sphere(), sub_dim))
-                elif sub_type == 'FlatTorus':
-                    sub_manifolds.append((FlatTorus(), sub_dim))
-                elif sub_type == 'Euclidean':
-                    sub_manifolds.append((Euclidean(), sub_dim))
+            for spec in manifold_info:
+                # SO3 uses (type, state_dim, tangent_dim) format
+                if len(spec) == 3:
+                    sub_type, state_dim, tangent_dim = spec
+                    if sub_type == 'SO3':
+                        sub_manifolds.append((SO3(), state_dim, tangent_dim))
+                    else:
+                        raise ValueError(f"3-tuple format only supported for SO3, got: {sub_type}")
+                    total_dim += state_dim
                 else:
-                    raise ValueError(f"Unknown manifold type: {sub_type}")
-                total_dim += sub_dim
+                    sub_type, sub_dim = spec
+                    if sub_type == 'Sphere':
+                        sub_manifolds.append((Sphere(), sub_dim))
+                    elif sub_type == 'FlatTorus':
+                        sub_manifolds.append((FlatTorus(), sub_dim))
+                    elif sub_type == 'Euclidean':
+                        sub_manifolds.append((Euclidean(), sub_dim))
+                    else:
+                        raise ValueError(f"Unknown manifold type: {sub_type}")
+                    total_dim += sub_dim
             manifold = Product(input_dim=total_dim, manifolds=sub_manifolds)
         # Single manifold cases
         elif manifold_type_str == 'Sphere':
@@ -138,6 +156,8 @@ class ManifoldWrapper:
             manifold = FlatTorus()
         elif manifold_type_str == 'Euclidean':
             manifold = Euclidean()
+        elif manifold_type_str == 'SO3':
+            manifold = SO3()
         else:
             raise ValueError(f"Invalid manifold type: {manifold_type_str}")
 
@@ -157,7 +177,7 @@ class ManifoldWrapper:
                 for m in manifold.manifolds:
                     mt = _determine_manifold_type(m)
                     wrapper.manifold_types.append(mt)
-                    if mt == ManifoldType.SPHERE:
+                    if mt in (ManifoldType.SPHERE, ManifoldType.SO3):
                         wrapper._only_zero_center = False
             else:
                 wrapper.manifold_types = None
@@ -217,7 +237,8 @@ class ManifoldWrapper:
 
         manifold_type = _determine_manifold_type(manifold)
 
-        if manifold_type == ManifoldType.SPHERE or manifold_type == ManifoldType.EUCLIDEAN:
+        if manifold_type in (ManifoldType.SPHERE, ManifoldType.EUCLIDEAN, ManifoldType.SO3):
+            # SO3: quaternion (4D) passed directly to model, no embedding
             return input_dim
         elif manifold_type == ManifoldType.FLAT_TORUS:
             return input_dim * 2 * n_fourier_features
@@ -232,10 +253,14 @@ class ManifoldWrapper:
 
         manifold_type = _determine_manifold_type(manifold)
 
-        if manifold_type == ManifoldType.FLAT_TORUS or manifold_type == ManifoldType.EUCLIDEAN:
+        if manifold_type in (ManifoldType.FLAT_TORUS, ManifoldType.EUCLIDEAN):
             return input_dim
 
         if manifold_type == ManifoldType.SPHERE:
+            return 1
+
+        if manifold_type == ManifoldType.SO3:
+            # SO3.dist() returns a single scalar geodesic distance
             return 1
 
         if manifold_type == ManifoldType.PRODUCT:
@@ -256,16 +281,23 @@ class ManifoldWrapper:
     def _zero_center_params(self, x):
         # For FlatTorus and Euclidean, we don't need to wrap the input
         return torch.zeros_like(x), x
+
+    def _so3_wrap_params(self, x):
+        """
+        For SO3: center = normalized quaternion (4D), u = zero rotation vector (3D).
+        expmap(center, 0) = center (no rotation applied).
+        """
+        center = SO3.normalize(x)  # (..., 4)
+        u = torch.zeros(*center.shape[:-1], 3, device=center.device, dtype=center.dtype)  # (..., 3)
+        return center, u
     
     def _product_wrap_params(self, x):
         x_split = self._manifold.split(x)
 
-        # Total dims: spheres are already ambient (d+1) on input; no +1 here.
-        total_center_dim = 0
-        total_x_dim = 0
-        for i, x_i in enumerate(x_split):
-            total_center_dim += x_i.shape[-1]
-            total_x_dim += x_i.shape[-1]
+        # Compute total dims separately for center (state) and tangent
+        # SO3 has state_dim=4 but tangent_dim=3
+        total_center_dim = sum(self._manifold.dimensions)
+        total_tangent_dim = sum(self._manifold.tangent_dims)
 
         # Fast path if batch shapes align
         if all(x_i.shape[:-1] == x_split[0].shape[:-1] for x_i in x_split):
@@ -273,54 +305,63 @@ class ManifoldWrapper:
             device, dtype = x.device, x.dtype
 
             center_out = torch.zeros(*batch_shape, total_center_dim, device=device, dtype=dtype)
-            x_out      = torch.zeros(*batch_shape, total_x_dim,     device=device, dtype=dtype)
+            u_out      = torch.zeros(*batch_shape, total_tangent_dim, device=device, dtype=dtype)
 
-            ci = xi = 0
+            ci = ui = 0
             for i, x_i in enumerate(x_split):
                 mtype = self.manifold_types[i]
 
                 if mtype == ManifoldType.SPHERE:
-                    # Input is already a unit vector in ℝ^{d+1}
-                    c_i, x_i_proj = self._sphere_wrap_params(x_i)  # both (..., d+1)
-                    dim = c_i.shape[-1]
+                    c_i, u_i = self._sphere_wrap_params(x_i)
+                    c_dim = c_i.shape[-1]
+                    u_dim = u_i.shape[-1]
+
+                elif mtype == ManifoldType.SO3:
+                    c_i, u_i = self._so3_wrap_params(x_i)
+                    c_dim = c_i.shape[-1]  # 4
+                    u_dim = u_i.shape[-1]  # 3
 
                 elif mtype in (ManifoldType.FLAT_TORUS, ManifoldType.EUCLIDEAN):
-                    # Zero center; identity tangent
-                    c_i, x_i_proj = self._zero_center_params(x_i)
-                    dim = x_i.shape[-1]
+                    c_i, u_i = self._zero_center_params(x_i)
+                    c_dim = c_i.shape[-1]
+                    u_dim = u_i.shape[-1]
 
                 else:
                     raise ValueError(f"Unsupported manifold type: {mtype}")
 
-                center_out[..., ci:ci+dim] = c_i
-                x_out     [..., xi:xi+dim] = x_i_proj
-                ci += dim
-                xi += dim
+                center_out[..., ci:ci+c_dim] = c_i
+                u_out     [..., ui:ui+u_dim] = u_i
+                ci += c_dim
+                ui += u_dim
 
-            return center_out, x_out
+            return center_out, u_out
 
         # Fallback: handle different batch shapes
-        centers, x_projs = [], []
+        centers, u_projs = [], []
         for i, x_i in enumerate(x_split):
             mtype = self.manifold_types[i]
 
             if mtype == ManifoldType.SPHERE:
-                c_i, x_i_proj = self._sphere_wrap_params(x_i)
+                c_i, u_i = self._sphere_wrap_params(x_i)
+            elif mtype == ManifoldType.SO3:
+                c_i, u_i = self._so3_wrap_params(x_i)
             elif mtype in (ManifoldType.FLAT_TORUS, ManifoldType.EUCLIDEAN):
-                c_i, x_i_proj = self._zero_center_params(x_i)
+                c_i, u_i = self._zero_center_params(x_i)
             else:
                 raise ValueError(f"Unsupported manifold type: {mtype}")
 
             centers.append(c_i)
-            x_projs.append(x_i_proj)
+            u_projs.append(u_i)
 
-        return torch.cat(centers, dim=-1), torch.cat(x_projs, dim=-1)
+        return torch.cat(centers, dim=-1), torch.cat(u_projs, dim=-1)
 
     def wrap(self, x):
         if self._only_zero_center:
             center, u = self._zero_center_params(x)
         elif self.manifold_type == ManifoldType.SPHERE:
             center, u = self._sphere_wrap_params(x)
+        elif self.manifold_type == ManifoldType.SO3:
+            center, u = self._so3_wrap_params(x)
         elif self.manifold_type == ManifoldType.PRODUCT:
             center, u = self._product_wrap_params(x)
         elif self.manifold_type == ManifoldType.FLAT_TORUS:
