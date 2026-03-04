@@ -627,11 +627,22 @@ class Trainer(object):
 
                 # Print epoch header
                 print(f"\n{'-'*60}")
+                # Build epoch info line
+                epoch_info = f"Epoch {epoch}/{self.num_epochs}"
                 if self.lr_scheduler is not None:
                     current_lr = self.optimizer.param_groups[0]['lr']
-                    print(f"Epoch {epoch}/{self.num_epochs}  |  LR: {current_lr:.2e}")
-                else:
-                    print(f"Epoch {epoch}/{self.num_epochs}")
+                    epoch_info += f"  |  LR: {current_lr:.2e}"
+                # Add system/method/variations info
+                extra_info = []
+                if hasattr(self.model_args, 'dataset'):
+                    extra_info.append(self.model_args.dataset)
+                if hasattr(self.model_args, 'method_name'):
+                    extra_info.append(self.model_args.method_name)
+                if hasattr(self.model_args, 'used_variations') and self.model_args.used_variations:
+                    extra_info.append(f"[{', '.join(self.model_args.used_variations)}]")
+                if extra_info:
+                    epoch_info += f"  |  {' / '.join(extra_info)}"
+                print(epoch_info)
                 print(f"{'-'*60}")
 
                 self.train_one_epoch()
@@ -770,15 +781,26 @@ class Trainer(object):
 
         # Generate trajectories using TrajectoryGenerator
         # (returns unnormalized final states)
+        eval_sample_kwargs = dict(self.validation_kwargs or {})
+        eval_sample_kwargs.pop("max_path_length", None)
+        if self.eval_seed is not None:
+            eval_sample_kwargs["seed"] = int(self.eval_seed)
+
         with torch.no_grad():
             result = self._eval_generator.generate(
                 start_histories=histories_unnormalized,
                 max_path_length=max_path_length,
                 batch_size=self.eval_batch_size,
                 return_trajectories=False,
+                conditional_sample_kwargs=eval_sample_kwargs,
             )
 
         predicted_final_states = result.final_states
+        if predicted_final_states.shape[0] != num_evals:
+            raise ValueError(
+                "Final state evaluation sample count mismatch: "
+                f"predicted={predicted_final_states.shape[0]} vs expected={num_evals}"
+            )
 
         # Compute absolute error (ALWAYS via system.manifold; no Euclidean fallback allowed)
         if self.system is None or getattr(self.system, "manifold", None) is None:
