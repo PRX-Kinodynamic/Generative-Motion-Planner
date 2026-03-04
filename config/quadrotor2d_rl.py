@@ -38,9 +38,8 @@ def get_system(config=None, use_manifold: bool = False, dataset: str = None, **k
     if config is None:
         config = base
 
-    # Dataset name is required
-    if dataset is None:
-        dataset = "quadrotor2D_rl"  # Default to actual dataset directory name
+    # Always use the correct dataset directory name (case-sensitive)
+    dataset = "quadrotor2D_rl"
 
     method_config = config.get("flow_matching", config.get("diffusion", {}))
     return Quadrotor2DRLSystem(
@@ -105,8 +104,6 @@ base = {
         # -------------------------------- dataset --------------------------------#
         "loader": "datasets.TrajectoryDataset",
         "shuffled_indices_fname": "shuffled_indices.txt",
-        "plan_normalizer": None,
-        "plan_preprocess_fns": None,
         "use_history_padding": False,
         "use_horizon_padding": True,
         "use_history_mask": False,
@@ -379,4 +376,38 @@ final_state_quick_eval = {
 
 two_horizons = {
     "stride": 9,
+}
+
+no_manifold = {
+    "use_manifold": False,
+    "method_kwargs": {
+        "path": "AffineProbPath",
+        "solver": "ODESolver",
+    },
+}
+
+data_lim_12000 = {
+    "train_dataset_size": 12000,
+    "num_epochs": 2000,
+    "early_stopping": False,
+}
+
+single_horizon = {
+    # stride=24: actual_horz = 30*24+1 = 721 >= 708 = max_path_length-1
+    # So ceil(708/721) = 1 inference step (single horizon)
+    "stride": 24,
+}
+
+single_horizon_final_state_pred = {
+    # H=1: predict only the final state from the initial state
+    # stride=708: max_path_length-1 = 709-1 = 708
+    "stride": 708,
+    "horizon_length": 1,
+}
+
+single_horizon_two_state_pred = {
+    # H=2: predict midpoint + final state from the initial state
+    # stride=354: (max_path_length-1)/2 = 708/2 = 354
+    "stride": 354,
+    "horizon_length": 2,
 }

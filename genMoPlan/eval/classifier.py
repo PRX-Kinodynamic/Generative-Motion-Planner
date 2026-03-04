@@ -752,7 +752,7 @@ class Classifier:
             print("[ scripts/evaluate ] Loading ground truth")
 
         start_states, ground_truth_final_states, expected_labels = load_test_set(
-            self.dataset, self.system.state_dim
+            self.system.dataset, self.system.state_dim
         )
         self.ground_truth_final_states = ground_truth_final_states
 
@@ -838,7 +838,7 @@ class Classifier:
 
         # Use existing load_trajectories utility with load_reverse=True for validation
         trajectories = load_trajectories(
-            dataset=self.dataset,
+            dataset=self.system.dataset,
             read_trajectory_fn=self.system.read_trajectory,
             dataset_size=val_dataset_size,
             load_reverse=True,  # Validation uses last N trajectories
@@ -849,7 +849,7 @@ class Classifier:
         # shuffled_indices_fname format: shuffled_indices.txt or shuffled_indices_X.txt
         # shuffled_labels_fname format: shuffled_labels.txt or shuffled_labels_X.txt
         labels_fname = shuffled_indices_fname.replace("shuffled_indices", "shuffled_labels")
-        dataset_path = path.join(get_data_trajectories_path(), self.dataset)
+        dataset_path = path.join(get_data_trajectories_path(), self.system.dataset)
         labels_fpath = path.join(dataset_path, "train_test_splits", labels_fname)
 
         if not path.exists(labels_fpath):
