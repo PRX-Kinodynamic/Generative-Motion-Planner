@@ -113,7 +113,14 @@ class ROAEstimator:
 
        
     def _load_params(self):
-        self.n_runs = self._orig_n_runs if self._orig_n_runs is not None else self.inference_params["n_runs"]
+        if self._orig_n_runs is not None:
+            self.n_runs = self._orig_n_runs
+            if self.verbose:
+                print(f"[ genMoPlan/eval/roa ] Using n_runs={self.n_runs} (from --n_runs)")
+        else:
+            self.n_runs = self.inference_params["n_runs"]
+            if self.verbose:
+                print(f"[ genMoPlan/eval/roa ] Using n_runs={self.n_runs} (from config inference params)")
         self._expected_n_runs = self.n_runs
         self.batch_size = self.batch_size if self.batch_size is not None else self.inference_params["batch_size"]
 

@@ -1,4 +1,5 @@
 import timeit
+import os
 from math import ceil
 
 import torch
@@ -12,6 +13,80 @@ args = parser.parse_args()
 
 utils.set_device(args.device)
 print(f"Using device: {utils.DEVICE}\n")
+
+
+def initialize_from_checkpoint(gen_model, trainer, args):
+    """
+    Optionally initialize model weights from an external checkpoint.
+    Defaults are no-op to preserve existing behavior.
+    """
+    init_from = args.safe_get("init_from", None)
+    if init_from in (None, ""):
+        return
+
+    init_state_name = args.safe_get("init_state_name", "best.pt")
+    init_use_ema = bool(args.safe_get("init_use_ema", True))
+    init_strict = bool(args.safe_get("init_strict", False))
+    init_reset_optimizer = bool(args.safe_get("init_reset_optimizer", True))
+    init_reset_scheduler = bool(args.safe_get("init_reset_scheduler", True))
+
+    checkpoint_path = os.path.join(init_from, init_state_name)
+    if not os.path.exists(checkpoint_path):
+        raise FileNotFoundError(f"init_from checkpoint not found: {checkpoint_path}")
+
+    print(f"[ scripts/train_trajectory ] Initializing weights from: {checkpoint_path}")
+    checkpoint = torch.load(checkpoint_path, weights_only=False, map_location=torch.device(args.device))
+
+    preferred_key = "ema" if init_use_ema else "model"
+    actual_key = preferred_key
+    if preferred_key not in checkpoint:
+        fallback_key = "model" if preferred_key == "ema" else "ema"
+        if fallback_key in checkpoint:
+            actual_key = fallback_key
+            print(f"[ scripts/train_trajectory ] Warning: '{preferred_key}' not found. Falling back to '{fallback_key}'.")
+        else:
+            raise KeyError(
+                f"Neither '{preferred_key}' nor '{fallback_key}' found in checkpoint keys: {list(checkpoint.keys())}"
+            )
+
+    incompatible = gen_model.load_state_dict(checkpoint[actual_key], strict=init_strict)
+    missing_keys = list(getattr(incompatible, "missing_keys", []))
+    unexpected_keys = list(getattr(incompatible, "unexpected_keys", []))
+    if len(missing_keys) > 0 or len(unexpected_keys) > 0:
+        print(
+            f"[ scripts/train_trajectory ] init load report | "
+            f"missing={len(missing_keys)} unexpected={len(unexpected_keys)} strict={init_strict}"
+        )
+
+    # Keep EMA copy aligned with newly loaded model params.
+    trainer.reset_parameters()
+
+    if not init_reset_optimizer:
+        if "optimizer" in checkpoint:
+            trainer.optimizer.load_state_dict(checkpoint["optimizer"])
+            print("[ scripts/train_trajectory ] Loaded optimizer state from init checkpoint.")
+        else:
+            print("[ scripts/train_trajectory ] Warning: optimizer state not found; using fresh optimizer.")
+
+    if trainer.lr_scheduler is not None and not init_reset_scheduler:
+        lr_state = checkpoint.get("lr_scheduler", None)
+        if lr_state is not None:
+            trainer.lr_scheduler.warmup_steps = lr_state.get("warmup_steps", trainer.lr_scheduler.warmup_steps)
+            trainer.lr_scheduler.total_steps = lr_state.get("total_steps", trainer.lr_scheduler.total_steps)
+            trainer.lr_scheduler.base_lr = lr_state.get("base_lr", trainer.lr_scheduler.base_lr)
+            trainer.lr_scheduler.min_lr = lr_state.get("min_lr", trainer.lr_scheduler.min_lr)
+            trainer.lr_scheduler.current_step = lr_state.get("current_step", trainer.lr_scheduler.current_step)
+            trainer.lr_scheduler.step(trainer.lr_scheduler.current_step)
+            print("[ scripts/train_trajectory ] Loaded LR scheduler state from init checkpoint.")
+        else:
+            print("[ scripts/train_trajectory ] Warning: lr_scheduler state not found; using fresh scheduler.")
+
+    args.init_checkpoint_path = checkpoint_path
+    args.init_checkpoint_key = actual_key
+    print(
+        f"[ scripts/train_trajectory ] Init complete | key={actual_key} | "
+        f"reset_optimizer={init_reset_optimizer} | reset_scheduler={init_reset_scheduler}"
+    )
 
 # -----------------------------------------------------------------------------#
 # ---------------------------------- dataset ----------------------------------#
@@ -116,6 +191,7 @@ gen_model_class_loader = utils.ClassLoader(
     output_dim=observation_dim,
     prediction_length=args.horizon_length + args.history_length,
     history_length=args.history_length,
+    stride=args.stride,
     clip_denoised=args.clip_denoised,
     loss_type=args.loss_type,
     action_indices=args.action_indices,
@@ -162,6 +238,7 @@ trainer_class_loader = utils.ClassLoader(
     optimizer_kwargs=args.optimizer_kwargs,
     clip_grad_norm=args.safe_get("clip_grad_norm", None),
     eval_freq=args.eval_freq,
+    detailed_eval_freq=args.safe_get("detailed_eval_freq", 0),  # 0 = disabled
     eval_batch_size=args.eval_batch_size,
     eval_seed=args.eval_seed,
     perform_final_state_evaluation=args.perform_final_state_evaluation,
@@ -176,6 +253,9 @@ ml_model: TemporalModel = ml_model_class_loader()
 gen_model: GenerativeModel = gen_model_class_loader(ml_model)
 
 trainer: utils.Trainer = trainer_class_loader(gen_model, train_dataset, val_dataset)
+
+# Optional stage-2 style initialization from a stage-1 checkpoint.
+initialize_from_checkpoint(gen_model, trainer, args)
 
 # # -----------------------------------------------------------------------------#
 # # ---------------------------- update and save args ---------------------------#

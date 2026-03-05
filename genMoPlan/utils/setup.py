@@ -177,6 +177,7 @@ class Args:
 class Parser(Tap):
     first_save = True
     suffix: Optional[str] = None
+    custom_exp_name: Optional[str] = None  # Completely override the experiment name
     dataset: str = None
     method: Optional[str] = None
     variations: List[str] = []
@@ -359,16 +360,23 @@ class Parser(Tap):
     def generate_exp_name(self, args):
         if not "exp_name" in dir(args):
             return
-        exp_name = getattr(args, "exp_name")
-        if not callable(exp_name):
-            exp_name_string = exp_name
+        
+        # If custom_exp_name is provided, use it directly
+        if self.custom_exp_name is not None:
+            exp_name_string = self.custom_exp_name
+            print(f"[ utils/setup ] Using custom exp_name: {exp_name_string}")
         else:
-            exp_name_string = exp_name(args)
+            exp_name = getattr(args, "exp_name")
+            if not callable(exp_name):
+                exp_name_string = exp_name
+            else:
+                exp_name_string = exp_name(args)
 
-        if self.suffix is not None:
-            exp_name_string = f"{exp_name_string}_{self.suffix}"
+            if self.suffix is not None:
+                exp_name_string = f"{exp_name_string}_{self.suffix}"
 
-        print(f"[ utils/setup ] Setting exp_name to: {exp_name_string}")
+            print(f"[ utils/setup ] Setting exp_name to: {exp_name_string}")
+        
         setattr(args, "exp_name", exp_name_string)
         self._dict["exp_name"] = exp_name_string
 

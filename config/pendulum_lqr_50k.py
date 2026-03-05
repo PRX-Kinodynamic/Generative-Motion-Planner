@@ -242,14 +242,19 @@ base = {
 
 # ------------------------ overrides ------------------------#
 
-fewer_steps = {
-    "n_diffusion_steps": 5,
-}
+# fewer_steps = {
+#     "n_diffusion_steps": 5,
+# }
 
 one_step = {
     "n_diffusion_steps": 1,
 }
 
+fewer_steps = {
+    "validation_kwargs": {
+            "n_timesteps": 2,
+        }
+}        
 long_horizon = {
     "horizon_length": 80,
 }
@@ -302,6 +307,12 @@ data_lim_5000 = {
     "train_dataset_size": 5000,
     "num_epochs": 400,
 }
+
+epochs_25 = {
+    "num_epochs": 25,
+}
+
+
 
 non_manifold = {
     "manifold": None,
@@ -419,7 +430,7 @@ dit_test = {
     },
 
     "lr_scheduler_warmup_steps": 2000,
-    "learning_rate": 2.5e-4,
+    "learning_rate": 2.5e-4, 
     "lr_scheduler_min_lr": 2e-5,
     "ema_decay": 0.999,
     "useAdamW": True,
@@ -429,6 +440,6 @@ dit_test = {
     },
     "clip_grad_norm": 1.0,
 
-    "val_batch_size": int(1e4),
+    "val_batch_size": int(1e2),
 }
 

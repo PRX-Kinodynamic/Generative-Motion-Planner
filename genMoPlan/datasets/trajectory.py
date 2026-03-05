@@ -35,6 +35,9 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         is_history_conditioned: bool = True, # Otherwise it is provided as a query that is not predicted by the model
         is_validation: bool = False,
         perform_final_state_evaluation: bool = False,
+        rollout_steps: int = 1,
+        rollout_target_mode: str = "gt_future",
+        adaptive_rollout: dict = None,
         **kwargs,
     ):
         self.horizon_length = horizon_length
@@ -47,6 +50,25 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         self.history_padding_k = history_padding_k
         self.is_history_conditioned = is_history_conditioned
         self.observation_dim = observation_dim
+        self.rollout_steps = rollout_steps
+        self.rollout_target_mode = rollout_target_mode
+        self.adaptive_rollout = adaptive_rollout or {}
+
+        sampled_horizon_length = self.horizon_length
+        self.adaptive_base_span = int(self.adaptive_rollout.get("base_span", sampled_horizon_length))
+        self.adaptive_max_span = int(self.adaptive_rollout.get("max_span", self.adaptive_base_span))
+        if self.adaptive_base_span <= 0:
+            raise ValueError(f"adaptive_rollout.base_span must be > 0, got {self.adaptive_base_span}")
+        if self.adaptive_max_span < self.adaptive_base_span:
+            raise ValueError(
+                f"adaptive_rollout.max_span ({self.adaptive_max_span}) must be >= base_span ({self.adaptive_base_span})"
+            )
+        if self.adaptive_max_span > self.horizon_length:
+            raise ValueError(
+                f"adaptive_rollout.max_span ({self.adaptive_max_span}) must be <= horizon_length ({self.horizon_length})"
+            )
+        self.num_rollout_targets = max(0, self.rollout_steps - 1)
+        self.adaptive_shared_shifts = self._build_shared_shifts(self.num_rollout_targets)
 
         if perform_final_state_evaluation:
             assert is_validation, "perform_final_state_evaluation is only supported for validation dataset"
@@ -73,6 +95,9 @@ class TrajectoryDataset(torch.utils.data.Dataset):
             use_history_mask=self.use_history_mask,
             history_padding_anywhere=self.history_padding_anywhere,
             history_padding_k=self.history_padding_k,
+            rollout_steps=self.rollout_steps,
+            rollout_target_mode=self.rollout_target_mode,
+            adaptive_rollout=self.adaptive_rollout,
         )
 
         
@@ -141,12 +166,22 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         traj_start_idx = 0
         traj_lengths = [len(traj) for traj in trajectories]
         
+        # Debug: print first trajectory info
+        print(f"[ datasets/trajectory ] normed_all_trajectories shape: {normed_all_trajectories.shape}")
+        print(f"[ datasets/trajectory ] First 3 traj_lengths: {traj_lengths[:3]}")
+        
         for traj_length in traj_lengths:
             traj_end_idx = traj_start_idx + traj_length
             normed_traj = normed_all_trajectories[traj_start_idx:traj_end_idx]
             
-            normed_trajectories.append(torch.FloatTensor(normed_traj, device='cpu'))
+            # Use torch.from_numpy for reliable tensor creation
+            normed_traj_tensor = torch.from_numpy(np.ascontiguousarray(normed_traj).astype(np.float32))
+            normed_trajectories.append(normed_traj_tensor)
             traj_start_idx = traj_end_idx
+        
+        # Debug: verify first trajectory shape
+        if normed_trajectories:
+            print(f"[ datasets/trajectory ] First normed trajectory shape: {normed_trajectories[0].shape}")
         
         return normed_trajectories
 
@@ -156,6 +191,7 @@ class TrajectoryDataset(torch.utils.data.Dataset):
 
         histories = []
         final_states = []
+        full_trajectories = []
 
         for trajectory in trajectories:
             history = trajectory[:history_end:self.stride]
@@ -163,11 +199,14 @@ class TrajectoryDataset(torch.utils.data.Dataset):
 
             histories.append(history)
             final_states.append(final_state)
+            full_trajectories.append(trajectory)
 
         histories = torch.stack(histories)
         final_states = torch.stack(final_states)
-
-        return FinalStateDataSample(histories=histories, final_states=final_states)
+        # Store full trajectories as a list (they may have different lengths)
+        # Or pad them if needed - for now keep as list
+        
+        return FinalStateDataSample(histories=histories, final_states=final_states, full_trajectories=full_trajectories)
 
     def get_conditions(self, history):
         """
@@ -198,6 +237,37 @@ class TrajectoryDataset(torch.utils.data.Dataset):
             return torch.cat([history, horizon], dim=0)
         else:
             return horizon
+
+    def _build_shared_shifts(self, num_rollout_targets):
+        num_transitions = max(0, num_rollout_targets - 1)
+        if num_transitions == 0:
+            return []
+
+        schedule = self.adaptive_rollout.get("shared_shift_schedule", {"type": "arithmetic", "start": 1, "delta": 0})
+        if isinstance(schedule, (list, tuple)):
+            shifts = [int(v) for v in schedule]
+        elif isinstance(schedule, dict):
+            schedule_type = schedule.get("type", "arithmetic")
+            if schedule_type == "arithmetic":
+                start = int(schedule.get("start", 1))
+                delta = int(schedule.get("delta", 0))
+                shifts = [start + delta * k for k in range(num_transitions)]
+            elif schedule_type == "explicit":
+                shifts = [int(v) for v in schedule.get("values", [])]
+            else:
+                raise ValueError(f"Unsupported shared_shift_schedule type: {schedule_type}")
+        else:
+            raise ValueError("shared_shift_schedule must be dict, list, or tuple")
+
+        if len(shifts) != num_transitions:
+            raise ValueError(
+                f"shared_shift_schedule must have {num_transitions} values for rollout_steps={self.rollout_steps}, got {len(shifts)}"
+            )
+        if any(v < 0 for v in shifts):
+            raise ValueError(f"shared_shift_schedule values must be non-negative, got {shifts}")
+        if any(v > self.horizon_length for v in shifts):
+            raise ValueError(f"shared_shift_schedule values must be <= horizon_length ({self.horizon_length}), got {shifts}")
+        return shifts
 
     def __len__(self):
         return len(self.indices)
@@ -243,6 +313,91 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         assert len(history) == self.history_length, f"History length is {len(history)}, expected {self.history_length}"
         assert len(horizon) == self.horizon_length, f"Horizon length is {len(horizon)}, expected {self.horizon_length}"
         
+        # Generate rollout_targets if rollout_steps > 1
+        rollout_targets = NONE_TENSOR
+        if self.rollout_steps > 1 and self.rollout_target_mode == "adaptive_stride":
+            num_targets = self.num_rollout_targets
+            if num_targets > 0:
+                raw_target_span = compute_actual_length(self.adaptive_base_span, self.stride)
+
+                # Offsets are in sampled-step units.
+                # offset[0] = 0 (first rollout target aligns with current horizon),
+                # then each subsequent target shifts by shared_shift_schedule.
+                offsets = [0]
+                cumulative = 0
+                for shift in self.adaptive_shared_shifts:
+                    cumulative += shift
+                    offsets.append(cumulative)
+                offsets = offsets[:num_targets]
+
+                future_targets = []
+                target_lengths = []
+                valid_masks = []
+                max_span = self.adaptive_max_span
+
+                for offset in offsets:
+                    future_start = horizon_start + offset * self.stride
+                    future_end = future_start + raw_target_span
+                    future_chunk = trajectory_data[future_start:future_end:self.stride]
+
+                    chunk_len = min(len(future_chunk), self.adaptive_base_span)
+                    target_lengths.append(chunk_len)
+
+                    if len(future_chunk) < max_span:
+                        if len(future_chunk) > 0:
+                            pad_value = future_chunk[-1]
+                        else:
+                            pad_value = horizon[-1] if len(horizon) > 0 else history[-1]
+                        future_chunk = apply_padding(future_chunk, max_span, pad_left=False, pad_value=pad_value)
+                    elif len(future_chunk) > max_span:
+                        future_chunk = future_chunk[:max_span]
+
+                    future_targets.append(future_chunk)
+
+                    valid_mask = torch.zeros(max_span, dtype=torch.bool, device=trajectory_data.device)
+                    valid_len = min(chunk_len, max_span)
+                    if valid_len > 0:
+                        valid_mask[:valid_len] = True
+                    valid_masks.append(valid_mask)
+
+                if future_targets:
+                    rollout_targets = {
+                        "targets": torch.stack(future_targets, dim=0),  # [R, max_span, D]
+                        "target_lengths": torch.tensor(target_lengths, dtype=torch.long, device=trajectory_data.device),  # [R]
+                        "shared_shifts": torch.tensor(self.adaptive_shared_shifts, dtype=torch.long, device=trajectory_data.device),  # [R-1]
+                        "valid_mask": torch.stack(valid_masks, dim=0),  # [R, max_span]
+                    }
+        elif self.rollout_steps > 1 and self.rollout_target_mode == "gt_future":
+            # Raw span for a strided horizon chunk (in the unstrided trajectory index space).
+            raw_horizon_span = compute_actual_length(self.horizon_length, self.stride)
+            
+            # Extract future targets for rollout steps
+            future_targets = []
+            for k in range(1, self.rollout_steps):
+                # Each horizon chunk starts at `prev_end + (stride - 1)` (same convention as horizon_start).
+                # Then it spans `raw_horizon_span` raw frames, sampled every `stride`.
+                gap = self.stride - 1
+                future_start = horizon_end + (k - 1) * (raw_horizon_span + gap) + gap
+                future_end = future_start + raw_horizon_span
+                
+                # Extract future chunk
+                future_chunk = trajectory_data[future_start:future_end:self.stride]
+                
+                # Apply padding if needed (same as horizon padding logic)
+                if len(future_chunk) < self.horizon_length:
+                    if len(future_chunk) > 0:
+                        pad_value = future_chunk[-1]
+                    else:
+                        pad_value = horizon[-1] if len(horizon) > 0 else history[-1]
+                    future_chunk = apply_padding(future_chunk, self.horizon_length, pad_left=False, pad_value=pad_value)
+                elif len(future_chunk) > self.horizon_length:
+                    future_chunk = future_chunk[:self.horizon_length]
+                
+                future_targets.append(future_chunk)
+            
+            if future_targets:
+                # Stack into shape [rollout_steps-1, horizon_length, D]
+                rollout_targets = torch.stack(future_targets, dim=0)
 
         trajectory = self.get_trajectory(history, horizon)
         conditions = self.get_conditions(history)
@@ -254,6 +409,7 @@ class TrajectoryDataset(torch.utils.data.Dataset):
             global_query=global_query,
             local_query=NONE_TENSOR,
             mask=mask,
+            rollout_targets=rollout_targets,
         )
 
         return data_sample

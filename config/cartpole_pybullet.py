@@ -10,6 +10,8 @@ max_batch_size = int(2.5e5) if is_arrakis else int(1e4)
 
 
 max_path_length = 613
+# new change to experiment with smaller path length with smaller strides
+# max_path_length = 150
 
 state_names = ["x", "theta", "x_dot", "theta_dot"]
 
@@ -179,6 +181,9 @@ base = {
 
         "dataset_kwargs": {
             "cost_mul_threshold": 1.0,
+            # Rollout loss dataset configuration (must match method_kwargs.rollout_steps)
+            # "rollout_steps": 2,  # Must match method_kwargs.rollout_steps
+            # "rollout_target_mode": "gt_future",  # How to generate rollout targets
         },
 
         #---------------------------- training ----------------------------#
@@ -201,6 +206,14 @@ base = {
         "device": "cuda",
         "seed": 42,
         "clip_grad_norm": None,
+        #---------------------------- optional initialization ----------------------------#
+        # No-op defaults: existing runs remain unchanged unless init_from is set.
+        "init_from": None,  # Directory containing checkpoint (e.g., /path/to/stage1/run)
+        "init_state_name": "best.pt",
+        "init_use_ema": True,
+        "init_strict": False,
+        "init_reset_optimizer": True,
+        "init_reset_scheduler": True,
 
         #---------------------------- early stopping-------------------------#
         "patience": 10,
@@ -214,7 +227,8 @@ base = {
 
         #-------------------------------evaluation--------------------------#
         "perform_final_state_evaluation": True,
-        "eval_freq": 10, # epochs
+        "eval_freq": 1,  # epochs - controls verbose validation output frequency
+        "detailed_eval_freq": 10,  # epochs - controls detailed evaluation (Final State, Sequential, Full Traj). 0=disabled
         "eval_batch_size": max_batch_size,
         "eval_seed": 42,
     },
@@ -275,6 +289,16 @@ base = {
             "scheduler": "CondOTScheduler",
             "solver": "RiemannianODESolver",
             "n_fourier_features": 1,
+            # Rollout loss configuration (optional)
+            # "use_rollout_loss": True,
+            # "rollout_steps": 2,  # Number of rollout steps (k=1..K)
+            # "rollout_weighting": [1.0, 0.5],  # Weights for each rollout step, or dict with schedule
+            # "rollout_loss_type": "l2",  # "l2" or "manifold"
+            # "rollout_sample_kwargs": {
+            #     "n_timesteps": 5,
+            #     "integration_method": "euler",
+            #     "batch_frac": 1.0,  # Fraction of batch to use for rollout (to control compute)
+            # },
         },
         "prefix": "flow_matching/",
         "min_delta": 1e-2,
@@ -309,6 +333,12 @@ data_lim_1000 = {
 data_lim_20000 = {
     "train_dataset_size": 20000,
     "num_epochs": 2000,
+}
+max_path_572 = {
+    "max_path_length": 572,
+    "validation_kwargs": {
+        "max_path_length": 572,
+    },
 }
 
 larger_hidden_dim = {
@@ -351,12 +381,195 @@ dit_test = {
     "val_batch_size": int(6e4) if is_arrakis else int(1e4),
 }
 
+stride_2 = {
+    "stride": 2,
+}
+
+stride_3 = {
+    "stride": 3,
+}
+
+stride_5 = {
+    "stride": 5,
+}
+
 stride_10 = {
     "stride": 10,
 }
 
+# Combined variations with smaller strides for better swing-up coverage
+stride_2_horizon_15 = {
+    "stride": 2,
+    "horizon_length": 15,
+}
+
+stride_3_horizon_15 = {
+    "stride": 3,
+    "horizon_length": 15,
+}
+
 stride_30 = {
     "stride": 30,
+}
+
+data_lim_200 = {
+    "train_dataset_size": 200,
+    "num_epochs": 2000,
+}
+
+# Max path length variations (updates both base and validation_kwargs)
+path_length_150 = {
+    "max_path_length": 150,
+    "validation_kwargs": {
+        "max_path_length": 150,
+    },
+}
+
+path_length_300 = {
+    "max_path_length": 300,
+    "validation_kwargs": {
+        "max_path_length": 300,
+    },
+}
+
+path_length_450 = {
+    "max_path_length": 450,
+    "validation_kwargs": {
+        "max_path_length": 450,
+    },
+}
+
+path_length_613 = {
+    "max_path_length": 613,
+    "validation_kwargs": {
+        "max_path_length": 613,
+    },
+}
+
+horizon_7 = {
+    "horizon_length": 7,
+}
+
+horizon_15 = {
+    "horizon_length": 15,
+}
+
+horizon_31 = {
+    "horizon_length": 31,
+}
+
+# Stride 1 with short path - maximum temporal resolution
+stride_1_horizon_7_path_150 = {
+    "stride": 1,
+    "horizon_length": 7,
+    "max_path_length": 150,
+    "validation_kwargs": {
+        "max_path_length": 150,
+    },
+}
+
+stride_1_horizon_15_path_150 = {
+    "stride": 1,
+    "horizon_length": 15,
+    "max_path_length": 150,
+    "validation_kwargs": {
+        "max_path_length": 150,
+    },
+}
+
+stride_2_horizon_7_path_150 = {
+    "stride": 2,
+    "horizon_length": 7,
+    "max_path_length": 150,
+    "validation_kwargs": {
+        "max_path_length": 150,
+    },
+}
+
+stride_2_horizon_15_path_300 = {
+    "stride": 2,
+    "horizon_length": 15,
+    "max_path_length": 150,
+    "validation_kwargs": {
+        "max_path_length": 300
+    },
+}
+
+stride_3_horizon_15_path_200 = {
+    "stride": 3,
+    "horizon_length": 15,
+    "max_path_length": 200,
+    "validation_kwargs": {
+        "max_path_length": 200,
+    },
+}
+
+stride_3_horizon_15_path_300 = {
+    "stride": 3,
+    "horizon_length": 15,
+    "max_path_length": 300,
+    "batch_size": 4000,
+    "validation_kwargs": {
+        "max_path_length": 300,
+    },
+}
+
+# Stride 1 with long path - maximum temporal resolution
+stride_1_horizon_15_path_300 = {
+    "stride": 1,
+    "horizon_length": 15,
+    "max_path_length": 300,
+    "batch_size": 4000,
+    "validation_kwargs": {
+        "max_path_length": 300,
+    },
+}
+
+# Combined variations with horizon_31 (total sequence=32, works with UNet)
+stride_2_horizon_31 = {
+    "stride": 2,
+    "horizon_length": 31,
+}
+
+stride_3_horizon_31 = {
+    "stride": 3,
+    "horizon_length": 31,
+}
+
+stride_5_horizon_31 = {
+    "stride": 5,
+    "horizon_length": 31,
+}
+
+# Single-step inference: stride=19 with horizon=31 gives actual_horizon=571
+# This allows single-step rollout for max_path_length=572
+stride_19_horizon_31_single_step = {
+    "stride": 19,
+    "horizon_length": 31,
+    "use_horizon_padding": True,  # Allow shorter validation trajectories
+}
+
+stride_25_horizon_31_single_step = {
+    "stride": 25,
+    "horizon_length": 31,
+    "use_horizon_padding": True,  # Allow shorter validation trajectories
+}
+
+# Combined variation for quick swing-up learning experiments
+# horizon_length=7 gives total sequence=8 (works with UNet)
+stride_5_horizon_7 = {
+    "stride": 5,
+    "horizon_length": 7,
+}
+
+# Alternative with original horizon (total sequence=16)
+stride_5_horizon_15 = {
+    "stride": 5,
+    "horizon_length": 15,
+}
+
+epochs_2000 = {
+    "num_epochs": 2000,
 }
 
 epochs_1000 = {
@@ -365,6 +578,14 @@ epochs_1000 = {
 
 epochs_500 = {
     "num_epochs": 500,
+}
+
+epochs_100 = {
+    "num_epochs": 100,
+}
+
+epochs_25 = {
+    "num_epochs": 25,
 }
 
 next_history_loss_weight = {
@@ -409,4 +630,401 @@ history_padding_5 = {
     "use_horizon_padding": False,
     "history_length": 5,
     "final_state_evaluation": False,
+}
+
+# Rollout loss configurations
+rollout_loss_2_steps = {
+    "method_kwargs": {
+        "use_rollout_loss": True,
+        "rollout_steps": 2,
+        "rollout_weighting": [1.0],  # Weight for step 1
+        "rollout_loss_type": "l2",
+        "rollout_sample_kwargs": {
+            "n_timesteps": 5,
+            "integration_method": "euler",
+            "batch_frac": 1.0,
+        },
+    },
+    "dataset_kwargs": {
+        "rollout_steps": 2,
+        "rollout_target_mode": "gt_future",
+    },
+}
+
+rollout_loss_3_steps = {
+    "method_kwargs": {
+        "use_rollout_loss": True,
+        "rollout_steps": 3,
+        "rollout_weighting": [1.0, 0.5],  # Weights for steps 1 and 2
+        "rollout_loss_type": "l2",
+        "rollout_sample_kwargs": {
+            "n_timesteps": 5,
+            "integration_method": "euler",
+            "batch_frac": 1.0,
+        },
+    },
+    "dataset_kwargs": {
+        "rollout_steps": 3,
+        "rollout_target_mode": "gt_future",
+    },
+}
+
+rollout_loss_exp_decay = {
+    "method_kwargs": {
+        "use_rollout_loss": True,
+        "rollout_steps": 3,
+        "rollout_weighting": {
+            "type": "exp",
+            "decay": 0.5,  # Each step gets 0.5x weight of previous
+        },
+        "rollout_loss_type": "l2",
+        "rollout_sample_kwargs": {
+            "n_timesteps": 5,
+            "integration_method": "euler",
+            "batch_frac": 0.5,  # Use 50% of batch to control compute
+        },
+    },
+    "dataset_kwargs": {
+        "rollout_steps": 3,
+        "rollout_target_mode": "gt_future",
+    },
+}
+
+# Improved rollout loss with 3 steps and exponential decay (recommended)
+rollout_loss_3_steps_exp = {
+    "method_kwargs": {
+        "use_rollout_loss": True,
+        "rollout_steps": 3,
+        "rollout_weighting": {
+            "type": "exp",
+            "decay": 0.7,  # Each step gets 0.7x weight (less aggressive decay)
+        },
+        "rollout_loss_type": "l2",
+        "rollout_sample_kwargs": {
+            "n_timesteps": 5,
+            "integration_method": "euler",
+            "batch_frac": 1.0,  # Use full batch for better training
+        },
+    },
+    "dataset_kwargs": {
+        "rollout_steps": 3,
+        "rollout_target_mode": "gt_future",
+    },
+}
+
+# Adaptive autoregressive rollout (shared anchor/prediction shifts).
+# Note: rollout_steps follows existing semantics (dataset emits rollout_steps - 1 targets),
+# so rollout_steps=4 gives three adaptive targets.
+adaptive_rollout_v1 = {
+    "batch_size": 4000,
+    "method_kwargs": {
+        "use_rollout_loss": True,
+        "rollout_operator": "adaptive_stride",
+        "rollout_steps": 4,
+        "rollout_weighting": [1.0, 0.6, 0.4],
+        "rollout_loss_type": "l2",
+        "rollout_sample_kwargs": {
+            "n_timesteps": 5,
+            "integration_method": "euler",
+            "batch_frac": 1.0,
+        },
+        "adaptive_rollout": {
+            "enabled": True,
+            "mode": "adaptive_stride",
+            "shared_shift_schedule": {
+                "type": "arithmetic",
+                "start": 2,
+                "delta": 1,
+            },
+            "base_span": 15,
+            "max_span": 15,
+        },
+    },
+    "dataset_kwargs": {
+        "rollout_steps": 4,
+        "rollout_target_mode": "adaptive_stride",
+        "adaptive_rollout": {
+            "enabled": True,
+            "mode": "adaptive_stride",
+            "shared_shift_schedule": {
+                "type": "arithmetic",
+                "start": 2,
+                "delta": 1,
+            },
+            "base_span": 15,
+            "max_span": 15,
+        },
+    },
+}
+
+# Adaptive rollout with constant shared shift (no increment) and intended for stride=1 runs.
+# Use with: stride_1_horizon_15_path_300
+adaptive_rollout_stride1_constshift = {
+    "batch_size": 4000,
+    "method_kwargs": {
+        "use_rollout_loss": True,
+        "rollout_operator": "adaptive_stride",
+        "rollout_steps": 4,
+        "rollout_weighting": [1.0, 0.6, 0.4],
+        "rollout_loss_type": "l2",
+        "rollout_sample_kwargs": {
+            "n_timesteps": 5,
+            "integration_method": "euler",
+            "batch_frac": 1.0,
+        },
+        "adaptive_rollout": {
+            "enabled": True,
+            "mode": "adaptive_stride",
+            # Constant shift of +1 sampled step between re-anchors/target windows.
+            "shared_shift_schedule": {
+                "type": "arithmetic",
+                "start": 1,
+                "delta": 0,
+            },
+            "base_span": 15,
+            "max_span": 15,
+        },
+    },
+    "dataset_kwargs": {
+        "rollout_steps": 4,
+        "rollout_target_mode": "adaptive_stride",
+        "adaptive_rollout": {
+            "enabled": True,
+            "mode": "adaptive_stride",
+            "shared_shift_schedule": {
+                "type": "arithmetic",
+                "start": 1,
+                "delta": 0,
+            },
+            "base_span": 15,
+            "max_span": 15,
+        },
+    },
+}
+
+adaptive_rollout_step1_only = {
+    "method_kwargs": {
+        "use_rollout_loss": True,
+        "rollout_operator": "adaptive_stride",
+        "rollout_steps": 4,
+        "rollout_weighting": [1.0, 0.0, 0.0],
+        "rollout_loss_type": "l2",
+        "rollout_sample_kwargs": {
+            "n_timesteps": 5,
+            "integration_method": "euler",
+            "batch_frac": 1.0,
+        },
+        "adaptive_rollout": {
+            "enabled": True,
+            "mode": "adaptive_stride",
+            "shared_shift_schedule": {
+                "type": "arithmetic",
+                "start": 2,
+                "delta": 1,
+            },
+            "base_span": 15,
+            "max_span": 15,
+        },
+    },
+    "dataset_kwargs": {
+        "rollout_steps": 4,
+        "rollout_target_mode": "adaptive_stride",
+        "adaptive_rollout": {
+            "enabled": True,
+            "mode": "adaptive_stride",
+            "shared_shift_schedule": {
+                "type": "arithmetic",
+                "start": 2,
+                "delta": 1,
+            },
+            "base_span": 15,
+            "max_span": 15,
+        },
+    },
+}
+
+adaptive_rollout_step2_only = {
+    "method_kwargs": {
+        "use_rollout_loss": True,
+        "rollout_operator": "adaptive_stride",
+        "rollout_steps": 4,
+        "rollout_weighting": [0.0, 1.0, 0.0],
+        "rollout_loss_type": "l2",
+        "rollout_sample_kwargs": {
+            "n_timesteps": 5,
+            "integration_method": "euler",
+            "batch_frac": 1.0,
+        },
+        "adaptive_rollout": {
+            "enabled": True,
+            "mode": "adaptive_stride",
+            "shared_shift_schedule": {
+                "type": "arithmetic",
+                "start": 2,
+                "delta": 1,
+            },
+            "base_span": 15,
+            "max_span": 15,
+        },
+    },
+    "dataset_kwargs": {
+        "rollout_steps": 4,
+        "rollout_target_mode": "adaptive_stride",
+        "adaptive_rollout": {
+            "enabled": True,
+            "mode": "adaptive_stride",
+            "shared_shift_schedule": {
+                "type": "arithmetic",
+                "start": 2,
+                "delta": 1,
+            },
+            "base_span": 15,
+            "max_span": 15,
+        },
+    },
+}
+
+adaptive_rollout_step3_only = {
+    "method_kwargs": {
+        "use_rollout_loss": True,
+        "rollout_operator": "adaptive_stride",
+        "rollout_steps": 4,
+        "rollout_weighting": [0.0, 0.0, 1.0],
+        "rollout_loss_type": "l2",
+        "rollout_sample_kwargs": {
+            "n_timesteps": 5,
+            "integration_method": "euler",
+            "batch_frac": 1.0,
+        },
+        "adaptive_rollout": {
+            "enabled": True,
+            "mode": "adaptive_stride",
+            "shared_shift_schedule": {
+                "type": "arithmetic",
+                "start": 2,
+                "delta": 1,
+            },
+            "base_span": 15,
+            "max_span": 15,
+        },
+    },
+    "dataset_kwargs": {
+        "rollout_steps": 4,
+        "rollout_target_mode": "adaptive_stride",
+        "adaptive_rollout": {
+            "enabled": True,
+            "mode": "adaptive_stride",
+            "shared_shift_schedule": {
+                "type": "arithmetic",
+                "start": 2,
+                "delta": 1,
+            },
+            "base_span": 15,
+            "max_span": 15,
+        },
+    },
+}
+
+# ---------------------------- Two-stage training schemes ----------------------------#
+# Stage 1: fast base FM pretrain (no rollout loss).
+stage1_base_fast = {
+    "method_kwargs": {
+        "use_rollout_loss": False,
+        "rollout_steps": 1,
+    },
+    "dataset_kwargs": {
+        "rollout_steps": 1,
+    },
+    # Enable extended reporting every N epochs (0 disables it).
+    "detailed_eval_freq": 10,
+}
+
+# Stage 2: adaptive rollout fine-tuning from a Stage 1 checkpoint.
+# Provide --init_from on CLI; all init_* defaults are already in base.
+stage2_adaptive_ft = {
+    "learning_rate": 5e-5,  # Lower LR for fine-tuning (half of base 1e-4)
+    "method_kwargs": {
+        "use_rollout_loss": True,
+        "rollout_operator": "adaptive_stride",
+        "rollout_steps": 4,
+        "rollout_weighting": [1.0, 0.6, 0.4],
+        "rollout_loss_type": "l2",
+        "rollout_sample_kwargs": {
+            "n_timesteps": 5,  # Increased from 3 for better sampling quality
+            "integration_method": "euler",
+            "batch_frac": 0.5,  # Increased from 0.25 to 0.5 for more rollout loss signal
+        },
+        "adaptive_rollout": {
+            "enabled": True,
+            "mode": "adaptive_stride",
+            "shared_shift_schedule": {
+                "type": "arithmetic",
+                "start": 2,
+                "delta": 1,
+            },
+            "base_span": 15,
+            "max_span": 15,
+        },
+    },
+    "dataset_kwargs": {
+        "rollout_steps": 4,
+        "rollout_target_mode": "adaptive_stride",
+        "adaptive_rollout": {
+            "enabled": True,
+            "mode": "adaptive_stride",
+            "shared_shift_schedule": {
+                "type": "arithmetic",
+                "start": 2,
+                "delta": 1,
+            },
+            "base_span": 15,
+            "max_span": 15,
+        },
+    },
+    # Enable extended reporting every N epochs (0 disables it).
+    "detailed_eval_freq": 10,
+}
+
+# Stage-2 ablation: only first adaptive rollout step contributes to loss.
+stage2_adaptive_step1_ft = {
+    "method_kwargs": {
+        "use_rollout_loss": True,
+        "rollout_operator": "adaptive_stride",
+        "rollout_steps": 4,
+        "rollout_weighting": [1.0, 0.0, 0.0],
+        "rollout_loss_type": "l2",
+        "rollout_sample_kwargs": {
+            "n_timesteps": 3,
+            "integration_method": "euler",
+            "batch_frac": 0.25,
+        },
+        "adaptive_rollout": {
+            "enabled": True,
+            "mode": "adaptive_stride",
+            "shared_shift_schedule": {
+                "type": "arithmetic",
+                "start": 2,
+                "delta": 1,
+            },
+            "base_span": 15,
+            "max_span": 15,
+        },
+    },
+    "dataset_kwargs": {
+        "rollout_steps": 4,
+        "rollout_target_mode": "adaptive_stride",
+        "adaptive_rollout": {
+            "enabled": True,
+            "mode": "adaptive_stride",
+            "shared_shift_schedule": {
+                "type": "arithmetic",
+                "start": 2,
+                "delta": 1,
+            },
+            "base_span": 15,
+            "max_span": 15,
+        },
+    },
+    # Enable extended reporting every N epochs (0 disables it).
+    "detailed_eval_freq": 10,
 }

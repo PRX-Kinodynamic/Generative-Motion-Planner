@@ -10,3 +10,4 @@ experiments/
 *.pyd
 *.pyw
 *.pyz
+*.env

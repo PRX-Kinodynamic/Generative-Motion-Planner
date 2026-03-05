@@ -57,6 +57,7 @@ class Diffusion(GenerativeModel):
         action_indices=None,
         has_local_query=False,
         has_global_query=False,
+        stride: int = 1,
         # Diffusion specific parameters
         sort_by_values=False,
         n_timesteps=100,
@@ -75,6 +76,7 @@ class Diffusion(GenerativeModel):
             action_indices=action_indices,
             has_local_query=has_local_query,
             has_global_query=has_global_query,
+            stride=stride,
             use_history_mask=use_history_mask,
             **kwargs
         )

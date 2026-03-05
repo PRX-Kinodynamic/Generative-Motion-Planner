@@ -32,6 +32,7 @@ class GenerativeModel(nn.Module, ABC):
         loss_weight_type="none",
         loss_weight_kwargs={},
         use_history_mask: bool = False,
+        stride: int = 1,
         **kwargs,
     ):
         super().__init__()
@@ -43,6 +44,7 @@ class GenerativeModel(nn.Module, ABC):
         self.clip_denoised = clip_denoised
         self.history_length = history_length
         self.prediction_length = prediction_length
+        self.stride = stride
         self.action_indices = action_indices
         self.has_global_query = has_global_query
         self.has_local_query = has_local_query
@@ -87,7 +89,7 @@ class GenerativeModel(nn.Module, ABC):
         """
         raise NotImplementedError("Subclasses must implement this method")
     
-    def loss(self, x, cond, global_query=None, local_query=None, mask=None):
+    def loss(self, x, cond, global_query=None, local_query=None, mask=None, rollout_targets=None):
         if not self.has_local_query:
             local_query = None
 
@@ -97,8 +99,17 @@ class GenerativeModel(nn.Module, ABC):
         # Treat empty mask tensors as None
         if mask is not None and torch.is_tensor(mask) and mask.numel() == 0:
             mask = None
+        
+        # Treat empty rollout_targets tensors as None. Dict payloads are supported for adaptive rollout.
+        if rollout_targets is not None and torch.is_tensor(rollout_targets) and rollout_targets.numel() == 0:
+            rollout_targets = None
 
-        return self.compute_loss(x, cond, global_query, local_query, mask=mask)
+        kwargs = {"mask": mask}
+        # Only pass rollout_targets when it is present; keeps other methods (e.g. diffusion) working unchanged.
+        if rollout_targets is not None:
+            kwargs["rollout_targets"] = rollout_targets
+
+        return self.compute_loss(x, cond, global_query, local_query, **kwargs)
 
     @torch.no_grad()
     def forward(self, cond, global_query=None, local_query=None, verbose=True, return_chain=False, mask=None, **kwargs) -> Sample:
@@ -121,7 +132,7 @@ class GenerativeModel(nn.Module, ABC):
     
 
     @torch.no_grad()
-    def validation_loss(self, x, cond, global_query=None, local_query=None, mask=None, **kwargs):
+    def validation_loss(self, x, cond, global_query=None, local_query=None, mask=None, rollout_targets=None, **kwargs):
         """
         Compute the validation loss for the model.
         """
@@ -136,4 +147,12 @@ class GenerativeModel(nn.Module, ABC):
         if mask is not None and torch.is_tensor(mask) and mask.numel() == 0:
             mask = None
 
-        return self.compute_loss(x, cond, global_query, local_query, seed=self.val_seed, mask=mask)
+        # Treat empty rollout_targets tensors as None. Dict payloads are supported for adaptive rollout.
+        if rollout_targets is not None and torch.is_tensor(rollout_targets) and rollout_targets.numel() == 0:
+            rollout_targets = None
+
+        kwargs = {"seed": self.val_seed, "mask": mask}
+        if rollout_targets is not None:
+            kwargs["rollout_targets"] = rollout_targets
+
+        return self.compute_loss(x, cond, global_query, local_query, **kwargs)
