@@ -12,94 +12,18 @@ EMPTY_DICT = {}
 Index = namedtuple("Index", "path_ind history_start history_end horizon_start horizon_end")
 DataSample = namedtuple(
     "DataSample",
-    "trajectory conditions global_query local_query mask rollout_targets",
-    defaults=(EMPTY_DICT, NONE_TENSOR, NONE_TENSOR, NONE_TENSOR, NONE_TENSOR),
+    "trajectory conditions global_query local_query mask",
+    defaults=(EMPTY_DICT, NONE_TENSOR, NONE_TENSOR, NONE_TENSOR),
 )
-FinalStateDataSample = namedtuple("FinalStateDataSample", "histories final_states full_trajectories", defaults=(NONE_TENSOR, NONE_TENSOR, None))
+FinalStateDataSample = namedtuple("FinalStateDataSample", "histories final_states max_path_length", defaults=(NONE_TENSOR, NONE_TENSOR, None))
 
 
-def _build_shared_shifts_from_config(adaptive_rollout, num_transitions):
-    if num_transitions <= 0:
-        return []
-
-    if adaptive_rollout is None:
-        adaptive_rollout = {}
-
-    schedule = adaptive_rollout.get("shared_shift_schedule", {"type": "arithmetic", "start": 1, "delta": 0})
-
-    if isinstance(schedule, (list, tuple)):
-        shifts = [int(v) for v in schedule]
-    elif isinstance(schedule, dict):
-        schedule_type = schedule.get("type", "arithmetic")
-        if schedule_type == "arithmetic":
-            start = int(schedule.get("start", 1))
-            delta = int(schedule.get("delta", 0))
-            shifts = [start + delta * k for k in range(num_transitions)]
-        elif schedule_type == "explicit":
-            values = schedule.get("values", [])
-            shifts = [int(v) for v in values]
-        else:
-            raise ValueError(f"Unsupported shared_shift_schedule type: {schedule_type}")
-    else:
-        raise ValueError("shared_shift_schedule must be a dict, list, or tuple")
-
-    if len(shifts) != num_transitions:
-        raise ValueError(
-            f"shared_shift_schedule must provide {num_transitions} transitions, got {len(shifts)}"
-        )
-    if any(v < 0 for v in shifts):
-        raise ValueError(f"shared_shift_schedule values must be non-negative, got {shifts}")
-
-    return shifts
-
-
-def compute_required_future_for_adaptive_rollout(actual_horizon_length, stride, rollout_steps, adaptive_rollout=None):
-    if rollout_steps <= 1:
-        return actual_horizon_length + (stride - 1)
-
-    if adaptive_rollout is None:
-        adaptive_rollout = {}
-
-    sampled_horizon_length = ((actual_horizon_length - 1) // stride) + 1
-    base_span = int(adaptive_rollout.get("base_span", sampled_horizon_length))
-    if base_span <= 0:
-        raise ValueError(f"adaptive_rollout.base_span must be > 0, got {base_span}")
-
-    raw_target_span = compute_actual_length(base_span, stride)
-    num_rollout_targets = rollout_steps - 1
-    num_transitions = max(0, num_rollout_targets - 1)
-    shared_shifts = _build_shared_shifts_from_config(adaptive_rollout, num_transitions)
-    max_offset = sum(shared_shifts)
-
-    # horizon_start = history_end + (stride - 1)
-    # last_target_start = horizon_start + max_offset * stride
-    # last_target_end = last_target_start + raw_target_span
-    required_future = (stride - 1) + max_offset * stride + raw_target_span
-    return required_future
-
-
-def _make_indices_for_single_trajectory(i, traj_length, actual_history_length, actual_horizon_length, stride, use_history_padding, use_horizon_padding, use_history_mask, history_padding_anywhere, history_padding_k, rollout_steps=1, rollout_target_mode="gt_future", adaptive_rollout=None):
+def _make_indices_for_single_trajectory(i, traj_length, actual_history_length, actual_horizon_length, stride, use_history_padding, use_horizon_padding, use_history_mask, history_padding_anywhere, history_padding_k):
     # If masking is enabled, allow shorter histories down to at least 1 actual element
     min_history_elements = 1 if (use_history_padding or use_history_mask) else actual_history_length
     min_horizon_elements = 0 if use_horizon_padding else actual_horizon_length
-    
-    # Account for rollout_steps: require enough future raw frames to extract (rollout_steps-1) additional
-    # strided horizon chunks, plus the (stride-1) gaps between chunk starts (consistent with horizon_start).
-    if use_horizon_padding:
-        min_total_length = min_history_elements + min_horizon_elements
-    else:
-        if rollout_target_mode == "adaptive_stride" and rollout_steps > 1:
-            required_future = compute_required_future_for_adaptive_rollout(
-                actual_horizon_length=actual_horizon_length,
-                stride=stride,
-                rollout_steps=rollout_steps,
-                adaptive_rollout=adaptive_rollout,
-            )
-        else:
-            required_future = rollout_steps * actual_horizon_length + rollout_steps * (stride - 1)
-        min_total_length = min_history_elements + required_future
 
-    if min_total_length > traj_length:
+    if min_history_elements + min_horizon_elements > traj_length:
         return None
 
     # Ensure there is room for a full horizon sampled at `stride` starting
@@ -110,24 +34,8 @@ def _make_indices_for_single_trajectory(i, traj_length, actual_history_length, a
         # When padding is enabled, allow history to reach the end; horizon may be empty and padded.
         max_history_end = traj_length - min_horizon_elements
     else:
-        if rollout_target_mode == "adaptive_stride" and rollout_steps > 1:
-            required_future = compute_required_future_for_adaptive_rollout(
-                actual_horizon_length=actual_horizon_length,
-                stride=stride,
-                rollout_steps=rollout_steps,
-                adaptive_rollout=adaptive_rollout,
-            )
-            max_history_end = traj_length - required_future
-        else:
-            # Also reserve space for future rollout targets when rollout_steps > 1.
-            extra_rollout = 0
-            if rollout_steps > 1:
-                # For each additional horizon chunk: need its raw span plus the (stride-1) gap before it.
-                extra_rollout = (rollout_steps - 1) * (actual_horizon_length + (stride - 1))
-            max_history_end = traj_length - min_horizon_elements - (stride - 1) - extra_rollout
+        max_history_end = traj_length - min_horizon_elements - (stride - 1)
     min_history_end = min_history_elements
-    if max_history_end < min_history_end:
-        return None
 
     unique_indices = set()
 
@@ -218,7 +126,7 @@ def _make_indices_for_single_trajectory(i, traj_length, actual_history_length, a
     return traj_indices
     
 
-def make_indices(path_lengths, history_length, use_history_padding, horizon_length, use_horizon_padding, stride, use_history_mask=False, parallel=True, history_padding_anywhere=True, history_padding_k="k1", rollout_steps=1, rollout_target_mode="gt_future", adaptive_rollout=None):
+def make_indices(path_lengths, history_length, use_history_padding, horizon_length, use_horizon_padding, stride, use_history_mask=False, parallel=True, history_padding_anywhere=True, history_padding_k="k1"):
     if use_history_padding and use_horizon_padding:
         raise ValueError("Cannot use both history and horizon padding")
     if use_history_padding and use_history_mask:
@@ -244,9 +152,6 @@ def make_indices(path_lengths, history_length, use_history_padding, horizon_leng
             use_history_mask,
             history_padding_anywhere,
             history_padding_k,
-            rollout_steps,
-            rollout_target_mode,
-            adaptive_rollout,
         )
         for i, traj_length in enumerate(path_lengths)
     ]
@@ -273,20 +178,88 @@ def make_indices(path_lengths, history_length, use_history_padding, horizon_leng
 
     return indices
 
-def apply_padding(trajectory, length, pad_left=True, pad_value=None):
+def _create_mirror_padding(sequence, pad_length):
+    """
+    Create mirror-reflected padding of specified length.
+
+    Args:
+        sequence: [N, state_dim] available data
+        pad_length: Number of padding positions needed
+
+    Returns:
+        padding: [pad_length, state_dim] mirror-reflected padding
+    """
+    if pad_length <= 0:
+        return torch.zeros((0, sequence.shape[-1]), dtype=sequence.dtype, device=sequence.device)
+
+    # Reverse the sequence
+    reflected = sequence.flip(0)  # [N, state_dim] reversed
+
+    # Tile if needed to cover pad_length
+    if pad_length <= len(reflected):
+        return reflected[:pad_length]
+    else:
+        # Need to tile: repeat reflected sequence
+        num_tiles = (pad_length + len(reflected) - 1) // len(reflected)
+        tiled = reflected.repeat(num_tiles, 1)  # [num_tiles * N, state_dim]
+        return tiled[:pad_length]
+
+
+def apply_padding(trajectory, length, pad_left=True, pad_value=None, strategy=None):
+    """
+    Apply padding to sequence to reach target length.
+
+    Args:
+        trajectory: [N, state_dim] available data
+        length: M (desired length, M >= N)
+        pad_left: If True, pad on left; else pad on right
+        pad_value: Explicit value to use for padding (overrides strategy)
+        strategy: Padding strategy if pad_value not provided
+                  - "zeros": Pad with zeros
+                  - "first": Pad with first element (default if pad_left=True)
+                  - "last": Pad with last element (default if pad_left=False)
+                  - "mirror": Pad with reflected sequence
+
+    Returns:
+        padded_sequence: [M, state_dim] padded data
+
+    Backward Compatibility:
+        - If pad_value is provided, it takes precedence over strategy
+        - If neither provided, defaults to "first" for pad_left=True, "last" for pad_left=False
+          (matching current behavior)
+    """
     if len(trajectory) == length:
         return trajectory
-    
-    if pad_value is None and len(trajectory) == 0:
-        raise ValueError("Cannot pad empty trajectory with no pad value")
-    
-    if pad_value is None:
-        if pad_left:
-            pad_value = trajectory[0]
-        else:
-            pad_value = trajectory[-1]
 
-    padding = pad_value.repeat(length - len(trajectory), 1)
+    pad_length = length - len(trajectory)
+
+    if pad_value is None and len(trajectory) == 0:
+        # Special case: empty trajectory - can only pad with zeros
+        if strategy == "zeros" or strategy is None:
+            padding = torch.zeros((pad_length, trajectory.shape[-1]), dtype=trajectory.dtype, device=trajectory.device)
+        else:
+            raise ValueError(f"Cannot pad empty trajectory with strategy '{strategy}'. Use 'zeros' or provide pad_value.")
+    elif pad_value is not None:
+        # Explicit pad_value takes precedence
+        padding = pad_value.repeat(pad_length, 1)
+    elif strategy == "zeros":
+        # Pad with zeros
+        padding = torch.zeros((pad_length, trajectory.shape[-1]), dtype=trajectory.dtype, device=trajectory.device)
+    elif strategy == "first":
+        # Pad with first element
+        padding = trajectory[0].repeat(pad_length, 1)
+    elif strategy == "last":
+        # Pad with last element
+        padding = trajectory[-1].repeat(pad_length, 1)
+    elif strategy == "mirror":
+        # Pad with reflected sequence
+        padding = _create_mirror_padding(trajectory, pad_length)
+    else:
+        # Default behavior (backward compatible): use first for left, last for right
+        if pad_left:
+            padding = trajectory[0].repeat(pad_length, 1)
+        else:
+            padding = trajectory[-1].repeat(pad_length, 1)
 
     if pad_left:
         return torch.cat([padding, trajectory], dim=0)

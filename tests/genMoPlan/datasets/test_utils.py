@@ -42,11 +42,17 @@ class TestMakeIndices:
         assert indices == expected_indices
     
     def test_with_history_padding_stride_1(self):
-        """Test with history padding allowed and stride=1"""
+        """Test with history padding allowed and stride=1.
+
+        With use_history_padding=True, the implementation generates:
+        1. Indices starting at position 0 with varying history lengths (padded)
+        2. Sliding window indices throughout the trajectory
+        This maximizes training data by including all valid windows.
+        """
         path_lengths = [5, 3]
         history_length = 3
         horizon_length = 2
-        
+
         indices = make_indices(
             path_lengths=path_lengths,
             history_length=history_length,
@@ -55,19 +61,27 @@ class TestMakeIndices:
             use_horizon_padding=False,  # No padding for horizon
             stride=1
         )
-        
+
         # For path 0 (length 5):
         # - With padding allowed, history can be as short as 1
-        # - Horizon still requires 2 elements without padding
+        # - Horizon requires 2 elements without padding
+        # - Implementation generates both padded (from pos 0) and sliding window indices
         expected_indices = [
             # (path_idx, history_start, history_end, horizon_start, horizon_end)
-            (0, 0, 1, 1, 3),  # History of length 1 (will be padded)
-            (0, 0, 2, 2, 4),  # History of length 2 (will be padded)
-            (0, 0, 3, 3, 5),  # Full history of length 3
+            # Padded history starting at 0, horizon at [1,3)
+            (0, 0, 1, 1, 3),  # History length 1 (will be padded to 3)
+            # Padded history starting at 0, horizon at [2,4)
+            (0, 0, 2, 2, 4),  # History length 2 (will be padded to 3)
+            # Sliding window: history [1,2), horizon [2,4)
+            (0, 1, 2, 2, 4),  # History length 1 (will be padded to 3)
+            # Full history starting at 0, horizon at [3,5)
+            (0, 0, 3, 3, 5),  # History length 3 (no padding needed)
+            # Sliding window: history [2,3), horizon [3,5)
+            (0, 2, 3, 3, 5),  # History length 1 (will be padded to 3)
             # Path 1 (length 3) only has room for min history (1) + horizon (2)
             (1, 0, 1, 1, 3),
         ]
-        
+
         assert indices == expected_indices
     
     def test_with_horizon_padding_stride_1(self):
@@ -443,6 +457,15 @@ class TestApplyPadding:
         assert torch.allclose(padded_trajectory, torch.tensor([[9, 9], [9, 9], [9, 9]], dtype=torch.float32))
         
     def test_apply_padding_empty_trajectory_no_pad_value(self):
+        """Test that empty trajectory with no pad_value defaults to zeros padding."""
         trajectory = torch.tensor([], dtype=torch.float32).reshape(0, 2)
-        with pytest.raises(ValueError, match="Cannot pad empty trajectory with no pad value"):
-            apply_padding(trajectory, 3, pad_left=True)
+        # With the new strategy parameter, empty trajectories default to zeros padding
+        padded = apply_padding(trajectory, 3, pad_left=True)
+        expected = torch.zeros((3, 2), dtype=torch.float32)
+        assert torch.allclose(padded, expected), "Empty trajectory should be padded with zeros by default"
+
+    def test_apply_padding_empty_trajectory_non_zeros_strategy_raises(self):
+        """Test that empty trajectory with non-zeros strategy raises ValueError."""
+        trajectory = torch.tensor([], dtype=torch.float32).reshape(0, 2)
+        with pytest.raises(ValueError, match="Cannot pad empty trajectory"):
+            apply_padding(trajectory, 3, pad_left=True, strategy="first")

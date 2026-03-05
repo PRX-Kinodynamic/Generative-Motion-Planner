@@ -111,7 +111,7 @@ def main(args):
 
     for fname in tqdm(fnames):
         fpath = path.join(trajectories_path, fname)
-        trajectory = utils.read_trajectory(fpath, args.observation_dim)
+        trajectory = args.system.read_trajectory(fpath)
         start_points.append(trajectory[0])
 
     start_points = np.array(start_points)

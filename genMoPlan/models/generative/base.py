@@ -5,9 +5,10 @@ from torch import nn
 import torch
 
 from genMoPlan.models.temporal.base import TemporalModel
+from genMoPlan.utils.constants import MASK_ON, MASK_OFF
 
 from ..helpers import (
-    Losses, 
+    Losses,
     LossWeightTypes,
 )
 
@@ -17,45 +18,75 @@ class GenerativeModel(nn.Module, ABC):
     def __init__(
         self,
         model,
-        input_dim,
-        output_dim,
-        prediction_length,
-        history_length,
+        system,  # System instance - REQUIRED, provides system-specific config
+        # Model-specific params
+        prediction_length=None,
+        history_length=None,
         clip_denoised=False,
         loss_type="l2",
-        action_indices=None,
         has_global_query=False,
         has_local_query=False,
-        manifold=None,
         val_seed=42,
-        state_names=None,
         loss_weight_type="none",
         loss_weight_kwargs={},
         use_history_mask: bool = False,
-        stride: int = 1,
+        use_mask_loss_weighting: bool = False,  # NEW: Apply loss weighting by mask
+        # Deprecated parameters (for backward compatibility - will be ignored)
+        input_dim=None,
+        output_dim=None,
+        action_indices=None,
+        manifold=None,
         **kwargs,
     ):
         super().__init__()
 
+        if system is None:
+            raise ValueError(
+                "system parameter is required. GenerativeModel must receive a system instance "
+                "to extract state_dim, manifold, and other system-specific configuration."
+            )
+
+        if getattr(system, "manifold", None) is None:
+            raise ValueError(
+                "system.manifold (true manifold) is required and must not be None. "
+                "No Euclidean fallback is allowed; every system must provide a manifold "
+                "(use an explicit Euclidean manifold if needed)."
+            )
+
+        # Single source of truth
+        self.system = system
+
         self.model: TemporalModel = model
 
-        self.input_dim = input_dim
-        self.output_dim = output_dim
+        # Extract parameters from system - single source of truth
+        self.input_dim = system.state_dim
+        self.output_dim = system.state_dim
+        action_indices = getattr(system, 'action_indices', None)
+
+        # Use model_manifold for the generative model architecture
+        # model_manifold is None when use_manifold=False (Euclidean mode)
+        # model_manifold is the manifold when use_manifold=True
+        model_manifold = system.model_manifold
+
         self.clip_denoised = clip_denoised
         self.history_length = history_length
         self.prediction_length = prediction_length
-        self.stride = stride
         self.action_indices = action_indices
         self.has_global_query = has_global_query
         self.has_local_query = has_local_query
-        self.manifold = manifold
+        self.manifold = model_manifold  # Model's manifold (None for Euclidean mode)
         self.use_mask = bool(use_history_mask)
+        self.use_mask_loss_weighting = bool(use_mask_loss_weighting)
         if loss_weight_type is not None and loss_weight_type != "none":
             loss_weights = LossWeightTypes[loss_weight_type](history_length=history_length, prediction_length=prediction_length, **loss_weight_kwargs)
             self.register_buffer("loss_weights", loss_weights)
         else:
             self.loss_weights = None
-        self.loss_fn = Losses[loss_type](history_length, action_indices, manifold=manifold, state_names=state_names)
+        # ALWAYS use the true manifold for distances (system.manifold).
+        # Specific methods can opt out via ignore_manifold=True at call sites (e.g. flow matching dx_t loss).
+        self.loss_fn = Losses[loss_type](
+            history_length, action_indices, manifold=self.system.manifold
+        )
 
         self.val_seed = val_seed
 
@@ -80,6 +111,37 @@ class GenerativeModel(nn.Module, ABC):
         """
         raise NotImplementedError("Subclasses must implement this method")
 
+    def apply_mask_loss_weighting(self, loss: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        """
+        Apply mask-based loss weighting.
+
+        When use_mask_loss_weighting is True, this zeros out loss for masked (invalid) positions
+        so that only valid positions contribute to the loss.
+
+        Args:
+            loss: [batch, seq, state_dim] or [batch, seq] element-wise loss tensor
+            mask: [batch, seq] mask tensor where MASK_OFF=1 (valid) and MASK_ON=0 (masked)
+
+        Returns:
+            weighted_loss: Loss tensor with masked positions zeroed out
+
+        Mask convention:
+            - MASK_OFF (1.0): Position is valid - contributes to loss (weight = 1)
+            - MASK_ON (0.0): Position is masked - does not contribute to loss (weight = 0)
+        """
+        if not self.use_mask_loss_weighting or mask is None:
+            return loss
+
+        # Expand mask to match loss dimensions
+        if loss.dim() == 3 and mask.dim() == 2:
+            # [batch, seq, 1] -> broadcast over state_dim
+            weight = mask.unsqueeze(-1)
+        else:
+            weight = mask
+
+        # Apply weighting: masked positions get weight=0 (MASK_ON), valid get weight=1 (MASK_OFF)
+        return loss * weight
+
     @abstractmethod
     @torch.no_grad()
     def conditional_sample(self, cond, **kwargs) -> Sample:
@@ -89,7 +151,7 @@ class GenerativeModel(nn.Module, ABC):
         """
         raise NotImplementedError("Subclasses must implement this method")
     
-    def loss(self, x, cond, global_query=None, local_query=None, mask=None, rollout_targets=None):
+    def loss(self, x, cond, global_query=None, local_query=None, mask=None):
         if not self.has_local_query:
             local_query = None
 
@@ -99,17 +161,8 @@ class GenerativeModel(nn.Module, ABC):
         # Treat empty mask tensors as None
         if mask is not None and torch.is_tensor(mask) and mask.numel() == 0:
             mask = None
-        
-        # Treat empty rollout_targets tensors as None. Dict payloads are supported for adaptive rollout.
-        if rollout_targets is not None and torch.is_tensor(rollout_targets) and rollout_targets.numel() == 0:
-            rollout_targets = None
 
-        kwargs = {"mask": mask}
-        # Only pass rollout_targets when it is present; keeps other methods (e.g. diffusion) working unchanged.
-        if rollout_targets is not None:
-            kwargs["rollout_targets"] = rollout_targets
-
-        return self.compute_loss(x, cond, global_query, local_query, **kwargs)
+        return self.compute_loss(x, cond, global_query, local_query, mask=mask)
 
     @torch.no_grad()
     def forward(self, cond, global_query=None, local_query=None, verbose=True, return_chain=False, mask=None, **kwargs) -> Sample:
@@ -132,7 +185,7 @@ class GenerativeModel(nn.Module, ABC):
     
 
     @torch.no_grad()
-    def validation_loss(self, x, cond, global_query=None, local_query=None, mask=None, rollout_targets=None, **kwargs):
+    def validation_loss(self, x, cond, global_query=None, local_query=None, mask=None, **kwargs):
         """
         Compute the validation loss for the model.
         """
@@ -147,12 +200,4 @@ class GenerativeModel(nn.Module, ABC):
         if mask is not None and torch.is_tensor(mask) and mask.numel() == 0:
             mask = None
 
-        # Treat empty rollout_targets tensors as None. Dict payloads are supported for adaptive rollout.
-        if rollout_targets is not None and torch.is_tensor(rollout_targets) and rollout_targets.numel() == 0:
-            rollout_targets = None
-
-        kwargs = {"seed": self.val_seed, "mask": mask}
-        if rollout_targets is not None:
-            kwargs["rollout_targets"] = rollout_targets
-
-        return self.compute_loss(x, cond, global_query, local_query, **kwargs)
+        return self.compute_loss(x, cond, global_query, local_query, seed=self.val_seed, mask=mask)

@@ -62,8 +62,19 @@ class ProductFeatureLayer(nn.Module):
         return torch.cat([layer(x_split[i]) for i, layer in enumerate(self.input_layers)], dim=-1)
 
 
-class ProjectToTangent(nn.Module):
-    """Projects a vector field onto the tangent plane at the input."""
+class ManifoldEmbeddingLayer(nn.Module):
+    """
+    Embeds manifold-valued inputs and projects velocity field to tangent space.
+
+    This layer:
+    1. Projects input to manifold via projx() for numerical safety
+    2. Embeds angles as (sin, cos) via FourierFeatures for continuous representation
+    3. Passes embedded input through the wrapped model
+    4. Projects output velocity field to tangent space via proju()
+
+    Used for manifold-aware flow matching where the model operates on the
+    manifold geometry (GeodesicProbPath, RiemannianODESolver).
+    """
 
     def __init__(self, model: nn.Module, manifold: ManifoldWrapper, input_dim: int, n_fourier_features: int = 1, use_history_mask: bool = False):
         super().__init__()
@@ -72,6 +83,8 @@ class ProjectToTangent(nn.Module):
         self.use_history_mask = use_history_mask
 
         if self.manifold.manifold_type == ManifoldType.SPHERE:
+            self.manifold_features_layer = IdentityFeatureLayer(input_dim)
+        elif self.manifold.manifold_type == ManifoldType.EUCLIDEAN:
             self.manifold_features_layer = IdentityFeatureLayer(input_dim)
         elif self.manifold.manifold_type == ManifoldType.FLAT_TORUS:
             self.manifold_features_layer = FlatTorusFeatureLayer(input_dim, n_fourier_features)
@@ -89,3 +102,7 @@ class ProjectToTangent(nn.Module):
             v = self.model(manifold_features, global_query, local_query, t)
         v = self.manifold.proju(x, v)
         return v
+
+
+# Backward-compatible alias
+ProjectToTangent = ManifoldEmbeddingLayer

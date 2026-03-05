@@ -177,7 +177,6 @@ class Args:
 class Parser(Tap):
     first_save = True
     suffix: Optional[str] = None
-    custom_exp_name: Optional[str] = None  # Completely override the experiment name
     dataset: str = None
     method: Optional[str] = None
     variations: List[str] = []
@@ -256,13 +255,13 @@ class Parser(Tap):
         if method is not None:
             if method not in getattr(module, "base"):
                 raise ValueError(f"[ utils/setup ] Method {method} not found in config: {args.config}")
-            
+
             print(f"[ utils/setup ] Using method: {method}")
 
             params.update(getattr(module, "base")[method])
 
         args.used_variations = []
-        
+
         if variations:
             valid_variations = []
             for variation in variations:
@@ -274,7 +273,7 @@ class Parser(Tap):
                 for variation in variations:
                     if variation not in valid_variations:
                         print(f"    - {variation}")
-        
+
                 input("Press Enter to continue with the remaining variations...")
 
             variations = valid_variations
@@ -291,6 +290,27 @@ class Parser(Tap):
             print(
                 f"[ utils/setup ] Not using overrides | config: {args.config} | variation: base"
             )
+
+        # Create system instance
+        if hasattr(module, 'get_system'):
+            print(f"[ utils/setup ] Creating system instance")
+
+            # Get use_manifold flag from method config if it exists
+            use_manifold = params.get('use_manifold', False)
+
+            # Create system instance with training params (stride, history_length, horizon_length)
+            # Dataset name is required for loading achieved bounds from dataset_description.json
+            system = module.get_system(
+                config=getattr(module, "base"),
+                use_manifold=use_manifold,
+                dataset=args.dataset,  # REQUIRED: for loading achieved bounds
+                stride=params.get('stride', 1),
+                history_length=params.get('history_length', 1),
+                horizon_length=params.get('horizon_length', 31),
+            )
+
+            # Store the system instance - dataset and gen_model will extract what they need
+            params['system'] = system
 
         self._dict = {}
         for key, val in params.items():
@@ -360,23 +380,16 @@ class Parser(Tap):
     def generate_exp_name(self, args):
         if not "exp_name" in dir(args):
             return
-        
-        # If custom_exp_name is provided, use it directly
-        if self.custom_exp_name is not None:
-            exp_name_string = self.custom_exp_name
-            print(f"[ utils/setup ] Using custom exp_name: {exp_name_string}")
+        exp_name = getattr(args, "exp_name")
+        if not callable(exp_name):
+            exp_name_string = exp_name
         else:
-            exp_name = getattr(args, "exp_name")
-            if not callable(exp_name):
-                exp_name_string = exp_name
-            else:
-                exp_name_string = exp_name(args)
+            exp_name_string = exp_name(args)
 
-            if self.suffix is not None:
-                exp_name_string = f"{exp_name_string}_{self.suffix}"
+        if self.suffix is not None:
+            exp_name_string = f"{exp_name_string}_{self.suffix}"
 
-            print(f"[ utils/setup ] Setting exp_name to: {exp_name_string}")
-        
+        print(f"[ utils/setup ] Setting exp_name to: {exp_name_string}")
         setattr(args, "exp_name", exp_name_string)
         self._dict["exp_name"] = exp_name_string
 

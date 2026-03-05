@@ -14,12 +14,11 @@ import genMoPlan.utils as utils
 
 
 class WeightedLoss(nn.Module):
-    def __init__(self, history_length=1, action_indices=None, manifold=None, state_names=None):
+    def __init__(self, history_length=1, action_indices=None, manifold=None):
         super().__init__()
         self.history_length = history_length
         self.action_indices = action_indices
         self.manifold = manifold
-        self.state_names = state_names
 
     def forward(self, pred, targ, ignore_manifold=False, loss_weights=None):
         """
@@ -33,19 +32,9 @@ class WeightedLoss(nn.Module):
         else:
             weighted_loss = raw_loss
 
-        if weighted_loss.ndim == 3:
-            statewise_loss = raw_loss.mean(axis=(0, 1))
-        else:
-            statewise_loss = raw_loss.mean(axis=0)
-
-        info = {}
-
-        if self.state_names is not None:
-            for i, state_name in enumerate(self.state_names):
-                info[f"{state_name}_loss"] = statewise_loss[i]
-
         mean_loss = weighted_loss.mean()
 
+        info = {}
         info["raw_loss"] = raw_loss.mean()
         info["weighted_loss"] = weighted_loss.mean()
 
@@ -81,16 +70,19 @@ class ValueLoss(nn.Module):
 
 class WeightedL1(WeightedLoss):
     def _loss(self, pred, targ, ignore_manifold=False):
-        return torch.abs(pred - targ)
+        # manifold is REQUIRED (always exists); use ignore_manifold to opt-out (e.g., dx_t loss)
+        if ignore_manifold:
+            return torch.abs(pred - targ)
+        return self.manifold.dist(pred, targ)
 
 
 class WeightedL2(WeightedLoss):
     def _loss(self, pred, targ, ignore_manifold=False):
         # Output shape: [batch_size, horizon, output_dim], not performing any reduction over the output_dim
-        if self.manifold is not None and not ignore_manifold:
-            return self.manifold.dist(pred, targ)
-
-        return F.mse_loss(pred, targ, reduction="none")
+        # manifold is REQUIRED (always exists); use ignore_manifold to opt-out (e.g., dx_t loss)
+        if ignore_manifold:
+            return F.mse_loss(pred, targ, reduction="none")
+        return self.manifold.dist(pred, targ)
 
 
 class ValueL1(ValueLoss):

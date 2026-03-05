@@ -1,5 +1,4 @@
-from os import cpu_count, path, listdir
-from random import shuffle
+from os import cpu_count, path
 from typing import List, Union, Sequence, Optional
 import matplotlib.pyplot as plt
 from tqdm import tqdm
@@ -7,13 +6,14 @@ import numpy as np
 
 from genMoPlan.utils import get_data_trajectories_path
 
-def process_angles(data, angle_indices = None):
+
+def process_angles(data, angle_indices=None):
     """
     Process the angles of the data to normalize them to [-pi, pi] range
     """
     if angle_indices is None:
         raise ValueError("angle_indices must be provided")
-    
+
     data = data.copy()
 
     for idx in angle_indices:
@@ -23,6 +23,7 @@ def process_angles(data, angle_indices = None):
         data[..., idx][data[..., idx] > np.pi] -= 2 * np.pi
 
     return data
+
 
 def plot_trajectories(
     trajectories: Union[np.ndarray, Sequence[np.ndarray]],
@@ -136,27 +137,26 @@ def plot_trajectories(
     plt.close()
 
 
-
-def get_fnames_to_load(dataset_path, trajectories_path=None, num_trajs=None, load_reverse=False):
+def get_fnames_to_load(
+    dataset_path,
+    trajectories_path=None,
+    num_trajs=None,
+    load_reverse=False,
+    shuffled_indices_fname="shuffled_indices.txt",
+):
     if trajectories_path is None:
         trajectories_path = path.join(dataset_path, "trajectories")
 
-    indices_fpath = path.join(dataset_path, "shuffled_indices.txt")
+    indices_fpath = path.join(dataset_path, "train_test_splits", shuffled_indices_fname)
 
-    if path.exists(indices_fpath):
-        with open(indices_fpath, "r") as f:
-            fnames = f.readlines()
-            fnames = [f.strip() for f in fnames]
+    if not path.exists(indices_fpath):
+        raise FileNotFoundError(
+            f"[ utils/trajectory ] Could not find shuffled indices at {indices_fpath}"
+        )
 
-    else:
-        print(f"[ utils/trajectory ] Could not find shuffled indices at {indices_fpath}. Generating new shuffled indices for {trajectories_path}")
-        all_fnames = listdir(trajectories_path)
-        fnames = all_fnames.copy()
-        shuffle(fnames)
-
-        with open(indices_fpath, "w") as f:
-            for fname in fnames:
-                f.write(fname + "\n")
+    with open(indices_fpath, "r") as f:
+        fnames = f.readlines()
+        fnames = [f.strip() for f in fnames]
 
     if num_trajs is not None:
         if not load_reverse:
@@ -167,8 +167,9 @@ def get_fnames_to_load(dataset_path, trajectories_path=None, num_trajs=None, loa
     return fnames
 
 
-
-def _read_trajectories_from_fpaths(read_trajectory_fn, trajectories_path, fnames, parallel=True):
+def _read_trajectories_from_fpaths(
+    read_trajectory_fn, trajectories_path, fnames, parallel=True
+):
     fpaths = [path.join(trajectories_path, fname) for fname in fnames]
     if not parallel:
         trajectories = []
@@ -188,7 +189,16 @@ def _read_trajectories_from_fpaths(read_trajectory_fn, trajectories_path, fnames
 
     return trajectories
 
-def load_trajectories(dataset, read_trajectory_fn, dataset_size=None, parallel=True, fnames=None, load_reverse=False) -> List[np.ndarray]:
+
+def load_trajectories(
+    dataset,
+    read_trajectory_fn,
+    dataset_size=None,
+    parallel=True,
+    fnames=None,
+    load_reverse=False,
+    shuffled_indices_fname="shuffled_indices.txt",
+) -> List[np.ndarray]:
     """
     load dataset from directory
     """
@@ -196,39 +206,22 @@ def load_trajectories(dataset, read_trajectory_fn, dataset_size=None, parallel=T
     trajectories_path = path.join(dataset_path, "trajectories")
 
     if fnames is None:
-        fnames = get_fnames_to_load(dataset_path, trajectories_path, dataset_size, load_reverse)
+        fnames = get_fnames_to_load(
+            dataset_path, trajectories_path, dataset_size, load_reverse,
+            shuffled_indices_fname=shuffled_indices_fname,
+        )
 
     trajectories = []
 
     print(f"[ datasets/sequence ] Loading trajectories from {trajectories_path}")
 
-    trajectories = _read_trajectories_from_fpaths(read_trajectory_fn, trajectories_path, fnames, parallel=parallel)
-    trajectories = [np.array(trajectory, dtype=np.float32) for trajectory in trajectories if trajectory is not None]
+    trajectories = _read_trajectories_from_fpaths(
+        read_trajectory_fn, trajectories_path, fnames, parallel=parallel
+    )
+    trajectories = [
+        np.array(trajectory, dtype=np.float32)
+        for trajectory in trajectories
+        if trajectory is not None
+    ]
 
     return trajectories
-
-
-def get_trajectory_attractor_labels(final_states: np.ndarray, attractors: dict, attractor_dist_threshold: float, invalid_label: int = -1, verbose: bool = True):
-    if verbose:
-        print("[ utils/trajectory ] Getting attractor labels for trajectories")
-
-    attractor_states = attractors.keys()
-    attractor_states = np.array(list(attractor_states))
-
-    attractor_labels = attractors.values()
-    attractor_labels = np.array(list(attractor_labels))
-    attractor_labels = attractor_labels.reshape(-1, 1)
-
-    # Compute the distance between the final states and each of the attractors
-    distances = np.linalg.norm(final_states[:, None] - attractor_states, axis=2)
-
-    min_distance = np.min(distances, axis=1)
-    min_distance_idx = np.argmin(distances, axis=1)
-
-    predicted_labels = np.zeros_like(min_distance)
-
-    predicted_labels[min_distance <= attractor_dist_threshold] = attractor_labels[min_distance_idx[min_distance < attractor_dist_threshold]].flatten()
-    predicted_labels[min_distance > attractor_dist_threshold] = invalid_label
-
-    return predicted_labels
-

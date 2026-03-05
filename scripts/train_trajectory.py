@@ -1,11 +1,10 @@
 import timeit
-import os
 from math import ceil
 
 import torch
 import genMoPlan.utils as utils
 from genMoPlan.models import GenerativeModel, TemporalModel
-from scripts.estimate_roa import estimate_roa
+from scripts.evaluate import evaluate
 from scripts.viz_model import visualize_generated_trajectories
 
 parser = utils.Parser()
@@ -13,80 +12,6 @@ args = parser.parse_args()
 
 utils.set_device(args.device)
 print(f"Using device: {utils.DEVICE}\n")
-
-
-def initialize_from_checkpoint(gen_model, trainer, args):
-    """
-    Optionally initialize model weights from an external checkpoint.
-    Defaults are no-op to preserve existing behavior.
-    """
-    init_from = args.safe_get("init_from", None)
-    if init_from in (None, ""):
-        return
-
-    init_state_name = args.safe_get("init_state_name", "best.pt")
-    init_use_ema = bool(args.safe_get("init_use_ema", True))
-    init_strict = bool(args.safe_get("init_strict", False))
-    init_reset_optimizer = bool(args.safe_get("init_reset_optimizer", True))
-    init_reset_scheduler = bool(args.safe_get("init_reset_scheduler", True))
-
-    checkpoint_path = os.path.join(init_from, init_state_name)
-    if not os.path.exists(checkpoint_path):
-        raise FileNotFoundError(f"init_from checkpoint not found: {checkpoint_path}")
-
-    print(f"[ scripts/train_trajectory ] Initializing weights from: {checkpoint_path}")
-    checkpoint = torch.load(checkpoint_path, weights_only=False, map_location=torch.device(args.device))
-
-    preferred_key = "ema" if init_use_ema else "model"
-    actual_key = preferred_key
-    if preferred_key not in checkpoint:
-        fallback_key = "model" if preferred_key == "ema" else "ema"
-        if fallback_key in checkpoint:
-            actual_key = fallback_key
-            print(f"[ scripts/train_trajectory ] Warning: '{preferred_key}' not found. Falling back to '{fallback_key}'.")
-        else:
-            raise KeyError(
-                f"Neither '{preferred_key}' nor '{fallback_key}' found in checkpoint keys: {list(checkpoint.keys())}"
-            )
-
-    incompatible = gen_model.load_state_dict(checkpoint[actual_key], strict=init_strict)
-    missing_keys = list(getattr(incompatible, "missing_keys", []))
-    unexpected_keys = list(getattr(incompatible, "unexpected_keys", []))
-    if len(missing_keys) > 0 or len(unexpected_keys) > 0:
-        print(
-            f"[ scripts/train_trajectory ] init load report | "
-            f"missing={len(missing_keys)} unexpected={len(unexpected_keys)} strict={init_strict}"
-        )
-
-    # Keep EMA copy aligned with newly loaded model params.
-    trainer.reset_parameters()
-
-    if not init_reset_optimizer:
-        if "optimizer" in checkpoint:
-            trainer.optimizer.load_state_dict(checkpoint["optimizer"])
-            print("[ scripts/train_trajectory ] Loaded optimizer state from init checkpoint.")
-        else:
-            print("[ scripts/train_trajectory ] Warning: optimizer state not found; using fresh optimizer.")
-
-    if trainer.lr_scheduler is not None and not init_reset_scheduler:
-        lr_state = checkpoint.get("lr_scheduler", None)
-        if lr_state is not None:
-            trainer.lr_scheduler.warmup_steps = lr_state.get("warmup_steps", trainer.lr_scheduler.warmup_steps)
-            trainer.lr_scheduler.total_steps = lr_state.get("total_steps", trainer.lr_scheduler.total_steps)
-            trainer.lr_scheduler.base_lr = lr_state.get("base_lr", trainer.lr_scheduler.base_lr)
-            trainer.lr_scheduler.min_lr = lr_state.get("min_lr", trainer.lr_scheduler.min_lr)
-            trainer.lr_scheduler.current_step = lr_state.get("current_step", trainer.lr_scheduler.current_step)
-            trainer.lr_scheduler.step(trainer.lr_scheduler.current_step)
-            print("[ scripts/train_trajectory ] Loaded LR scheduler state from init checkpoint.")
-        else:
-            print("[ scripts/train_trajectory ] Warning: lr_scheduler state not found; using fresh scheduler.")
-
-    args.init_checkpoint_path = checkpoint_path
-    args.init_checkpoint_key = actual_key
-    print(
-        f"[ scripts/train_trajectory ] Init complete | key={actual_key} | "
-        f"reset_optimizer={init_reset_optimizer} | reset_scheduler={init_reset_scheduler}"
-    )
 
 # -----------------------------------------------------------------------------#
 # ---------------------------------- dataset ----------------------------------#
@@ -96,23 +21,15 @@ train_dataset_class_loader = utils.ClassLoader(
     args.loader,
     savepath=(args.savepath, "dataset_config.pkl"),
     dataset=args.dataset,
-    horizon_length=args.horizon_length,
-    history_length=args.history_length,
-    stride=args.stride,
-    observation_dim=args.observation_dim,
-    trajectory_normalizer=args.trajectory_normalizer,
-    plan_normalizer=args.plan_normalizer,
-    normalizer_params=args.normalizer_params,
-    trajectory_preprocess_fns=args.trajectory_preprocess_fns,
-    plan_preprocess_fns=args.plan_preprocess_fns,
-    preprocess_kwargs=args.preprocess_kwargs,
+    system=args.system,  # System provides all system-specific config
+    # Training-specific params only
     dataset_size=args.train_dataset_size,
+    shuffled_indices_fname=args.shuffled_indices_fname,
     use_history_padding=args.use_history_padding,
     use_horizon_padding=args.use_horizon_padding,
     use_history_mask=args.use_history_mask,
     use_plan=args.use_plan,
     is_history_conditioned=args.is_history_conditioned,
-    read_trajectory_fn=args.read_trajectory_fn,
     **args.safe_get("dataset_kwargs", {}),
 )
 
@@ -123,51 +40,42 @@ if args.val_dataset_size is not None:
     val_dataset_class_loader = utils.ClassLoader(
         args.loader,
         dataset=args.dataset,
-        horizon_length=args.horizon_length,
-        history_length=args.history_length,
-        stride=args.stride,
-        observation_dim=args.observation_dim,
-        trajectory_normalizer=args.trajectory_normalizer,
-        plan_normalizer=args.plan_normalizer,
-        normalizer_params=args.normalizer_params,
-        trajectory_preprocess_fns=args.trajectory_preprocess_fns,
-        plan_preprocess_fns=args.plan_preprocess_fns,
-        preprocess_kwargs=args.preprocess_kwargs,
+        system=args.system,  # System provides all system-specific config
+        # Training-specific params only
         dataset_size=args.val_dataset_size,
+        shuffled_indices_fname=args.shuffled_indices_fname,
         use_history_padding=args.use_history_padding,
         use_horizon_padding=args.use_horizon_padding,
         use_history_mask=args.use_history_mask,
         use_plan=args.use_plan,
         is_history_conditioned=args.is_history_conditioned,
         is_validation=True,
-        read_trajectory_fn=args.read_trajectory_fn,
         perform_final_state_evaluation=args.perform_final_state_evaluation,
         **args.safe_get("dataset_kwargs", {}),
     )
 
-print(f"[ scripts/train_trajectory ] Loading dataset")
+print("[ scripts/train_trajectory ] Loading dataset")
 train_dataset = train_dataset_class_loader()
 print(f"[ scripts/train_trajectory ] Training Data Size: {len(train_dataset)}")
 
 if args.val_dataset_size is not None:
-    print(f"[ scripts/train_trajectory ] Loading validation dataset")
+    print("[ scripts/train_trajectory ] Loading validation dataset")
     val_dataset = val_dataset_class_loader()
     print(f"[ scripts/train_trajectory ] Validation Data Size: {len(val_dataset)}")
 
-observation_dim = args.observation_dim
+# Get system object - single source of truth for system-specific parameters
+system = args.system
 
 
 # -----------------------------------------------------------------------------#
 # ------------------------------ manifold -------------------------------------#
 # -----------------------------------------------------------------------------#
 
-if args.manifold is not None:
-    manifold = utils.ManifoldWrapper(args.manifold, manifold_unwrap_fns=args.manifold_unwrap_fns, manifold_unwrap_kwargs=args.manifold_unwrap_kwargs)
-    args.manifold = manifold
-    ml_model_input_dim = manifold.compute_feature_dim(observation_dim, n_fourier_features=args.method_kwargs.get("n_fourier_features", 1))
-else:
-    manifold = None
-    ml_model_input_dim = observation_dim
+# system.manifold (true manifold) is required and always exists.
+ml_model_input_dim = system.manifold.compute_feature_dim(
+    system.state_dim,
+    n_fourier_features=args.method_kwargs.get("n_fourier_features", 1),
+)
 
 # # -----------------------------------------------------------------------------#
 # # ------------------------------ model & trainer ------------------------------#
@@ -176,10 +84,10 @@ else:
 ml_model_class_loader = utils.ClassLoader(
     args.model,
     savepath=(args.savepath, "ml_model_config.pkl"),
-    prediction_length=args.horizon_length + args.history_length,
+    prediction_length=system.history_length + system.horizon_length,
     input_dim=ml_model_input_dim,
-    output_dim=observation_dim,
-    query_dim=0 if args.is_history_conditioned else observation_dim,
+    output_dim=system.state_dim,
+    query_dim=0 if args.is_history_conditioned else system.state_dim,
     **args.model_kwargs,
     device=args.device,
 )
@@ -187,19 +95,15 @@ ml_model_class_loader = utils.ClassLoader(
 gen_model_class_loader = utils.ClassLoader(
     args.method,
     savepath=(args.savepath, "gen_model_config.pkl"),
-    input_dim=observation_dim,
-    output_dim=observation_dim,
-    prediction_length=args.horizon_length + args.history_length,
-    history_length=args.history_length,
-    stride=args.stride,
+    system=system,  # System provides all system-specific config (state_dim, manifold, etc.)
+    # Model-specific params
+    prediction_length=system.history_length + system.horizon_length,
+    history_length=system.history_length,
     clip_denoised=args.clip_denoised,
     loss_type=args.loss_type,
-    action_indices=args.action_indices,
     has_local_query=args.has_local_query,
     has_global_query=args.has_global_query,
-    manifold=manifold,
     val_seed=args.val_seed,
-    state_names=args.state_names,
     loss_weight_type=args.loss_weight_type,
     loss_weight_kwargs=args.loss_weight_kwargs,
     use_history_mask=args.use_history_mask,
@@ -238,10 +142,10 @@ trainer_class_loader = utils.ClassLoader(
     optimizer_kwargs=args.optimizer_kwargs,
     clip_grad_norm=args.safe_get("clip_grad_norm", None),
     eval_freq=args.eval_freq,
-    detailed_eval_freq=args.safe_get("detailed_eval_freq", 0),  # 0 = disabled
     eval_batch_size=args.eval_batch_size,
     eval_seed=args.eval_seed,
     perform_final_state_evaluation=args.perform_final_state_evaluation,
+    system=args.system,
 )
 
 # # -----------------------------------------------------------------------------#
@@ -252,16 +156,13 @@ ml_model: TemporalModel = ml_model_class_loader()
 
 gen_model: GenerativeModel = gen_model_class_loader(ml_model)
 
-trainer: utils.Trainer = trainer_class_loader(gen_model, train_dataset, val_dataset)
-
-# Optional stage-2 style initialization from a stage-1 checkpoint.
-initialize_from_checkpoint(gen_model, trainer, args)
+trainer: utils.Trainer = trainer_class_loader(gen_model, args, train_dataset, val_dataset)
 
 # # -----------------------------------------------------------------------------#
 # # ---------------------------- update and save args ---------------------------#
 # # -----------------------------------------------------------------------------#
 
-args.observation_dim = observation_dim
+args.observation_dim = system.state_dim
 args.dataset_size = len(train_dataset)
 args.num_batches_per_epoch = trainer.num_steps_per_epoch
 args.num_steps_per_epoch = ceil(trainer.num_steps_per_epoch / trainer.gradient_accumulate_every)
@@ -312,7 +213,7 @@ if args.no_inference:
 # -----------------------------------------------------------------------------#
 # ------------------------------visualize trajectories-------------------------#
 # -----------------------------------------------------------------------------#
-if observation_dim <= 2:
+if system.state_dim <= 2:
     try:
         visualize_generated_trajectories(
             args.dataset,
@@ -323,23 +224,23 @@ if observation_dim <= 2:
     except Exception as e:
         print(f"Error visualizing trajectories: {e}")
         print(f"Error type: {type(e).__name__}")
-        print(f"Error traceback:")
+        print("Error traceback:")
         import traceback
         traceback.print_exc()
 
 
 # -----------------------------------------------------------------------------#
-# ---------------------------------- estimate roa -----------------------------#
+# ---------------------------------- evaluate ---------------------------------#
 # -----------------------------------------------------------------------------#
 
 try:
-    estimate_roa(
+    evaluate(
         model_state_name="best.pt",
         model_path=args.savepath,
     )
 except Exception as e:
     print(f"Error estimating ROA: {e}")
     print(f"Error type: {type(e).__name__}")
-    print(f"Error traceback:")
+    print("Error traceback:")
     import traceback
     traceback.print_exc()

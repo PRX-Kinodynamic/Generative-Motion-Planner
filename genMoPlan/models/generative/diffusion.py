@@ -48,35 +48,35 @@ class Diffusion(GenerativeModel):
     def __init__(
         self,
         model,
-        input_dim,
-        output_dim,
-        prediction_length,
-        history_length,
+        system,  # System instance - REQUIRED, provides system-specific config
+        # Model-specific params
+        prediction_length=None,
+        history_length=None,
         clip_denoised=False,
         loss_type="l2",
-        action_indices=None,
         has_local_query=False,
         has_global_query=False,
-        stride: int = 1,
         # Diffusion specific parameters
         sort_by_values=False,
         n_timesteps=100,
         predict_epsilon=True,
         use_history_mask: bool = False,
+        # Deprecated parameters (for backward compatibility - will be ignored)
+        input_dim=None,
+        output_dim=None,
+        action_indices=None,
+        manifold=None,
         **kwargs,
     ):
         super().__init__(
             model=model,
-            input_dim=input_dim,
-            output_dim=output_dim,
+            system=system,
             prediction_length=prediction_length,
             history_length=history_length,
             clip_denoised=clip_denoised,
             loss_type=loss_type,
-            action_indices=action_indices,
             has_local_query=has_local_query,
             has_global_query=has_global_query,
-            stride=stride,
             use_history_mask=use_history_mask,
             **kwargs
         )

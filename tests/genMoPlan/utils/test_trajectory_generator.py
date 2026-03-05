@@ -7,7 +7,9 @@ import shutil
 from unittest.mock import Mock, MagicMock, patch
 from collections import namedtuple
 
-from genMoPlan.utils.trajectory_generator import TrajectoryGenerator
+from genMoPlan.utils.trajectory_generator import TrajectoryGenerator, ResolvedParams
+from genMoPlan.utils.generation_result import GenerationResult, TerminationResult
+from genMoPlan.systems import Outcome
 
 
 # Mock objects for testing
@@ -50,10 +52,31 @@ class MockNormalizer:
         return data * 10.0  # Scale up
 
 
+class MockSystem:
+    """Minimal mock system required by TrajectoryGenerator."""
+    def __init__(self, *, state_dim: int, history_length: int, horizon_length: int, stride: int, max_path_length: int):
+        self.state_dim = state_dim
+        self.state_names = [f"dim_{i}" for i in range(state_dim)]
+        self.history_length = history_length
+        self.horizon_length = horizon_length
+        self.stride = stride
+        self.max_path_length = max_path_length
+        # Provide a normalizer instance (single source of truth)
+        self.normalizer = MockNormalizer()
+
+    def evaluate_final_states(self, states):
+        # Never terminate in these tests unless explicitly needed
+        return np.full(states.shape[0], Outcome.INVALID.value, dtype=np.int32)
+
+
 @pytest.fixture
 def temp_dir():
     """Create a temporary directory for testing file operations"""
-    temp_path = tempfile.mkdtemp()
+    import uuid
+    base_tmp = "/common/home/st1122/Projects/genMoPlan/tmp"
+    os.makedirs(base_tmp, exist_ok=True)
+    temp_path = os.path.join(base_tmp, f"test_{uuid.uuid4().hex[:8]}")
+    os.makedirs(temp_path, exist_ok=True)
     yield temp_path
     shutil.rmtree(temp_path)
 
@@ -78,6 +101,13 @@ def trajectory_generator(mock_inference_params):
     """Create a TrajectoryGenerator instance with mocked model"""
     model = MockModel()
     model_args = MockArgs()
+    system = MockSystem(
+        state_dim=model_args.observation_dim,
+        history_length=model_args.history_length,
+        horizon_length=model_args.horizon_length,
+        stride=model_args.stride,
+        max_path_length=mock_inference_params["max_path_length"],
+    )
 
     generator = TrajectoryGenerator(
         dataset="test_dataset",
@@ -86,6 +116,7 @@ def trajectory_generator(mock_inference_params):
         inference_params=mock_inference_params,
         device="cpu",
         verbose=False,
+        system=system,
     )
     return generator
 
@@ -97,6 +128,13 @@ class TestTrajectoryGeneratorInitialization:
         """Test initialization with pre-loaded model and args"""
         model = MockModel()
         model_args = MockArgs()
+        system = MockSystem(
+            state_dim=model_args.observation_dim,
+            history_length=model_args.history_length,
+            horizon_length=model_args.horizon_length,
+            stride=model_args.stride,
+            max_path_length=mock_inference_params["max_path_length"],
+        )
 
         generator = TrajectoryGenerator(
             dataset="test_dataset",
@@ -104,6 +142,7 @@ class TestTrajectoryGeneratorInitialization:
             model_args=model_args,
             inference_params=mock_inference_params,
             device="cpu",
+            system=system,
         )
 
         assert generator.model is model
@@ -115,6 +154,7 @@ class TestTrajectoryGeneratorInitialization:
 
     def test_init_without_model_requires_model_path(self, mock_inference_params):
         """Test that initialization without model requires model_path"""
+        system = MockSystem(state_dim=2, history_length=2, horizon_length=3, stride=1, max_path_length=10)
         with pytest.raises(ValueError, match="model_path.*is required"):
             TrajectoryGenerator(
                 dataset="test_dataset",
@@ -122,11 +162,13 @@ class TestTrajectoryGeneratorInitialization:
                 model_args=None,
                 inference_params=mock_inference_params,
                 device="cpu",
+                system=system,
             )
 
     def test_init_with_model_requires_args(self, mock_inference_params):
         """Test that providing model requires model_args"""
         model = MockModel()
+        system = MockSystem(state_dim=2, history_length=2, horizon_length=3, stride=1, max_path_length=10)
 
         with pytest.raises(ValueError, match="model_args.*must be provided"):
             TrajectoryGenerator(
@@ -135,12 +177,14 @@ class TestTrajectoryGeneratorInitialization:
                 model_args=None,
                 inference_params=mock_inference_params,
                 device="cpu",
+                system=system,
             )
 
     def test_init_without_inference_params_requires_dataset(self):
         """Test that initialization without inference_params requires dataset"""
         model = MockModel()
         model_args = MockArgs()
+        system = MockSystem(state_dim=2, history_length=2, horizon_length=3, stride=1, max_path_length=10)
 
         with pytest.raises(ValueError, match="dataset.*must be provided"):
             TrajectoryGenerator(
@@ -149,6 +193,7 @@ class TestTrajectoryGeneratorInitialization:
                 model_args=model_args,
                 inference_params=None,
                 device="cpu",
+                system=system,
             )
 
 
@@ -239,157 +284,6 @@ class TestTimestampManagement:
         trajectory_generator.timestamp = "2025-01-01_12-00-00"
         trajectory_generator.ensure_timestamp()
         assert trajectory_generator.timestamp == "2025-01-01_12-00-00"
-
-
-class TestTrajectoryGeneration:
-    """Tests for trajectory generation methods"""
-
-    def test_generate_trajectories_returns_correct_shape(self, trajectory_generator):
-        """Test that generate_trajectories returns correct shape"""
-        start_states = np.random.randn(10, 2)
-
-        with patch.object(trajectory_generator, '_generate_raw_trajectories') as mock_gen:
-            # Mock returns trajectories with shape (batch, path_length, dim)
-            # Use side_effect to return correctly-sized arrays for each call
-            def mock_generate(batch_states, **kwargs):
-                batch_size = len(batch_states)
-                return np.random.randn(batch_size, 10, 2)
-
-            mock_gen.side_effect = mock_generate
-
-            result = trajectory_generator.generate_trajectories(
-                start_states,
-                num_inference_steps=3,
-            )
-
-            assert result.shape[0] == 10  # batch size
-            assert result.shape[2] == 2   # observation dim
-
-    def test_generate_trajectories_only_final_states(self, trajectory_generator):
-        """Test generating only final states (not full trajectories)"""
-        start_states = np.random.randn(10, 2)
-
-        with patch.object(trajectory_generator, '_generate_raw_trajectories') as mock_gen:
-            # Mock returns only final states with shape (batch, dim)
-            def mock_generate(batch_states, **kwargs):
-                batch_size = len(batch_states)
-                return np.random.randn(batch_size, 2)
-
-            mock_gen.side_effect = mock_generate
-
-            result = trajectory_generator.generate_trajectories(
-                start_states,
-                num_inference_steps=3,
-                only_return_final_states=True,
-            )
-
-            assert result.shape == (10, 2)
-
-    def test_generate_trajectories_requires_one_of_max_path_or_steps(self, trajectory_generator):
-        """Test that generate_trajectories requires exactly one of max_path_length or num_inference_steps"""
-        start_states = np.random.randn(10, 2)
-
-        with pytest.raises(ValueError, match="exactly one of"):
-            trajectory_generator.generate_trajectories(start_states)
-
-    def test_generate_trajectories_batching(self, trajectory_generator):
-        """Test that large batches are properly split"""
-        start_states = np.random.randn(100, 2)
-
-        with patch.object(trajectory_generator, '_generate_raw_trajectories') as mock_gen:
-            def mock_generate(batch_states, **kwargs):
-                batch_size = len(batch_states)
-                return np.random.randn(batch_size, 2)
-
-            mock_gen.side_effect = mock_generate
-
-            result = trajectory_generator.generate_trajectories(
-                start_states,
-                batch_size=10,
-                num_inference_steps=3,
-                only_return_final_states=True,
-            )
-
-            # Should be called 10 times (100 / 10)
-            assert mock_gen.call_count == 10
-            assert result.shape == (100, 2)
-
-    def test_generate_trajectories_applies_normalization(self, trajectory_generator):
-        """Test that normalization is applied during generation"""
-        start_states = np.random.randn(5, 2)
-
-        # Mock normalizer
-        with patch.object(trajectory_generator, '_get_normalizer') as mock_norm_getter:
-            mock_normalizer = MockNormalizer()
-            mock_norm_getter.return_value = mock_normalizer
-
-            with patch.object(trajectory_generator, '_generate_raw_trajectories') as mock_gen:
-                def mock_generate(batch_states, **kwargs):
-                    batch_size = len(batch_states)
-                    return np.random.randn(batch_size, 2)
-
-                mock_gen.side_effect = mock_generate
-
-                result = trajectory_generator.generate_trajectories(
-                    start_states,
-                    num_inference_steps=3,
-                    only_return_final_states=True,
-                )
-
-                # Check that normalizer was called
-                mock_norm_getter.assert_called_once()
-
-
-class TestMultipleRunGeneration:
-    """Tests for generate_multiple_runs method"""
-
-    def test_generate_multiple_runs_returns_correct_shape(self, trajectory_generator):
-        """Test that generate_multiple_runs returns correct shaped arrays"""
-        start_states = np.random.randn(10, 2)
-
-        with patch.object(trajectory_generator, 'generate_trajectories') as mock_gen:
-            # Return final states
-            mock_gen.return_value = np.random.randn(10, 2)
-
-            final_states, trajectories = trajectory_generator.generate_multiple_runs(
-                start_states,
-                n_runs=3,
-                num_inference_steps=2,
-                discard_trajectories=True,
-            )
-
-            # final_states should be (n_runs, num_states, dim)
-            assert final_states.shape == (3, 10, 2)
-            assert trajectories is None  # discarded
-
-    def test_generate_multiple_runs_keeps_trajectories(self, trajectory_generator):
-        """Test that generate_multiple_runs can keep full trajectories"""
-        start_states = np.random.randn(10, 2)
-
-        with patch.object(trajectory_generator, 'generate_trajectories') as mock_gen:
-            # Return full trajectories (batch, path_length, dim)
-            mock_gen.return_value = np.random.randn(10, 15, 2)
-
-            final_states, trajectories = trajectory_generator.generate_multiple_runs(
-                start_states,
-                n_runs=3,
-                num_inference_steps=2,
-                discard_trajectories=False,
-            )
-
-            assert final_states.shape == (3, 10, 2)
-            assert trajectories.shape == (3, 10, 15, 2)
-
-    def test_generate_multiple_runs_requires_positive_runs(self, trajectory_generator):
-        """Test that n_runs must be positive"""
-        start_states = np.random.randn(10, 2)
-
-        with pytest.raises(ValueError, match="must be positive"):
-            trajectory_generator.generate_multiple_runs(
-                start_states,
-                n_runs=0,
-                num_inference_steps=2,
-            )
 
 
 class TestSavingAndLoading:
@@ -500,29 +394,6 @@ class TestSavingAndLoading:
 class TestInternalHelpers:
     """Tests for internal helper methods"""
 
-    def test_compute_inference_steps_calculation(self, trajectory_generator):
-        """Test that _compute_inference_steps calculates correctly"""
-        # stride=1, history=2, horizon=3
-        # actual_hist = 1 + (2-1)*1 = 2
-        # actual_horz = 1 + (3-1)*1 = 3
-        # remaining = 20 - 2 = 18
-        # steps = ceil(18 / 3) = 6
-
-        steps = trajectory_generator._compute_inference_steps(
-            max_path_length=20,
-            horizon_length=3
-        )
-
-        assert steps == 6
-
-    def test_compute_inference_steps_requires_max_path_length(self, trajectory_generator):
-        """Test that _compute_inference_steps requires max_path_length"""
-        with pytest.raises(ValueError, match="max_path_length.*must be provided"):
-            trajectory_generator._compute_inference_steps(
-                max_path_length=None,
-                horizon_length=3
-            )
-
     def test_flatten_for_plotting_4d_array(self):
         """Test flattening 4D trajectory array for plotting"""
         # Shape: (num_states, n_runs, path_length, dim)
@@ -559,3 +430,386 @@ class TestInternalHelpers:
         result = TrajectoryGenerator._ensure_run_first(final_states, start_states)
 
         assert result.shape == (3, 10, 2)
+
+
+# =============================================================================
+# Tests for generate() method and related refactoring
+# =============================================================================
+
+
+class MockSystemTerminating:
+    """Mock system with termination checking based on state norm."""
+    def __init__(self, termination_threshold=1.0):
+        self.termination_threshold = termination_threshold
+        self.state_dim = 2
+        self.state_names = ["x", "y"]
+        self.normalizer = MockNormalizer()
+        self.history_length = 2
+        self.horizon_length = 3
+        self.stride = 1
+        self.max_path_length = 50
+
+    def evaluate_final_states(self, states):
+        """Vectorized evaluation of final states."""
+        norms = np.linalg.norm(states, axis=1)
+        outcomes = np.where(
+            norms < self.termination_threshold,
+            Outcome.SUCCESS.value,
+            Outcome.FAILURE.value
+        )
+        return outcomes.astype(np.int32)
+
+
+@pytest.fixture
+def trajectory_generator_terminating(mock_inference_params):
+    """Create a TrajectoryGenerator with termination checking."""
+    model = MockModel()
+    model_args = MockArgs()
+    system = MockSystemTerminating()
+
+    generator = TrajectoryGenerator(
+        dataset="test_dataset",
+        model=model,
+        model_args=model_args,
+        inference_params=mock_inference_params,
+        device="cpu",
+        verbose=False,
+        system=system,
+    )
+    return generator
+
+
+class TestResolvedParams:
+    """Tests for ResolvedParams dataclass."""
+
+    def test_resolved_params_creation(self):
+        """Test ResolvedParams can be created with all fields."""
+        params = ResolvedParams(
+            batch_size=32,
+            max_path_length=100,
+            num_inference_steps=10,
+            horizon_length=8,
+            history_length=4,
+            stride=1,
+            state_dim=6,
+            model_sequence_length=12,
+        )
+
+        assert params.batch_size == 32
+        assert params.max_path_length == 100
+        assert params.num_inference_steps == 10
+        assert params.horizon_length == 8
+        assert params.history_length == 4
+        assert params.stride == 1
+        assert params.state_dim == 6
+        assert params.model_sequence_length == 12
+
+
+class TestGenerateMethodInputValidation:
+    """Tests for generate() method input validation."""
+
+    def test_generate_requires_start_states_or_histories(self, trajectory_generator):
+        """Test generate() requires either start_states or start_histories."""
+        with pytest.raises(ValueError, match="Either start_states or start_histories"):
+            trajectory_generator.generate()
+
+    def test_generate_rejects_both_start_states_and_histories(self, trajectory_generator):
+        """Test generate() rejects both start_states and start_histories."""
+        start_states = np.random.randn(5, 2)
+        start_histories = np.random.randn(5, 2, 2)
+
+        with pytest.raises(ValueError, match="Cannot provide both"):
+            trajectory_generator.generate(
+                start_states=start_states,
+                start_histories=start_histories,
+            )
+
+    def test_generate_accepts_start_states(self, trajectory_generator):
+        """Test generate() accepts start_states parameter."""
+        start_states = np.random.randn(5, 2)
+
+        result = trajectory_generator.generate(
+            start_states=start_states,
+            num_inference_steps=2,
+        )
+
+        assert isinstance(result, GenerationResult)
+        assert result.batch_size == 5
+
+    def test_generate_accepts_start_histories(self, trajectory_generator):
+        """Test generate() accepts start_histories parameter."""
+        start_histories = np.random.randn(5, 2, 2)
+
+        result = trajectory_generator.generate(
+            start_histories=start_histories,
+            num_inference_steps=2,
+        )
+
+        assert isinstance(result, GenerationResult)
+        assert result.batch_size == 5
+
+
+class TestGenerateMethodOutputFormat:
+    """Tests for generate() method output format."""
+
+    def test_generate_returns_generation_result(self, trajectory_generator):
+        """Test generate() returns GenerationResult dataclass."""
+        start_states = np.random.randn(5, 2)
+
+        result = trajectory_generator.generate(
+            start_states=start_states,
+            num_inference_steps=2,
+        )
+
+        assert isinstance(result, GenerationResult)
+
+    def test_generate_final_states_shape(self, trajectory_generator):
+        """Test generate() returns final_states with correct shape."""
+        start_states = np.random.randn(10, 2)
+
+        result = trajectory_generator.generate(
+            start_states=start_states,
+            num_inference_steps=2,
+        )
+
+        assert result.final_states.shape == (10, 2)
+
+    def test_generate_with_return_trajectories(self, trajectory_generator):
+        """Test generate() returns trajectories when requested."""
+        start_states = np.random.randn(5, 2)
+
+        result = trajectory_generator.generate(
+            start_states=start_states,
+            num_inference_steps=2,
+            return_trajectories=True,
+        )
+
+        assert result.has_trajectories
+        assert result.trajectories is not None
+        assert result.trajectories.shape[0] == 5
+        assert result.trajectories.shape[2] == 2
+
+    def test_generate_without_return_trajectories(self, trajectory_generator):
+        """Test generate() does not return trajectories by default."""
+        start_states = np.random.randn(5, 2)
+
+        result = trajectory_generator.generate(
+            start_states=start_states,
+            num_inference_steps=2,
+            return_trajectories=False,
+        )
+
+        assert not result.has_trajectories
+        assert result.trajectories is None
+
+
+class TestGenerateWithStartHistories:
+    """Tests for generate() with start_histories parameter."""
+
+    def test_generate_uses_provided_histories(self, trajectory_generator):
+        """Test generate() uses exact history windows when provided."""
+        start_histories = np.ones((5, 2, 2)) * 0.5
+
+        result = trajectory_generator.generate(
+            start_histories=start_histories,
+            num_inference_steps=2,
+        )
+
+        assert result.batch_size == 5
+
+    def test_generate_extracts_start_states_from_histories(self, trajectory_generator):
+        """Test generate() extracts last state from histories for output sizing."""
+        start_histories = np.zeros((5, 2, 2))
+        start_histories[:, -1, :] = 1.0
+
+        result = trajectory_generator.generate(
+            start_histories=start_histories,
+            num_inference_steps=1,
+        )
+
+        assert result.final_states.shape[0] == 5
+
+
+class TestGenerateTerminationChecking:
+    """Tests for termination checking in generate()."""
+
+    def test_generate_with_system_returns_termination_info(self, trajectory_generator_terminating):
+        """Test generate() returns termination info when system is provided."""
+        start_states = np.random.randn(5, 2)
+
+        result = trajectory_generator_terminating.generate(
+            start_states=start_states,
+            num_inference_steps=2,
+        )
+
+        assert result.has_termination_info
+        assert result.termination_steps is not None
+        assert result.termination_outcomes is not None
+        assert result.termination_steps.shape == (5,)
+        assert result.termination_outcomes.shape == (5,)
+
+    def test_generate_with_system_returns_result(self, trajectory_generator):
+        """Test generate() returns a valid result."""
+        start_states = np.random.randn(5, 2)
+
+        result = trajectory_generator.generate(
+            start_states=start_states,
+            num_inference_steps=2,
+        )
+
+        assert isinstance(result, GenerationResult)
+
+
+class TestRequireSystemParameter:
+    """Tests for mandatory system requirement."""
+
+    def test_init_fails_without_system(self, mock_inference_params):
+        """TrajectoryGenerator must always receive a system."""
+        model = MockModel()
+        model_args = MockArgs()
+
+        with pytest.raises(ValueError, match="requires a `system` instance"):
+            TrajectoryGenerator(
+                dataset="test_dataset",
+                model=model,
+                model_args=model_args,
+                inference_params=mock_inference_params,
+                device="cpu",
+                verbose=False,
+                system=None,
+            )
+
+    def test_init_succeeds_with_system(self, mock_inference_params):
+        """TrajectoryGenerator should initialize when system is provided."""
+        model = MockModel()
+        model_args = MockArgs()
+        system = MockSystem(
+            state_dim=2,
+            history_length=2,
+            horizon_length=3,
+            stride=1,
+            max_path_length=10,
+        )
+
+        generator = TrajectoryGenerator(
+            dataset="test_dataset",
+            model=model,
+            model_args=model_args,
+            inference_params=mock_inference_params,
+            device="cpu",
+            verbose=False,
+            system=system,
+        )
+
+        assert generator.system is system
+
+
+class TestResolveParams:
+    """Tests for _resolve_params method."""
+
+    def test_resolve_params_with_max_path_length(self, trajectory_generator):
+        """Test _resolve_params with max_path_length calculates num_inference_steps."""
+        params = trajectory_generator._resolve_params(
+            batch_size=10,
+            max_path_length=20,
+            num_inference_steps=None,
+            horizon_length=None,
+        )
+
+        assert params.max_path_length == 20
+        assert params.num_inference_steps > 0
+
+    def test_resolve_params_with_num_inference_steps(self, trajectory_generator):
+        """Test _resolve_params with num_inference_steps calculates max_path_length."""
+        params = trajectory_generator._resolve_params(
+            batch_size=10,
+            max_path_length=None,
+            num_inference_steps=5,
+            horizon_length=None,
+        )
+
+        assert params.num_inference_steps == 5
+        assert params.max_path_length > 0
+
+    def test_resolve_params_rejects_both(self, trajectory_generator):
+        """Test _resolve_params rejects both max_path_length and num_inference_steps."""
+        with pytest.raises(ValueError, match="Cannot specify both"):
+            trajectory_generator._resolve_params(
+                batch_size=10,
+                max_path_length=20,
+                num_inference_steps=5,
+                horizon_length=None,
+            )
+
+    def test_resolve_params_uses_defaults(self, trajectory_generator):
+        """Test _resolve_params uses defaults from inference_params."""
+        params = trajectory_generator._resolve_params(
+            batch_size=10,
+            max_path_length=None,
+            num_inference_steps=None,
+            horizon_length=None,
+        )
+
+        assert params.max_path_length == trajectory_generator.inference_params["max_path_length"]
+
+
+class TestGenerateMultipleRuns:
+    """Tests for generate_multiple_runs using new generate() method."""
+
+    def test_generate_multiple_runs_returns_correct_shape(self, trajectory_generator):
+        """Test generate_multiple_runs returns correctly shaped arrays."""
+        start_states = np.random.randn(10, 2)
+
+        final_states, trajectories = trajectory_generator.generate_multiple_runs(
+            start_states=start_states,
+            n_runs=3,
+            num_inference_steps=2,
+            return_trajectories=False,
+        )
+
+        assert final_states.shape == (3, 10, 2)
+        assert trajectories is None
+
+    def test_generate_multiple_runs_with_trajectories(self, trajectory_generator):
+        """Test generate_multiple_runs with trajectory return."""
+        start_states = np.random.randn(5, 2)
+
+        final_states, trajectories = trajectory_generator.generate_multiple_runs(
+            start_states=start_states,
+            n_runs=2,
+            num_inference_steps=2,
+            return_trajectories=True,
+        )
+
+        assert final_states.shape == (2, 5, 2)
+        assert trajectories is not None
+        assert trajectories.shape[0] == 2
+        assert trajectories.shape[1] == 5
+
+
+class TestBatching:
+    """Tests for batching in generate()."""
+
+    def test_generate_respects_batch_size(self, trajectory_generator):
+        """Test generate() respects batch_size parameter."""
+        start_states = np.random.randn(100, 2)
+
+        result = trajectory_generator.generate(
+            start_states=start_states,
+            batch_size=10,
+            num_inference_steps=2,
+        )
+
+        assert result.final_states.shape[0] == 100
+
+    def test_generate_handles_uneven_batches(self, trajectory_generator):
+        """Test generate() handles when total doesn't divide evenly by batch_size."""
+        start_states = np.random.randn(15, 2)
+
+        result = trajectory_generator.generate(
+            start_states=start_states,
+            batch_size=4,
+            num_inference_steps=2,
+        )
+
+        assert result.final_states.shape[0] == 15

@@ -108,8 +108,8 @@ python scripts/viz_dataset.py --dataset pendulum_lqr_50k
 ### Estimating Region of Attraction
 
 ```bash
-# Estimate the region of attraction for a trained model
-python scripts/estimate_roa.py --dataset pendulum_lqr_50k --model_path path/to/model
+# Evaluate a trained model (ROA estimation, classification metrics)
+python scripts/evaluate.py --model_path path/to/model
 ```
 
 ## Configuration

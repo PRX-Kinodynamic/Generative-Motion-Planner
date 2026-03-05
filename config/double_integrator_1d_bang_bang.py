@@ -1,83 +1,52 @@
+"""
+Configuration for 1D Double Integrator with Bang-Bang control.
+
+This config contains only training/model setup. System-specific details
+(state limits, preprocessing) are handled by DoubleIntegrator1DSystem.
+"""
 import socket
-from flow_matching.utils.manifolds import FlatTorus, Euclidean, Product
-import numpy as np
+
 from genMoPlan.utils import watch, watch_dict, get_experiments_path
+from genMoPlan.systems import DoubleIntegrator1DSystem
 
-is_arrakis = 'arrakis' in socket.gethostname()
-
+is_arrakis = "arrakis" in socket.gethostname()
 max_batch_size = int(1e6) if is_arrakis else int(266e3)
 
-def read_trajectory(sequence_path):
-    if "plan" in sequence_path:
-        return None
 
-    with open(sequence_path, "r") as f:
-        lines = f.readlines()
+# -------------------------------- System -------------------------------- #
 
-    trajectory = []
+def get_system(config=None, dataset: str = None, **kwargs):
+    """
+    Create a DoubleIntegrator1DSystem from this config.
 
-    for i, line in enumerate(lines):
-        line = line.strip()
-        if line == "":
-            if i < len(lines) - 1:
-                raise ValueError(f"[ config/double_integrator_1d_bang_bang ] Empty line found at {sequence_path} at line {i}")
-            else:
-                break
+    Args:
+        config: Optional config dict override. If None, uses the base config.
+        dataset: Name of the dataset (required for loading achieved bounds).
+        **kwargs: Additional arguments to override system parameters.
 
-        state = line.split(' ')
+    Returns:
+        DoubleIntegrator1DSystem instance.
+    """
+    if config is None:
+        config = base
 
-        state = [s for s in state if s != ""]
+    # Dataset name is required
+    if dataset is None:
+        dataset = "double_integrator_1d_bang_bang"  # Default to config name
 
-        if len(state) < 2:
-            raise ValueError(f"[ config/double_integrator_1d_bang_bang ] Trajectory at {sequence_path} has less than 2 states at line {i}")
-
-        state = state[:2]
-
-        state = [float(s) for s in state]
-
-        trajectory.append(state)
-
-    return np.array(trajectory, dtype=np.float32)
-
-def attractor_classification_fn(final_states: np.ndarray, attractors: dict, attractor_dist_threshold: float, invalid_label: int = -1, verbose: bool = True):
-    if verbose:
-        print("[ config/double_integrator_1d_bang_bang ] Getting attractor labels for trajectories")
-
-    predicted_labels = np.zeros_like(final_states[:, 0])
-    predicted_labels.fill(invalid_label)
-
-    center_distances =  np.linalg.norm(final_states, axis=1)
-
-    predicted_labels[center_distances < attractor_dist_threshold] = attractors[(0, 0)]
-    predicted_labels[np.abs(final_states[:, 0]) >= 0.99] = 0
+    method_config = config.get("flow_matching", config.get("diffusion", {}))
+    return DoubleIntegrator1DSystem(
+        dataset=dataset,
+        stride=kwargs.get("stride", method_config.get("stride", 1)),
+        history_length=kwargs.get("history_length", method_config.get("history_length", 1)),
+        horizon_length=kwargs.get("horizon_length", method_config.get("horizon_length", 31)),
+        variant="bang_bang",
+        **{k: v for k, v in kwargs.items() if k not in ["stride", "history_length", "horizon_length", "dataset"]},
+    )
 
 
-    attractor_states = attractors.keys()
-    attractor_states = np.array(list(attractor_states))
 
-    attractor_labels = attractors.values()
-    attractor_labels = np.array(list(attractor_labels))
-    attractor_labels = attractor_labels.reshape(-1, 1)
-
-    # Compute the distance between the final states and each of the attractors
-    distances = np.linalg.norm(final_states[:, None] - attractor_states, axis=2)
-
-    min_distance = np.min(distances, axis=1)
-    min_distance_idx = np.argmin(distances, axis=1)
-
-    predicted_labels = np.zeros_like(min_distance)
-
-    predicted_labels[min_distance <= attractor_dist_threshold] = attractor_labels[min_distance_idx[min_distance < attractor_dist_threshold]].flatten()
-    predicted_labels[min_distance > attractor_dist_threshold] = invalid_label
-
-    return predicted_labels
-    
-
-
-# ------------------------ base ------------------------#
-
-## automatically make experiment names for planning
-## by labelling folders with these args
+# -------------------------------- Experiment naming -------------------------------- #
 
 exp_args_to_watch = [
     ("history_length", "HILEN"),
@@ -89,86 +58,56 @@ exp_args_to_watch = [
 
 results_args_to_watch = [
     ("n_runs", "NRUN"),
-    ("attractor_dist_threshold", "ADTH"),
-    ("attractor_prob_threshold", "APTH"),
+    ("outcome_prob_threshold", "OPTH"),
 ]
 
 logbase = get_experiments_path()
 
+
+# -------------------------------- Base config -------------------------------- #
+
 base = {
     "inference": {
         "results_name": watch_dict(results_args_to_watch),
-        "attractor_classification_fn": attractor_classification_fn,
-        "attractors": {
-            (-2.1, 0): 0,
-            (2.1, 0): 0,
-            (0, 0): 1,
-        },
-        "invalid_label": -1,
         "n_runs": 100,
         "batch_size": max_batch_size,
-        "attractor_dist_threshold": 0.075,
-        "attractor_prob_threshold": 0.8,
+        "outcome_prob_threshold": 0.8,
         "max_path_length": 200,
         "flow_matching": {
             "n_timesteps": 5,
             "integration_method": "euler",
         },
-        "post_process_fns": [],
-        "post_process_fn_kwargs": {},
         "final_state_directory": "final_states",
         "generated_trajectory_directory": "generated_trajectories",
     },
-
     "base": {
         "action_indices": None,
-        "angle_indices": [],
         "loss_type": "l2",
         "clip_denoised": False,
-        "observation_dim": 2,
         "has_local_query": False,
         "has_global_query": False,
-
-        #-------------------------------- dataset --------------------------------#
+        # -------------------------------- dataset --------------------------------#
         "loader": "datasets.TrajectoryDataset",
-        "read_trajectory_fn": read_trajectory,
-        "trajectory_normalizer": "LimitsNormalizer",
+        "shuffled_indices_fname": "shuffled_indices.txt",
         "plan_normalizer": None,
-        "normalizer_params": {
-            "trajectory": {
-                "mins": [-1.01, -1.01],
-                "maxs": [1.01, 1.01],
-            },
-            "plan": None,
-        },
-        "plan_preprocess_fns": None,    
-        "trajectory_preprocess_fns": [],
-        "preprocess_kwargs": {
-            "trajectory": {
-                "angle_indices": [],
-            },
-            "plan": None,
-        },
+        "plan_preprocess_fns": None,
         "use_history_padding": False,
         "use_horizon_padding": True,
         "use_history_mask": False,
         "use_plan": False,
         "train_dataset_size": None,
         "is_history_conditioned": True,
-
-        #---------------------------- serialization ----------------------------#
+        # ---------------------------- serialization ----------------------------#
         "logbase": logbase,
         "exp_name": watch(exp_args_to_watch),
-
         "dataset_kwargs": {
             "cost_mul_threshold": 1.0,
         },
-
-        #---------------------------- training ----------------------------#
+        # ---------------------------- training ----------------------------#
         "num_epochs": 100,
         "min_num_steps_per_epoch": 1e4,
-        "save_freq": 20, # epochs
-        "log_freq": 1e3, # steps
+        "save_freq": 20,  # epochs
+        "log_freq": 1e3,  # steps
         "batch_size": 64,
         "num_workers": 4,
         "learning_rate": 2e-4,
@@ -180,15 +119,13 @@ base = {
         "save_parallel": False,
         "device": "cuda",
         "seed": 42,
-
-        #---------------------------- validation ----------------------------#
+        # ---------------------------- validation ----------------------------#
         "val_dataset_size": 40,
         "val_batch_size": 2048,
         "val_seed": 42,
         "patience": 10,
         "early_stopping": False,
     },
-
     "diffusion": {
         "method_name": "diffusion",
         "model": "models.temporal.TemporalUnet",
@@ -196,7 +133,6 @@ base = {
         "horizon_length": 31,
         "history_length": 1,
         "stride": 1,
-        
         "model_kwargs": {
             "base_hidden_dim": 32,
             "hidden_dim_mult": (1, 2, 4, 8),
@@ -210,13 +146,10 @@ base = {
         "prefix": "diffusion/",
         "min_delta": 1e-3,
         "validation_kwargs": {},
-        "manifold": None,
     },
-
     "flow_matching": {
         "method_name": "flow_matching",
         "method": "models.generative.FlowMatching",
-        "manifold": None,
         "horizon_length": 31,
         "history_length": 1,
         "stride": 1,
@@ -239,10 +172,11 @@ base = {
             "n_timesteps": 5,
             "integration_method": "euler",
         },
-    }
+    },
 }
 
-# ------------------------ overrides ------------------------#
+
+# -------------------------------- Overrides -------------------------------- #
 
 fewer_steps = {
     "n_diffusion_steps": 5,
@@ -260,61 +194,19 @@ longer_horizon = {
     "horizon_length": 160,
 }
 
-data_lim_100 = {
-    "train_dataset_size": 100,
-}
+data_lim_10 = {"train_dataset_size": 10}
+data_lim_25 = {"train_dataset_size": 25}
+data_lim_50 = {"train_dataset_size": 50}
+data_lim_100 = {"train_dataset_size": 100}
+data_lim_500 = {"train_dataset_size": 500}
+data_lim_1000 = {"train_dataset_size": 1000}
+data_lim_2000 = {"train_dataset_size": 2000}
+data_lim_3500 = {"train_dataset_size": 3500}
+data_lim_5000 = {"train_dataset_size": 5000}
 
-data_lim_500 = {
-    "train_dataset_size": 500,
-}
-
-data_lim_1000 = {
-    "train_dataset_size": 1000
-}
-
-data_lim_2000 = {
-    "train_dataset_size": 2000
-}
-
-data_lim_3500 = {
-    "train_dataset_size": 3500
-}
-
-data_lim_5000 = {
-    "train_dataset_size": 5000
-}
-
-data_lim_10 = {
-    "train_dataset_size": 10
-}
-
-data_lim_25 = {
-    "train_dataset_size": 25
-}
-
-data_lim_50 = {
-    "train_dataset_size": 50
-}
-
+# Manifold-based flow matching (uses geodesic paths)
 manifold = {
-    "manifold": Product(
-        input_dim=2,
-        manifolds=[
-            (FlatTorus(), 1),
-            (Euclidean(), 1),
-        ],
-    ),
-    "trajectory_preprocess_fns": [],
-    "preprocess_kwargs": {},
-    "trajectory_normalizer": "LimitsNormalizer",
-    "plan_normalizer": None,
-    "normalizer_params": {
-        "trajectory": {
-            "mins": [-1.01, -1.01],
-            "maxs": [1.01, 1.01],
-        },
-        "plan": None,
-    },
+    "use_manifold": True,
     "method_kwargs": {
         "path": "GeodesicProbPath",
         "scheduler": "CondOTScheduler",
@@ -328,8 +220,8 @@ adaptive_training = {
     "prefix": "adaptive_training/",
     "num_epochs": 20,
     "min_num_steps_per_epoch": 3e3,
-    "save_freq": 20, # epochs
-    "log_freq": 1e3, # steps
+    "save_freq": 20,  # epochs
+    "log_freq": 1e3,  # steps
     "batch_size": 64,
     "num_workers": 4,
     "learning_rate": 2e-4,
@@ -399,5 +291,5 @@ adaptive_training_test = {
             "n_runs": 2,
         },
         "max_iters": 2,
-    }
+    },
 }

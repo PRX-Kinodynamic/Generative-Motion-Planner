@@ -1,45 +1,69 @@
+"""
+Configuration for Pendulum LQR (50k dataset variant).
+
+This config contains only training/model setup. System-specific details
+(state limits, preprocessing) are handled by PendulumLQRSystem.
+"""
+
 import socket
-from flow_matching.utils.manifolds import FlatTorus, Euclidean, Product
 import numpy as np
-from genMoPlan.utils import watch, handle_angle_wraparound, augment_unwrapped_state_data, watch_dict, process_angles, get_experiments_path, shift_to_zero_center_angles
 
-is_arrakis = 'arrakis' in socket.gethostname()
+from genMoPlan.utils import watch, watch_dict, get_experiments_path, process_angles
+from genMoPlan.systems import PendulumLQRSystem
 
+is_arrakis = "arrakis" in socket.gethostname()
 max_batch_size = int(1e6) if is_arrakis else int(266e3)
 
-def read_trajectory(sequence_path):
-    with open(sequence_path, "r") as f:
-        lines = f.readlines()
 
-    trajectory = []
+# -------------------------------- System -------------------------------- #
 
-    for i, line in enumerate(lines):
-        line = line.strip()
-        if line == "":
-            if i < len(lines) - 1:
-                raise ValueError(f"[ config/pendulum_lqr_50k ] Empty line found at {sequence_path} at line {i}")
-            else:
-                break
 
-        state = line.split(',')
+def get_system(config=None, use_manifold: bool = False, dataset: str = None, **kwargs):
+    """
+    Create a PendulumLQRSystem from this config.
 
-        state = [s for s in state if s != ""]
+    Args:
+        config: Optional config dict override. If None, uses the base config.
+        use_manifold: Whether to use manifold-based flow matching.
+        dataset: Name of the dataset (required for loading achieved bounds).
+        **kwargs: Additional arguments to override system parameters.
 
-        if len(state) < 2:
-            raise ValueError(f"[ config/pendulum_lqr_50k ] Trajectory at {sequence_path} has less than 2 states at line {i}")
+    Returns:
+        PendulumLQRSystem instance.
+    """
+    if config is None:
+        config = base
 
-        state = state[:2]
+    # Dataset name is required
+    if dataset is None:
+        dataset = "pendulum_lqr_50k"  # Default to config name
 
-        state = [float(s) for s in state]
+    method_config = config.get("flow_matching", config.get("diffusion", {}))
 
-        trajectory.append(state)
+    # Detect use_manifold from method config if not explicitly provided
+    if not use_manifold:
+        use_manifold = method_config.get("use_manifold", False)
 
-    return np.array(trajectory, dtype=np.float32)
+    return PendulumLQRSystem(
+        name="pendulum_lqr_50k",
+        dataset=dataset,
+        stride=kwargs.get("stride", method_config.get("stride", 1)),
+        history_length=kwargs.get(
+            "history_length", method_config.get("history_length", 1)
+        ),
+        horizon_length=kwargs.get(
+            "horizon_length", method_config.get("horizon_length", 31)
+        ),
+        use_manifold=kwargs.get("use_manifold", use_manifold),
+        **{
+            k: v
+            for k, v in kwargs.items()
+            if k not in ["stride", "history_length", "horizon_length", "use_manifold", "dataset"]
+        },
+    )
 
-# ------------------------ base ------------------------#
 
-## automatically make experiment names for planning
-## by labelling folders with these args
+# -------------------------------- Experiment naming -------------------------------- #
 
 exp_args_to_watch = [
     ("history_length", "HILEN"),
@@ -51,97 +75,56 @@ exp_args_to_watch = [
 
 results_args_to_watch = [
     ("n_runs", "NRUN"),
-    ("attractor_dist_threshold", "ADTH"),
-    ("attractor_prob_threshold", "APTH"),
+    ("outcome_prob_threshold", "OPTH"),
 ]
 
 logbase = get_experiments_path()
 
+
+# -------------------------------- Base config -------------------------------- #
+
 base = {
     "inference": {
         "results_name": watch_dict(results_args_to_watch),
-        "attractors": {
-            (-2.1, 0): 0,
-            (2.1, 0): 0,
-            (0, 0): 1,
-        },
-        "invalid_label": -1,
         "n_runs": 20,
         "batch_size": max_batch_size,
-        "attractor_dist_threshold": 0.075,
-        "attractor_prob_threshold": 0.6,
-        "max_path_length": 502,
+        "outcome_prob_threshold": 0.9,
         "flow_matching": {
             "n_timesteps": 5,
             "integration_method": "euler",
         },
-        "post_process_fns": [
-            process_angles,
-        ],
-        "post_process_fn_kwargs": {
-            "angle_indices": [0],
-        },
         "final_state_directory": "final_states",
         "generated_trajectory_directory": "generated_trajectories",
-        "manifold_unwrap_fns": [shift_to_zero_center_angles],
-        "manifold_unwrap_kwargs": {
-            "angle_indices": [0],
-        },
         "load_ema": True,
     },
-
     "base": {
         "action_indices": None,
-        "angle_indices": [0],
         "loss_type": "l2",
         "clip_denoised": False,
-        "observation_dim": 2,
         "has_local_query": False,
         "has_global_query": False,
-
-        #-------------------------------- dataset --------------------------------#
+        # -------------------------------- dataset --------------------------------#
         "loader": "datasets.TrajectoryDataset",
-        "read_trajectory_fn": read_trajectory,
-        "trajectory_normalizer": "LimitsNormalizer",
+        "shuffled_indices_fname": "shuffled_indices.txt",
         "plan_normalizer": None,
-        "normalizer_params": {
-            "trajectory": {
-                "mins": [-2*np.pi, -2*np.pi],
-                "maxs": [2*np.pi, 2*np.pi],
-            },
-            "plan": None,
-        },
-        "plan_preprocess_fns": None,    
-        "trajectory_preprocess_fns": [
-            handle_angle_wraparound,
-            augment_unwrapped_state_data,
-        ],
-        "preprocess_kwargs": {
-            "trajectory": {
-                "angle_indices": [0],
-            },
-            "plan": None,
-        },
+        "plan_preprocess_fns": None,
         "use_history_padding": False,
         "use_horizon_padding": True,
         "use_history_mask": False,
         "use_plan": False,
         "train_dataset_size": None,
         "is_history_conditioned": True,
-
-        #---------------------------- serialization ----------------------------#
+        # ---------------------------- serialization ----------------------------#
         "logbase": logbase,
         "exp_name": watch(exp_args_to_watch),
-
         "dataset_kwargs": {
             "cost_mul_threshold": 1.0,
         },
-
-        #---------------------------- training ----------------------------#
+        # ---------------------------- training ----------------------------#
         "num_epochs": 100,
         "min_num_steps_per_epoch": 0,
-        "save_freq": 20, # epochs
-        "log_freq": 1e2, # steps
+        "save_freq": 20,  # epochs
+        "log_freq": 1e2,  # steps
         "batch_size": 1024,
         "num_workers": 4,
         "learning_rate": 1e-4,
@@ -156,18 +139,20 @@ base = {
         "device": "cuda",
         "seed": 42,
         "clip_grad_norm": None,
-
-        #---------------------------- early stopping-------------------------#
+        # ---------------------------- early stopping-------------------------#
         "patience": 10,
         "warmup_epochs": 5,
-        "early_stopping": True,
-
-        #---------------------------- validation ----------------------------#
+        "early_stopping": False,
+        # ---------------------------- validation ----------------------------#
         "val_dataset_size": 100,
         "val_batch_size": max_batch_size,
         "val_seed": 42,
+        # -------------------------------evaluation--------------------------#
+        "perform_final_state_evaluation": True,
+        "eval_freq": 10,  # epochs
+        "eval_batch_size": max_batch_size,
+        "eval_seed": 42,
     },
-
     "diffusion": {
         "method_name": "diffusion",
         "model": "models.temporal.TemporalUnet",
@@ -175,7 +160,6 @@ base = {
         "horizon_length": 31,
         "history_length": 1,
         "stride": 1,
-        
         "model_kwargs": {
             "base_hidden_dim": 32,
             "hidden_dim_mult": (1, 2, 4, 8),
@@ -189,32 +173,10 @@ base = {
         "prefix": "diffusion/",
         "min_delta": 1e-3,
         "validation_kwargs": {},
-        "manifold": None,
     },
-
     "flow_matching": {
         "method_name": "flow_matching",
         "method": "models.generative.FlowMatching",
-        "manifold": Product(
-            input_dim=2,
-            manifolds=[
-                (FlatTorus(), 1),
-                (Euclidean(), 1),
-            ],
-        ),
-        "manifold_unwrap_fns": [shift_to_zero_center_angles],
-        "manifold_unwrap_kwargs": {
-            "angle_indices": [0],
-        },
-        "trajectory_preprocess_fns": [],
-        "preprocess_kwargs": {},
-        "normalizer_params": {
-            "trajectory": {
-                "mins": [None, -2*np.pi],
-                "maxs": [None, 2*np.pi],
-            },
-            "plan": None,
-        },
         "horizon_length": 31,
         "history_length": 1,
         "stride": 1,
@@ -237,24 +199,22 @@ base = {
             "n_timesteps": 5,
             "integration_method": "euler",
         },
-    }
+        # Set to True to use manifold flow matching (system will provide manifold)
+        "use_manifold": True,
+    },
 }
 
-# ------------------------ overrides ------------------------#
 
-# fewer_steps = {
-#     "n_diffusion_steps": 5,
-# }
+# -------------------------------- Overrides -------------------------------- #
+
+fewer_steps = {
+    "n_diffusion_steps": 5,
+}
 
 one_step = {
     "n_diffusion_steps": 1,
 }
 
-fewer_steps = {
-    "validation_kwargs": {
-            "n_timesteps": 2,
-        }
-}        
 long_horizon = {
     "horizon_length": 80,
 }
@@ -308,35 +268,9 @@ data_lim_5000 = {
     "num_epochs": 400,
 }
 
-epochs_25 = {
-    "num_epochs": 25,
-}
-
-
-
+# Non-manifold flow matching override (uses Euclidean space)
 non_manifold = {
-    "manifold": None,
-    "manifold_unwrap_fns": [],
-    "manifold_unwrap_kwargs": {},
-    "trajectory_preprocess_fns": [
-        handle_angle_wraparound,
-        augment_unwrapped_state_data,
-    ],
-    "preprocess_kwargs": {
-        "trajectory": {
-            "angle_indices": [0],
-        },
-        "plan": None,
-    },
-    "trajectory_normalizer": "LimitsNormalizer",
-    "plan_normalizer": None,
-    "normalizer_params": {
-        "trajectory": {
-            "mins": [-2*np.pi, -2*np.pi],
-            "maxs": [2*np.pi, 2*np.pi],
-        },
-        "plan": None,
-    },
+    "use_manifold": False,
     "method_kwargs": {
         "scheduler": "CondOTScheduler",
         "path": "AffineProbPath",
@@ -373,8 +307,8 @@ adaptive_training = {
         "animate_plots": True,
         "uncertainty_kwargs": {
             "inference_normalization_params": {
-                "mins": [-np.pi, -2*np.pi],
-                "maxs": [np.pi, 2*np.pi],
+                "mins": [-np.pi, -2 * np.pi],
+                "maxs": [np.pi, 2 * np.pi],
             },
         },
         "sampler": "adaptive_training.WeightedDiscreteSampler",
@@ -400,6 +334,7 @@ uncertainty_variance = {
         "stop_uncertainty": 0.001,
     }
 }
+
 uncertainty_std = {
     "adaptive_training_kwargs": {
         "uncertainty": "adaptive_training.FinalStateStd",
@@ -428,9 +363,8 @@ dit_test = {
         "local_query_embed_dim": None,
         "use_positional_encoding": True,
     },
-
     "lr_scheduler_warmup_steps": 2000,
-    "learning_rate": 2.5e-4, 
+    "learning_rate": 2.5e-4,
     "lr_scheduler_min_lr": 2e-5,
     "ema_decay": 0.999,
     "useAdamW": True,
@@ -439,7 +373,5 @@ dit_test = {
         "weight_decay": 0.02,
     },
     "clip_grad_norm": 1.0,
-
-    "val_batch_size": int(1e2),
+    "val_batch_size": int(1e4),
 }
-
