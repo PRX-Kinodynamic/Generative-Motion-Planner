@@ -289,11 +289,11 @@ class FlowMatching(GenerativeModel):
         model_extras = {}
 
         if global_query is not None:
-            model_extras["global_query"] = global_query
+            model_extras["global_query"] = global_query.to(device)
         if local_query is not None:
-            model_extras["local_query"] = local_query
+            model_extras["local_query"] = local_query.to(device)
         if mask is not None:
-            model_extras["mask"] = mask
+            model_extras["mask"] = mask.to(device)
 
         sol = self.solver.sample(
             x_init=x_noisy,
