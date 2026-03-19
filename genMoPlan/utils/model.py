@@ -65,11 +65,22 @@ def load_model(
         n_fourier_features=model_args.method_kwargs.get("n_fourier_features", 1)
     )
 
+    is_history_conditioned = getattr(model_args, 'is_history_conditioned', True)
+    if is_history_conditioned:
+        global_query_dim = 0
+        global_query_length = 0
+        prediction_length = model_args.horizon_length + model_args.history_length
+    else:
+        global_query_dim = ml_model_input_dim
+        global_query_length = model_args.history_length
+        prediction_length = model_args.horizon_length
+
     ml_model = ml_model_class(
-        prediction_length=model_args.horizon_length + model_args.history_length,
+        prediction_length=prediction_length,
         input_dim=ml_model_input_dim,
         output_dim=model_args.system.state_dim,
-        query_dim=0 if model_args.is_history_conditioned else model_args.system.state_dim,
+        global_query_dim=global_query_dim,
+        global_query_length=global_query_length,
         verbose=verbose,
         **model_args.model_kwargs,
     ).to(device)
@@ -78,12 +89,13 @@ def load_model(
     method_model: GenerativeModel = method_class(
         model=ml_model,
         system=model_args.system,
-        prediction_length=model_args.horizon_length + model_args.history_length,
+        prediction_length=prediction_length,
         history_length=model_args.history_length,
         clip_denoised=model_args.clip_denoised,
         loss_type=model_args.loss_type,
         has_local_query=model_args.has_local_query,
         has_global_query=model_args.has_global_query,
+        is_history_conditioned=is_history_conditioned,
         verbose=verbose,
         **model_args.method_kwargs,
     ).to(device)
@@ -137,7 +149,7 @@ def get_parameter_groups(model: nn.Module, weight_decay: float):
             if "positional_encoding" in full_name:
                 no_decay.add(full_name); continue
             # LayerScale scalars
-            if full_name.endswith("alpha_attn") or full_name.endswith("alpha_ff"):
+            if full_name.endswith("alpha_attn") or full_name.endswith("alpha_ff") or full_name.endswith("alpha_cross"):
                 no_decay.add(full_name); continue
 
             # PyTorch MultiheadAttention internals

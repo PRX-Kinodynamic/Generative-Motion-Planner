@@ -219,7 +219,6 @@ class TemporalTransformer(TemporalModel):
         time_embed_dim (int, optional): Dimension of time embeddings. Defaults to hidden_dim.
         global_query_embed_dim (int, optional): Dimension of global query embeddings. Defaults to hidden_dim.
         local_query_embed_dim (int, optional): Dimension of local query embeddings. Defaults to hidden_dim.
-        use_positional_encoding (bool, optional): Whether to use learnable positional encoding. Defaults to True.
     """
     
     def __init__(
@@ -239,7 +238,6 @@ class TemporalTransformer(TemporalModel):
         time_embed_dim=None,
         global_query_embed_dim=None,
         local_query_embed_dim=None,
-        use_positional_encoding=True,
         verbose=True,
         **kwargs,
     ):
@@ -251,7 +249,7 @@ class TemporalTransformer(TemporalModel):
             global_query_length,
             local_query_dim,
         )
-        
+
         if feedforward_dim is None:
             feedforward_dim = hidden_dim * 4
         if time_embed_dim is None:
@@ -260,7 +258,7 @@ class TemporalTransformer(TemporalModel):
             global_query_embed_dim = hidden_dim
         if local_query_embed_dim is None:
             local_query_embed_dim = hidden_dim
-        
+
         if verbose:
             print(f"[ models/transformer ] Hidden dim: {hidden_dim}, layers: {num_layers}, heads: {num_heads}")
             print(f"[ models/transformer ] Feedforward dim: {feedforward_dim}, time_embed_dim: {time_embed_dim}")
@@ -268,14 +266,12 @@ class TemporalTransformer(TemporalModel):
                 print(f"[ models/transformer ] Global query conditioning enabled: global_query_dim={global_query_dim}, global_query_embed_dim={global_query_embed_dim}")
             if local_query_dim > 0:
                 print(f"[ models/transformer ] Local query conditioning enabled: local_query_dim={local_query_dim}, local_query_embed_dim={local_query_embed_dim}")
-        
+
         # Input projection
         self.input_projection = nn.Linear(input_dim, hidden_dim)
-        
-        # Positional encoding
-        self.use_positional_encoding = use_positional_encoding
-        if use_positional_encoding:
-            self.positional_encoding = nn.Parameter(torch.randn(1, prediction_length, hidden_dim) * 0.02)
+
+        # Positional encoding (always enabled)
+        self.positional_encoding = nn.Parameter(torch.randn(1, prediction_length, hidden_dim) * 0.02)
         
         # Time embedding
         self.time_mlp = nn.Sequential(
@@ -350,8 +346,7 @@ class TemporalTransformer(TemporalModel):
         x = self.input_projection(x)  # [batch, seq_len, hidden_dim]
         
         # Add positional encoding
-        if self.use_positional_encoding:
-            x = x + self.positional_encoding
+        x = x + self.positional_encoding
         
         # Process time embedding
         t = self.time_mlp(time)  # [batch, time_embed_dim]

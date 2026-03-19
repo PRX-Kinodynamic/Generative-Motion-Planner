@@ -97,6 +97,10 @@ class ManifoldEmbeddingLayer(nn.Module):
     def forward(self, x, global_query, local_query, t, mask=None):
         x = self.manifold.projx(x)
         manifold_features = self.manifold_features_layer(x)
+        # Embed global_query angles the same way as x so it shares the same feature space
+        if global_query is not None:
+            global_query = self.manifold.projx(global_query)
+            global_query = self.manifold_features_layer(global_query)
         if self.use_history_mask:
             v = self.model(manifold_features, global_query, local_query, t, mask=mask)
         else:

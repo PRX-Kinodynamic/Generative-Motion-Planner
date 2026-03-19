@@ -472,8 +472,9 @@ class TrajectoryGenerator:
         all_termination_steps = np.full(total, -1, dtype=np.int32)
         all_termination_outcomes = np.full(total, -1, dtype=np.int32)
 
-        # Process in batches
-        for idx in range(0, total, params.batch_size):
+        # Process in batches with automatic OOM recovery
+        idx = 0
+        while idx < total:
             batch_start = start_states_normalized[idx : idx + params.batch_size]
             actual_batch_size = len(batch_start)
 
@@ -484,16 +485,34 @@ class TrajectoryGenerator:
                     idx : idx + params.batch_size
                 ]
 
-            # Generate this batch
-            batch_result = self._generate_batch(
-                batch_start,
-                params=params,
-                normalizer=normalizer,
-                return_trajectories=return_trajectories,
-                conditional_sample_kwargs=cond_kwargs,
-                verbose=verbose,
-                start_histories_normalized=batch_histories,
-            )
+            try:
+                # Generate this batch
+                batch_result = self._generate_batch(
+                    batch_start,
+                    params=params,
+                    normalizer=normalizer,
+                    return_trajectories=return_trajectories,
+                    conditional_sample_kwargs=cond_kwargs,
+                    verbose=verbose,
+                    start_histories_normalized=batch_histories,
+                )
+            except torch.cuda.OutOfMemoryError:
+                if params.batch_size <= 1:
+                    raise RuntimeError(
+                        "CUDA out of memory even with batch_size=1. "
+                        "The model may be too large for this GPU."
+                    )
+                new_batch_size = max(1, params.batch_size // 2)
+                warnings.warn(
+                    f"[ utils/trajectory_generator ] CUDA OOM with batch_size="
+                    f"{params.batch_size}, reducing to {new_batch_size}"
+                )
+                params.batch_size = new_batch_size
+                # Cache the working batch size for subsequent generate() calls
+                self.batch_size = new_batch_size
+                torch.cuda.empty_cache()
+                gc.collect()
+                continue  # Retry same idx with smaller batch
 
             # Store results
             all_final_states[idx : idx + actual_batch_size] = batch_result.final_states
@@ -507,6 +526,8 @@ class TrajectoryGenerator:
                 )
             if all_trajectories is not None and batch_result.trajectories is not None:
                 all_trajectories.append(batch_result.trajectories)
+
+            idx += actual_batch_size
 
         # Post-process final states
         processed_final_states = self._process_states(
@@ -866,9 +887,13 @@ class TrajectoryGenerator:
             raise ValueError("Could not determine state dimension from model_args.")
 
         # Model sequence length (what the model was trained on)
-        model_sequence_length = int(
-            self.history_length + self.model_args.horizon_length
-        )
+        is_history_conditioned = bool(getattr(self.model_args, 'is_history_conditioned', True))
+        if is_history_conditioned:
+            model_sequence_length = int(
+                self.history_length + self.model_args.horizon_length
+            )
+        else:
+            model_sequence_length = int(self.model_args.horizon_length)
 
         return ResolvedParams(
             history_length=int(self.history_length),
@@ -986,10 +1011,7 @@ class TrajectoryGenerator:
                     - prediction_idx,
                 )
 
-                # Build conditions from history window
-                conditions = {
-                    t: history_window[:, t, :] for t in range(params.history_length)
-                }
+                is_history_conditioned = bool(getattr(self.model_args, 'is_history_conditioned', True))
 
                 # Build sample kwargs with mask handling
                 sample_kwargs = self._build_sample_kwargs(
@@ -1001,18 +1023,30 @@ class TrajectoryGenerator:
                     current_states.device,
                 )
 
-                # Generate one horizon
-                sample = model(
-                    cond=conditions,
-                    verbose=False,
-                    return_chain=False,
-                    **sample_kwargs,
-                )
-
-                # Extract predicted horizon (excluding history)
-                horizon_pred = sample.trajectories[
-                    :, params.history_length : params.history_length + steps_to_add
-                ]
+                if is_history_conditioned:
+                    # History is part of the predicted sequence
+                    conditions = {
+                        t: history_window[:, t, :] for t in range(params.history_length)
+                    }
+                    sample = model(
+                        cond=conditions,
+                        verbose=False,
+                        return_chain=False,
+                        **sample_kwargs,
+                    )
+                    horizon_pred = sample.trajectories[
+                        :, params.history_length : params.history_length + steps_to_add
+                    ]
+                else:
+                    # History passed as global_query, model predicts horizon only
+                    sample = model(
+                        cond={},
+                        global_query=history_window,
+                        verbose=False,
+                        return_chain=False,
+                        **sample_kwargs,
+                    )
+                    horizon_pred = sample.trajectories[:, :steps_to_add]
 
                 # Store predictions in trajectory buffer (model-space indexing)
                 if trajectories is not None:

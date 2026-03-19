@@ -86,6 +86,12 @@ class TrajectoryDataset(torch.utils.data.Dataset):
             validate_padding_strategy(history_padding_strategy, context="history_padding_strategy")
             self.history_padding_strategy = history_padding_strategy
 
+        if self.use_history_mask and not self.is_history_conditioned:
+            raise ValueError(
+                "use_history_mask is not supported with is_history_conditioned=False. "
+                "When history is passed as a global query, masking is not applicable."
+            )
+
         if perform_final_state_evaluation:
             assert is_validation, "perform_final_state_evaluation is only supported for validation dataset"
 

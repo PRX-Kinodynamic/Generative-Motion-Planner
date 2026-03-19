@@ -81,13 +81,25 @@ ml_model_input_dim = system.manifold.compute_feature_dim(
 # # ------------------------------ model & trainer ------------------------------#
 # # -----------------------------------------------------------------------------#
 
+is_history_conditioned = args.is_history_conditioned
+
+if is_history_conditioned:
+    global_query_dim = 0
+    global_query_length = 0
+    prediction_length = system.history_length + system.horizon_length
+else:
+    global_query_dim = ml_model_input_dim  # Manifold-embedded dim
+    global_query_length = system.history_length
+    prediction_length = system.horizon_length  # Horizon only
+
 ml_model_class_loader = utils.ClassLoader(
     args.model,
     savepath=(args.savepath, "ml_model_config.pkl"),
-    prediction_length=system.history_length + system.horizon_length,
+    prediction_length=prediction_length,
     input_dim=ml_model_input_dim,
     output_dim=system.state_dim,
-    query_dim=0 if args.is_history_conditioned else system.state_dim,
+    global_query_dim=global_query_dim,
+    global_query_length=global_query_length,
     **args.model_kwargs,
     device=args.device,
 )
@@ -97,7 +109,7 @@ gen_model_class_loader = utils.ClassLoader(
     savepath=(args.savepath, "gen_model_config.pkl"),
     system=system,  # System provides all system-specific config (state_dim, manifold, etc.)
     # Model-specific params
-    prediction_length=system.history_length + system.horizon_length,
+    prediction_length=prediction_length,
     history_length=system.history_length,
     clip_denoised=args.clip_denoised,
     loss_type=args.loss_type,
@@ -107,6 +119,7 @@ gen_model_class_loader = utils.ClassLoader(
     loss_weight_type=args.loss_weight_type,
     loss_weight_kwargs=args.loss_weight_kwargs,
     use_history_mask=args.use_history_mask,
+    is_history_conditioned=is_history_conditioned,
     **args.method_kwargs,
     device=args.device,
 )

@@ -274,9 +274,7 @@ dit_test = {
         "feedforward_dim": None,
         "dropout": 0.01,
         "time_embed_dim": None,
-        "global_query_embed_dim": None,
         "local_query_embed_dim": None,
-        "use_positional_encoding": True,
     },
     "lr_scheduler_warmup_steps": 1000,  # More warmup for larger model
     "learning_rate": 2e-4,

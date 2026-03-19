@@ -49,6 +49,8 @@ class FlowMatching(GenerativeModel):
                 "Flow matching is not available. Please install flow_matching to use the flow matching method."
             )
 
+        is_history_conditioned = kwargs.pop('is_history_conditioned', True)
+
         super().__init__(
             model=model,
             system=system,
@@ -63,6 +65,7 @@ class FlowMatching(GenerativeModel):
 
         self.n_timesteps = 1
         self.history_length = history_length
+        self.is_history_conditioned = is_history_conditioned
 
         # Validate Riemannian mode configuration
         if self.manifold is not None:
@@ -139,8 +142,8 @@ class FlowMatching(GenerativeModel):
             else self.model(x, global_query, local_query, t)
         )
 
-        # Zero out the vector field for the history portion
-        if self.history_length > 0:
+        # Zero out the vector field for the history portion (only when history is in the sequence)
+        if self.is_history_conditioned and self.history_length > 0:
             vector_field[:, : self.history_length, :] = 0.0
 
         return vector_field

@@ -166,10 +166,12 @@ class GenerativeModel(nn.Module, ABC):
 
     @torch.no_grad()
     def forward(self, cond, global_query=None, local_query=None, verbose=True, return_chain=False, mask=None, **kwargs) -> Sample:
-        if cond[0].ndim == 1:
-            batch_size = 1
+        if cond and 0 in cond:
+            batch_size = 1 if cond[0].ndim == 1 else len(cond[0])
+        elif global_query is not None:
+            batch_size = 1 if global_query.ndim == 2 else global_query.shape[0]
         else:
-            batch_size = len(cond[0])
+            raise ValueError("Cannot infer batch size: both cond and global_query are empty/None")
 
         cond = {t: cond[t].unsqueeze(0) for t in cond}
 

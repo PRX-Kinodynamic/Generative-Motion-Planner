@@ -92,6 +92,16 @@ base = {
         # Inference masking strategy (when use_history_mask=True)
         # Options: "first_step_only" (default), "always", "never"
         "inference_mask_strategy": "first_step_only",
+        # Threshold optimization config
+        "threshold": {
+            "optimize_mode": "joint",
+            "optimize_objective": "loss",
+            "w": 0.9,
+        },
+        # Conformal prediction config
+        "conformal": {
+            "alpha": 0.1,
+        },
     },
     "base": {
         "action_indices": None,
@@ -246,9 +256,7 @@ dit_test = {
         "feedforward_dim": None,
         "dropout": 0.01,
         "time_embed_dim": None,
-        "global_query_embed_dim": None,
         "local_query_embed_dim": None,
-        "use_positional_encoding": True,
     },
     "lr_scheduler_warmup_steps": 500,
     "learning_rate": 2.5e-4,
@@ -402,5 +410,14 @@ no_manifold = {
     "method_kwargs": {
         "path": "AffineProbPath",
         "solver": "ODESolver",
+    },
+}
+
+history_as_query = {
+    "is_history_conditioned": False,
+    "has_global_query": True,
+    "use_history_mask": False,
+    "model_kwargs": {
+        "query_encoder_layers": 1,
     },
 }

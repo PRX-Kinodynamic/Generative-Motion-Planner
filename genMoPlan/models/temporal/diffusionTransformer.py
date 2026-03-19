@@ -7,44 +7,44 @@ from genMoPlan.models.temporal.base import TemporalModel
 from genMoPlan.utils.constants import MASK_ON, MASK_OFF
 
 
-class GlobalQueryProcessor(nn.Module):
-    """Process global query sequences into conditioning embeddings.
+class QueryEncoder(nn.Module):
+    """Encode global query tokens via MLP projection + optional self-attention.
 
-    Follows similar pattern to time processing but handles temporal sequences.
+    For global_query_length=1, only the MLP projection is used (self-attention
+    on a single token is a no-op). For longer sequences, self-attention layers
+    contextualize query tokens before they're used as K/V in cross-attention.
     """
 
-    def __init__(self, global_query_dim, global_query_length, global_query_embed_dim):
+    def __init__(self, global_query_dim, hidden_dim, global_query_length,
+                 num_heads=4, dropout=0.1, num_encoder_layers=1):
         super().__init__()
-        self.global_query_dim = global_query_dim
-        self.global_query_length = global_query_length
-        self.global_query_embed_dim = global_query_embed_dim
-
-        if global_query_length > 1:
-            self.temporal_encoder = nn.Sequential(
-                nn.Conv1d(global_query_dim, global_query_embed_dim, kernel_size=3, padding=1),
-                nn.Mish(),
-                nn.Conv1d(global_query_embed_dim, global_query_embed_dim, kernel_size=3, padding=1),
-                nn.Mish(),
-                nn.AdaptiveAvgPool1d(1),
-                nn.Flatten(),
-            )
-        else:
-            self.temporal_encoder = nn.Linear(global_query_dim, global_query_embed_dim)
-
-        self.query_mlp = nn.Sequential(
-            nn.Linear(global_query_embed_dim, global_query_embed_dim * 4),
+        self.projection = nn.Sequential(
+            nn.Linear(global_query_dim, hidden_dim),
             nn.Mish(),
-            nn.Linear(global_query_embed_dim * 4, global_query_embed_dim),
+            nn.Linear(hidden_dim, hidden_dim),
         )
+        self.positional_encoding = nn.Parameter(
+            torch.randn(1, global_query_length, hidden_dim) * 0.02
+        )
+        # Self-attention encoder only for multi-token queries
+        self.use_self_attention = global_query_length > 1
+        if self.use_self_attention:
+            encoder_layer = nn.TransformerEncoderLayer(
+                d_model=hidden_dim, nhead=num_heads,
+                dim_feedforward=hidden_dim * 4, dropout=dropout,
+                activation='gelu', batch_first=True,
+            )
+            self.encoder = nn.TransformerEncoder(
+                encoder_layer, num_layers=num_encoder_layers,
+            )
 
-    def forward(self, global_query: torch.Tensor) -> torch.Tensor:
-        if self.global_query_length > 1:
-            q = global_query.transpose(1, 2)
-            encoded = self.temporal_encoder(q)
-        else:
-            encoded = self.temporal_encoder(global_query.squeeze(1))
-
-        return self.query_mlp(encoded)
+    def forward(self, global_query):
+        # global_query: [batch, query_len, global_query_dim]
+        q = self.projection(global_query)  # [batch, query_len, hidden_dim]
+        q = q + self.positional_encoding
+        if self.use_self_attention:
+            q = self.encoder(q)
+        return q  # [batch, query_len, hidden_dim]
 
 
 class LocalQueryProcessor(nn.Module):
@@ -69,7 +69,7 @@ class LocalQueryProcessor(nn.Module):
 
 
 class DiffusionTransformerBlock(nn.Module):
-    """Transformer block with AdaLN-Zero style norm modulation and LayerScale."""
+    """Transformer block with AdaLN-Zero modulation, cross-attention, and LayerScale."""
 
     def __init__(
         self,
@@ -77,7 +77,7 @@ class DiffusionTransformerBlock(nn.Module):
         num_heads: int,
         feedforward_dim: int,
         time_embed_dim: int,
-        global_query_embed_dim: int = 0,
+        global_query_dim: int = 0,
         local_query_embed_dim: int = 0,
         dropout: float = 0.1,
         use_windowed_attention: bool = False,
@@ -86,7 +86,7 @@ class DiffusionTransformerBlock(nn.Module):
         super().__init__()
 
         self.hidden_dim = hidden_dim
-        self.use_global_query = global_query_embed_dim > 0
+        self.use_global_query = global_query_dim > 0
         self.use_local_query = local_query_embed_dim > 0
         self.use_windowed_attention = use_windowed_attention
         self.attention_window_size = attention_window_size
@@ -112,19 +112,16 @@ class DiffusionTransformerBlock(nn.Module):
         self.time_gamma_ff = nn.Sequential(nn.Mish(), nn.Linear(time_embed_dim, hidden_dim))
         self.time_beta_ff = nn.Sequential(nn.Mish(), nn.Linear(time_embed_dim, hidden_dim))
 
+        # Cross-attention for global query (Q=horizon tokens, KV=projected query tokens)
         if self.use_global_query:
-            self.global_gamma_attn = nn.Sequential(
-                nn.Mish(), nn.Linear(global_query_embed_dim, hidden_dim)
+            self.norm_cross = nn.LayerNorm(hidden_dim)
+            self.cross_attn = nn.MultiheadAttention(
+                embed_dim=hidden_dim, num_heads=num_heads,
+                dropout=dropout, batch_first=True
             )
-            self.global_beta_attn = nn.Sequential(
-                nn.Mish(), nn.Linear(global_query_embed_dim, hidden_dim)
-            )
-            self.global_gamma_ff = nn.Sequential(
-                nn.Mish(), nn.Linear(global_query_embed_dim, hidden_dim)
-            )
-            self.global_beta_ff = nn.Sequential(
-                nn.Mish(), nn.Linear(global_query_embed_dim, hidden_dim)
-            )
+            self.time_gamma_cross = nn.Sequential(nn.Mish(), nn.Linear(time_embed_dim, hidden_dim))
+            self.time_beta_cross = nn.Sequential(nn.Mish(), nn.Linear(time_embed_dim, hidden_dim))
+            self.alpha_cross = nn.Parameter(torch.tensor(1e-2))
 
         if self.use_local_query:
             self.local_gamma_attn = nn.Linear(local_query_embed_dim, hidden_dim)
@@ -144,8 +141,7 @@ class DiffusionTransformerBlock(nn.Module):
         zero_linears.append(self.time_gamma_attn[-1]); zero_linears.append(self.time_beta_attn[-1])
         zero_linears.append(self.time_gamma_ff[-1]); zero_linears.append(self.time_beta_ff[-1])
         if self.use_global_query:
-            zero_linears.append(self.global_gamma_attn[-1]); zero_linears.append(self.global_beta_attn[-1])
-            zero_linears.append(self.global_gamma_ff[-1]); zero_linears.append(self.global_beta_ff[-1])
+            zero_linears.append(self.time_gamma_cross[-1]); zero_linears.append(self.time_beta_cross[-1])
         if self.use_local_query:
             zero_linears.append(self.local_gamma_attn); zero_linears.append(self.local_beta_attn)
             zero_linears.append(self.local_gamma_ff); zero_linears.append(self.local_beta_ff)
@@ -168,9 +164,7 @@ class DiffusionTransformerBlock(nn.Module):
 
         gamma_attn = self.time_gamma_attn(t).unsqueeze(1).expand(b, s, -1)
         beta_attn = self.time_beta_attn(t).unsqueeze(1).expand(b, s, -1)
-        if self.use_global_query and q_global is not None:
-            gamma_attn = gamma_attn + self.global_gamma_attn(q_global).unsqueeze(1).expand(b, s, -1)
-            beta_attn = beta_attn + self.global_beta_attn(q_global).unsqueeze(1).expand(b, s, -1)
+
         if self.use_local_query and q_local is not None:
             gamma_attn = gamma_attn + self.local_gamma_attn(q_local)
             beta_attn = beta_attn + self.local_beta_attn(q_local)
@@ -189,14 +183,20 @@ class DiffusionTransformerBlock(nn.Module):
         attn_out = self.self_attn(y1, y1, y1, attn_mask=attn_mask)[0]
         x = x + self.alpha_attn * self.dropout(attn_out)
 
+        # Sub-block 1.5: Cross-attention with global query (Q=x, KV=q_global)
+        if self.use_global_query and q_global is not None:
+            y_cross = self.norm_cross(x)
+            gamma_cross = self.time_gamma_cross(t).unsqueeze(1).expand(b, s, -1)
+            beta_cross = self.time_beta_cross(t).unsqueeze(1).expand(b, s, -1)
+            y_cross = y_cross * (1 + gamma_cross) + beta_cross
+            cross_out = self.cross_attn(y_cross, q_global, q_global)[0]
+            x = x + self.alpha_cross * self.dropout(cross_out)
+
         # Sub-block 2: Feedforward with AdaLN-Zero and LayerScale
         y2 = self.norm2(x)
 
         gamma_ff = self.time_gamma_ff(t).unsqueeze(1).expand(b, s, -1)
         beta_ff = self.time_beta_ff(t).unsqueeze(1).expand(b, s, -1)
-        if self.use_global_query and q_global is not None:
-            gamma_ff = gamma_ff + self.global_gamma_ff(q_global).unsqueeze(1).expand(b, s, -1)
-            beta_ff = beta_ff + self.global_beta_ff(q_global).unsqueeze(1).expand(b, s, -1)
         if self.use_local_query and q_local is not None:
             gamma_ff = gamma_ff + self.local_gamma_ff(q_local)
             beta_ff = beta_ff + self.local_beta_ff(q_local)
@@ -226,9 +226,8 @@ class TemporalDiffusionTransformer(TemporalModel):
         feedforward_dim=None,
         dropout=0.1,
         time_embed_dim=None,
-        global_query_embed_dim=None,
         local_query_embed_dim=None,
-        use_positional_encoding=True,
+        query_encoder_layers=1,
         use_windowed_attention=False,
         attention_window_size=0,
         verbose=True,
@@ -247,8 +246,6 @@ class TemporalDiffusionTransformer(TemporalModel):
             feedforward_dim = hidden_dim * 4
         if time_embed_dim is None:
             time_embed_dim = hidden_dim
-        if global_query_embed_dim is None:
-            global_query_embed_dim = hidden_dim
         if local_query_embed_dim is None:
             local_query_embed_dim = hidden_dim
 
@@ -265,7 +262,7 @@ class TemporalDiffusionTransformer(TemporalModel):
                 )
             if global_query_dim > 0:
                 print(
-                    f"[ models/diffusionTransformer ] Global query conditioning enabled: global_query_dim={global_query_dim}, global_query_embed_dim={global_query_embed_dim}"
+                    f"[ models/diffusionTransformer ] Global query cross-attention enabled: global_query_dim={global_query_dim}, query_encoder_layers={query_encoder_layers}"
                 )
             if local_query_dim > 0:
                 print(
@@ -274,11 +271,9 @@ class TemporalDiffusionTransformer(TemporalModel):
 
         self.input_projection = nn.Linear(input_dim, hidden_dim)
         self.mask_token = nn.Parameter(torch.zeros(1))
-        self.use_positional_encoding = use_positional_encoding
-        if use_positional_encoding:
-            self.positional_encoding = nn.Parameter(
-                torch.randn(1, prediction_length, hidden_dim) * 0.02
-            )
+        self.positional_encoding = nn.Parameter(
+            torch.randn(1, prediction_length, hidden_dim) * 0.02
+        )
 
         self.time_mlp = nn.Sequential(
             SinusoidalPosEmb(time_embed_dim),
@@ -292,8 +287,13 @@ class TemporalDiffusionTransformer(TemporalModel):
 
         self.use_global_query = global_query_dim > 0
         if self.use_global_query:
-            self.global_query_processor = GlobalQueryProcessor(
-                global_query_dim, global_query_length, global_query_embed_dim
+            self.query_encoder = QueryEncoder(
+                global_query_dim=global_query_dim,
+                hidden_dim=hidden_dim,
+                global_query_length=global_query_length,
+                num_heads=num_heads,
+                dropout=dropout,
+                num_encoder_layers=query_encoder_layers,
             )
 
         self.use_local_query = local_query_dim > 0
@@ -309,8 +309,8 @@ class TemporalDiffusionTransformer(TemporalModel):
                     num_heads=num_heads,
                     feedforward_dim=feedforward_dim,
                     time_embed_dim=time_embed_dim,
-                    global_query_embed_dim=(
-                        global_query_embed_dim if self.use_global_query else 0
+                    global_query_dim=(
+                        hidden_dim if self.use_global_query else 0
                     ),
                     local_query_embed_dim=(
                         local_query_embed_dim if self.use_local_query else 0
@@ -369,7 +369,7 @@ class TemporalDiffusionTransformer(TemporalModel):
 
         q_global = None
         if self.use_global_query and global_query is not None:
-            q_global = self.global_query_processor(global_query)
+            q_global = self.query_encoder(global_query)  # [batch, query_len, hidden_dim]
 
         q_local = None
         if self.use_local_query and local_query is not None:
@@ -387,8 +387,7 @@ class TemporalDiffusionTransformer(TemporalModel):
             x = mask_unsq * x + (1.0 - mask_unsq) * masked_fill_value
 
         x = self.input_projection(x)
-        if self.use_positional_encoding:
-            x = x + self.positional_encoding
+        x = x + self.positional_encoding
 
         for layer in self.layers:
             x = layer(x, t, q_global, q_local)
