@@ -2,6 +2,8 @@ import argparse
 import importlib
 
 from genMoPlan.eval.classifier import Classifier
+from genMoPlan.eval.threshold import ThresholdConfig
+from genMoPlan.eval.conformal import ConformalConfig
 from genMoPlan.utils import expand_model_paths
 from genMoPlan.utils.model import load_model_args
 
@@ -19,6 +21,10 @@ def evaluate(
     verbose=True,
     outcome_prob_threshold=None,
     use_validation_data=False,
+    optimize_mode=None,
+    conformal_alpha=None,
+    skip_conformal=False,
+    reanalyze=False,
 ):
 
     dataset = None
@@ -78,10 +84,10 @@ def evaluate(
     if outcome_prob_threshold is not None:
         classifier.set_outcome_prob_threshold(outcome_prob_threshold)
 
-    if analyze or continue_gen:
+    if reanalyze or analyze or continue_gen:
         classifier.load_final_states(timestamp=timestamp)
 
-    if not analyze:
+    if not analyze and not reanalyze:
         classifier.generate_trajectories(
             save=True,
         )
@@ -108,6 +114,19 @@ def evaluate(
                     print(f"[ scripts/evaluate ] Skipping plots (state dim > 2)")
             else:
                 raise
+
+    # --- Threshold optimization + conformal prediction pipeline ---
+    if not skip_conformal:
+        classifier.setup_threshold_optimization()
+        classifier.setup_conformal_prediction()
+
+        # Apply CLI overrides
+        if optimize_mode is not None:
+            classifier.threshold_config.optimize_mode = optimize_mode
+        if conformal_alpha is not None:
+            classifier.conformal_config.alpha = conformal_alpha
+
+        classifier.run_full_evaluation_pipeline(save=True)
 
 
 if __name__ == "__main__":
@@ -188,37 +207,55 @@ if __name__ == "__main__":
              "Outputs are saved to results_val/ and final_states_val/ directories.",
     )
 
+    # Threshold optimization arguments
+    parser.add_argument(
+        "--optimize_mode",
+        type=str,
+        choices=["joint", "lambda", "delta"],
+        help="Threshold optimization mode",
+    )
+
+    parser.add_argument(
+        "--conformal_alpha",
+        type=float,
+        help="Conformal prediction coverage level (1 - alpha)",
+    )
+
+    parser.add_argument(
+        "--skip_conformal",
+        action="store_true",
+        help="Skip threshold optimization and conformal prediction pipeline",
+    )
+
+    parser.add_argument(
+        "--reanalyze",
+        action="store_true",
+        help="Re-run Stage B only (load cached MC samples, re-run analysis)",
+    )
+
     args = parser.parse_args()
+
+    eval_kwargs = dict(
+        model_state_name=args.model_state_name,
+        n_runs=args.n_runs,
+        batch_size=args.batch_size,
+        num_batches=args.num_batches,
+        timestamp=args.timestamp,
+        no_img=args.no_img,
+        continue_gen=args.continue_gen,
+        analyze=args.analyze,
+        outcome_prob_threshold=args.outcome_prob_threshold,
+        verbose=not args.silent,
+        use_validation_data=args.use_validation_data,
+        optimize_mode=args.optimize_mode,
+        conformal_alpha=args.conformal_alpha,
+        skip_conformal=args.skip_conformal,
+        reanalyze=args.reanalyze,
+    )
 
     if args.model_paths:
         for model_path in args.model_paths:
             print(f"\n\n[ scripts/evaluate ] Evaluating {model_path}\n\n")
-            evaluate(
-                model_state_name=args.model_state_name,
-                model_path=model_path,
-                n_runs=args.n_runs,
-                batch_size=args.batch_size,
-                num_batches=args.num_batches,
-                timestamp=args.timestamp,
-                no_img=args.no_img,
-                continue_gen=args.continue_gen,
-                analyze=args.analyze,
-                outcome_prob_threshold=args.outcome_prob_threshold,
-                verbose=not args.silent,
-                use_validation_data=args.use_validation_data,
-            )
+            evaluate(model_path=model_path, **eval_kwargs)
     else:
-        evaluate(
-            model_state_name=args.model_state_name,
-            model_path=args.model_path,
-            n_runs=args.n_runs,
-            batch_size=args.batch_size,
-            num_batches=args.num_batches,
-            timestamp=args.timestamp,
-            no_img=args.no_img,
-            continue_gen=args.continue_gen,
-            analyze=args.analyze,
-            outcome_prob_threshold=args.outcome_prob_threshold,
-            verbose=not args.silent,
-            use_validation_data=args.use_validation_data,
-        )
+        evaluate(model_path=args.model_path, **eval_kwargs)

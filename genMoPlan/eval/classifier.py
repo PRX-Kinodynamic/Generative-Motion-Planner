@@ -12,12 +12,21 @@ from genMoPlan.utils import (
     plot_trajectories,
     load_inference_params,
     load_test_set,
+    load_labeled_state_set,
     compute_actual_length,
     get_data_trajectories_path,
 )
 from genMoPlan.utils.trajectory import load_trajectories
 from genMoPlan.systems import BaseSystem, Outcome
 from genMoPlan.utils.trajectory_generator import TrajectoryGenerator
+from genMoPlan.eval.types import PredictionLabel
+from genMoPlan.eval.metrics import (
+    compute_classification_metrics,
+    compute_coverage,
+    make_conservative_labels,
+)
+from genMoPlan.eval.threshold import ThresholdConfig, ThresholdResult, ThresholdOptimizer
+from genMoPlan.eval.conformal import ConformalConfig, ConformalResult, ConformalPredictor
 
 
 class Classifier:
@@ -71,6 +80,15 @@ class Classifier:
     _use_validation_mode: bool = False
     _results_dir_name: str = "results"
     _final_states_dir_name: str = "final_states"
+
+    # Threshold optimization and conformal prediction
+    threshold_config: ThresholdConfig = None
+    conformal_config: ConformalConfig = None
+    threshold_optimizer: ThresholdOptimizer = None
+    conformal_predictor: ConformalPredictor = None
+    threshold_result: ThresholdResult = None
+    conformal_result: ConformalResult = None
+    evaluation_results: dict = None
 
     def __init__(
         self,
@@ -1654,6 +1672,566 @@ class Classifier:
         print(f"  Recall:                   {results['recall']:>8.4f}")
         print(f"  Specificity:              {results['specificity']:>8.4f}")
         print(f"  F1 Score:                 {results['f1_score']:>8.4f}")
+        print(f"{'='*60}\n")
+
+    # ================================================================
+    # Threshold Optimization & Conformal Prediction Pipeline
+    # ================================================================
+
+    def setup_threshold_optimization(self, config: ThresholdConfig = None):
+        """Initialize threshold optimization from config or inference params.
+
+        Args:
+            config: ThresholdConfig instance. If None, builds from
+                inference_params["threshold"] or uses defaults.
+        """
+        if config is not None:
+            self.threshold_config = config
+        else:
+            threshold_dict = self.inference_params.get("threshold", {})
+            self.threshold_config = ThresholdConfig.from_dict(threshold_dict)
+
+        self.threshold_optimizer = ThresholdOptimizer(self.threshold_config)
+
+        if self.verbose:
+            print(f"[ utils/classifier ] Threshold optimization setup:")
+            print(f"  optimize_mode: {self.threshold_config.optimize_mode}")
+            print(f"  optimize_objective: {self.threshold_config.optimize_objective}")
+
+    def setup_conformal_prediction(self, config: ConformalConfig = None):
+        """Initialize conformal prediction from config or inference params.
+
+        Args:
+            config: ConformalConfig instance. If None, builds from
+                inference_params["conformal"] or uses defaults.
+        """
+        if config is not None:
+            self.conformal_config = config
+        else:
+            conformal_dict = self.inference_params.get("conformal", {})
+            self.conformal_config = ConformalConfig.from_dict(conformal_dict)
+
+        self.conformal_predictor = ConformalPredictor(self.conformal_config)
+
+        if self.verbose:
+            print(f"[ utils/classifier ] Conformal prediction setup:")
+            print(f"  alpha: {self.conformal_config.alpha}")
+
+    # --- Stage A: MC Sampling ---
+
+    def generate_outcome_probabilities(
+        self, split: str, save: bool = True
+    ) -> tuple:
+        """Generate MC samples for a data split and compute outcome probabilities.
+
+        1. Load start states + labels for the split
+        2. Generate trajectories (MC sampling) -> final states
+        3. Save final states to final_states/<split>/<timestamp>/
+        4. Compute & cache outcome_probabilities
+
+        Args:
+            split: "val", "cal", or "test"
+            save: Whether to save outcome probabilities to disk.
+
+        Returns:
+            Tuple of (outcome_probs, labels) where:
+            - outcome_probs: (N, 3) array of [p_success, p_failure, p_invalid]
+            - labels: (N,) array of ground truth labels {0, 1}
+        """
+        if split == "test":
+            # Test split uses existing infrastructure
+            if self.outcome_probabilities is None:
+                raise ValueError(
+                    "Test split outcome_probabilities not available. "
+                    "Run compute_outcome_probabilities() first."
+                )
+            probs = self.outcome_probabilities
+            labels = self.expected_labels
+        else:
+            # val or cal split: load from labeled state set file
+            filename = f"{split}_set.txt"
+            start_states, _, labels = load_labeled_state_set(
+                self.system.dataset, self.system.state_dim, filename
+            )
+
+            if self.verbose:
+                print(
+                    f"[ utils/classifier ] Loaded {len(start_states)} {split} "
+                    f"states from {filename}"
+                )
+
+            # Save original state, generate for this split, then restore
+            orig_start = self.start_states
+            orig_final = self.final_states
+            orig_expected = self.expected_labels
+            orig_n_runs = self.n_runs
+            orig_final_dir = self._final_states_dir_name
+
+            try:
+                self.start_states = start_states
+                self.expected_labels = labels
+                self.final_states = None
+                self.n_runs = self._num_expected_runs
+                self._final_states_dir_name = f"final_states/{split}"
+
+                if self._trajectory_generator is not None:
+                    self._trajectory_generator.final_state_directory = (
+                        self._final_states_dir_name
+                    )
+
+                self.generate_trajectories(save=save)
+                self.compute_outcome_labels()
+                self.compute_outcome_probabilities()
+
+                probs = self.outcome_probabilities.copy()
+            finally:
+                # Restore original state
+                self.start_states = orig_start
+                self.final_states = orig_final
+                self.expected_labels = orig_expected
+                self.n_runs = orig_n_runs
+                self._final_states_dir_name = orig_final_dir
+                if self._trajectory_generator is not None:
+                    self._trajectory_generator.final_state_directory = orig_final_dir
+                self.outcome_labels = None
+                self.outcome_probabilities = None
+
+        # Cache probabilities and labels to disk
+        if save and self.model_path is not None:
+            self._save_cached_probs_and_labels(split, probs, labels)
+
+        return probs, labels
+
+    def load_cached_outcome_probabilities(self, split: str) -> tuple:
+        """Load cached (probs, labels) for a split.
+
+        Args:
+            split: "val", "cal", or "test"
+
+        Returns:
+            Tuple of (outcome_probs, labels).
+
+        Raises:
+            FileNotFoundError: If cached data not found.
+        """
+        if self.model_path is None:
+            raise ValueError("model_path required to load cached data")
+
+        # Find latest timestamp directory
+        split_dir = path.join(self.model_path, "final_states", split)
+        if not os.path.exists(split_dir):
+            raise FileNotFoundError(f"No cached data for split '{split}' at {split_dir}")
+
+        timestamps = sorted(
+            [
+                d
+                for d in os.listdir(split_dir)
+                if os.path.isdir(path.join(split_dir, d))
+            ]
+        )
+        if not timestamps:
+            raise FileNotFoundError(f"No timestamp directories in {split_dir}")
+
+        latest = timestamps[-1]
+        ts_dir = path.join(split_dir, latest)
+
+        probs_path = path.join(ts_dir, "outcome_probabilities.txt")
+        labels_path = path.join(ts_dir, "labels.txt")
+
+        if not os.path.exists(probs_path):
+            raise FileNotFoundError(f"Cached probabilities not found: {probs_path}")
+        if not os.path.exists(labels_path):
+            raise FileNotFoundError(f"Cached labels not found: {labels_path}")
+
+        probs = np.loadtxt(probs_path, delimiter=",", dtype=np.float32)
+        if probs.ndim == 1:
+            probs = probs[None, :]
+        labels = np.loadtxt(labels_path, dtype=np.int32)
+
+        if self.verbose:
+            print(
+                f"[ utils/classifier ] Loaded cached {split} data from {ts_dir}: "
+                f"{len(labels)} points"
+            )
+
+        return probs, labels
+
+    def _save_cached_probs_and_labels(
+        self, split: str, probs: np.ndarray, labels: np.ndarray
+    ):
+        """Save outcome probabilities and labels as CSV text files."""
+        if self.model_path is None:
+            return
+
+        # For test split, use existing timestamp dir structure
+        if split == "test" and self.timestamp is not None:
+            ts_dir = path.join(
+                self.model_path, "final_states", self.timestamp
+            )
+        else:
+            # For val/cal, find latest timestamp dir
+            split_dir = path.join(self.model_path, "final_states", split)
+            if os.path.exists(split_dir):
+                timestamps = sorted(
+                    [
+                        d
+                        for d in os.listdir(split_dir)
+                        if os.path.isdir(path.join(split_dir, d))
+                    ]
+                )
+                if timestamps:
+                    ts_dir = path.join(split_dir, timestamps[-1])
+                else:
+                    ts_dir = split_dir
+            else:
+                os.makedirs(split_dir, exist_ok=True)
+                ts_dir = split_dir
+
+        os.makedirs(ts_dir, exist_ok=True)
+
+        probs_path = path.join(ts_dir, "outcome_probabilities.txt")
+        labels_path = path.join(ts_dir, "labels.txt")
+
+        np.savetxt(probs_path, probs, delimiter=",", fmt="%.6f")
+        np.savetxt(labels_path, labels, fmt="%d")
+
+        if self.verbose:
+            print(f"[ utils/classifier ] Cached {split} probs/labels to {ts_dir}")
+
+    # --- Stage B: Analysis (cheap, re-runnable) ---
+
+    def run_threshold_optimization(
+        self,
+        val_probs: np.ndarray = None,
+        val_labels: np.ndarray = None,
+    ) -> ThresholdResult:
+        """Find lambda*, delta* on validation data.
+
+        Args:
+            val_probs: (N, 3) validation outcome probabilities.
+                If None, loads from cache.
+            val_labels: (N,) validation ground truth labels.
+                If None, loads from cache.
+
+        Returns:
+            ThresholdResult with optimized parameters.
+        """
+        if self.threshold_optimizer is None:
+            self.setup_threshold_optimization()
+
+        if val_probs is None or val_labels is None:
+            val_probs, val_labels = self.load_cached_outcome_probabilities("val")
+
+        self.threshold_result = self.threshold_optimizer.optimize(val_probs, val_labels)
+
+        if self.verbose:
+            print(f"[ utils/classifier ] Threshold optimization result:")
+            print(f"  lambda*: {self.threshold_result.lambda_star:.4f}")
+            print(f"  delta*:  {self.threshold_result.delta_star:.4f}")
+            if self.threshold_result.optimization_loss is not None:
+                print(
+                    f"  objective ({self.threshold_result.optimize_objective}): "
+                    f"{self.threshold_result.optimization_loss:.6f}"
+                )
+
+        return self.threshold_result
+
+    def classify_pointwise(
+        self,
+        test_probs: np.ndarray = None,
+        save: bool = True,
+    ) -> np.ndarray:
+        """Point-wise classification on test data using threshold_result.
+
+        Args:
+            test_probs: (N, 3) test outcome probabilities. If None, uses
+                self.outcome_probabilities (test split).
+            save: Whether to save results.
+
+        Returns:
+            (N,) array of PredictionLabel values.
+        """
+        if self.threshold_result is None:
+            raise ValueError("Run run_threshold_optimization() first.")
+
+        if test_probs is None:
+            if self.outcome_probabilities is None:
+                raise ValueError("No test outcome_probabilities available.")
+            test_probs = self.outcome_probabilities
+
+        use_veto = (
+            self.threshold_config.use_p_invalid_veto
+            if self.threshold_config is not None
+            else True
+        )
+
+        labels = ThresholdOptimizer.classify_pointwise(
+            test_probs, self.threshold_result, use_p_invalid_veto=use_veto
+        )
+
+        return labels
+
+    def run_conformal_prediction(
+        self,
+        cal_probs: np.ndarray = None,
+        cal_labels: np.ndarray = None,
+        test_probs: np.ndarray = None,
+        save: bool = True,
+    ) -> dict:
+        """Calibrate q-hat and produce prediction sets for test data.
+
+        Args:
+            cal_probs: (N, 3) calibration outcome probabilities.
+                If None, loads from cache.
+            cal_labels: (N,) calibration ground truth labels.
+                If None, loads from cache.
+            test_probs: (N, 3) test outcome probabilities. If None, uses
+                self.outcome_probabilities.
+            save: Whether to save results.
+
+        Returns:
+            dict with conformal prediction results for all variants.
+        """
+        if self.conformal_predictor is None:
+            self.setup_conformal_prediction()
+
+        if self.threshold_result is None:
+            raise ValueError("Run run_threshold_optimization() first.")
+
+        if cal_probs is None or cal_labels is None:
+            cal_probs, cal_labels = self.load_cached_outcome_probabilities("cal")
+
+        if test_probs is None:
+            if self.outcome_probabilities is None:
+                raise ValueError("No test outcome_probabilities available.")
+            test_probs = self.outcome_probabilities
+
+        # Calibrate
+        self.conformal_result = self.conformal_predictor.calibrate(
+            cal_probs, cal_labels, self.threshold_result
+        )
+
+        if self.verbose:
+            print(f"[ utils/classifier ] Conformal calibration result:")
+            print(f"  q_hat: {self.conformal_result.q_hat:.4f}")
+            if self.conformal_result.q_hat_success is not None:
+                print(f"  q_hat_success: {self.conformal_result.q_hat_success:.4f}")
+            if self.conformal_result.q_hat_failure is not None:
+                print(f"  q_hat_failure: {self.conformal_result.q_hat_failure:.4f}")
+
+        # Predict
+        conformal_predictions = self.conformal_predictor.predict(
+            test_probs, self.threshold_result, self.conformal_result
+        )
+
+        return conformal_predictions
+
+    def run_full_evaluation_pipeline(self, save: bool = True) -> dict:
+        """Orchestrate full evaluation: threshold optimization + conformal prediction.
+
+        Stage A (if not cached): generate MC samples for val, cal, test.
+        Stage B1: threshold optimization -> lambda*, delta* -> pointwise classification.
+        Stage B2: conformal calibration -> q-hat -> prediction sets.
+
+        Result sets:
+        - "pointwise": lambda +/- delta band point predictions
+        - "conformal_single_class": prediction sets with single q-hat
+        - "conformal_multi_class_min/max/skip": per-class q-hat variants
+        - Additional variants: conservative, fixed_threshold, lambda_only
+
+        Args:
+            save: Whether to save results to disk.
+
+        Returns:
+            dict with all evaluation results.
+        """
+        if self.threshold_optimizer is None:
+            self.setup_threshold_optimization()
+        if self.conformal_predictor is None:
+            self.setup_conformal_prediction()
+
+        # Ensure test outcome probabilities are available
+        if self.outcome_probabilities is None:
+            raise ValueError(
+                "Test outcome_probabilities not available. "
+                "Run compute_outcome_probabilities() on test data first."
+            )
+        test_probs = self.outcome_probabilities
+        test_labels = self.expected_labels
+
+        # --- Stage A: Load or generate val/cal probs ---
+        try:
+            val_probs, val_labels = self.load_cached_outcome_probabilities("val")
+        except FileNotFoundError:
+            if self.verbose:
+                print("[ utils/classifier ] Generating val split MC samples...")
+            val_probs, val_labels = self.generate_outcome_probabilities("val", save=save)
+
+        try:
+            cal_probs, cal_labels = self.load_cached_outcome_probabilities("cal")
+        except FileNotFoundError:
+            if self.verbose:
+                print("[ utils/classifier ] Generating cal split MC samples...")
+            cal_probs, cal_labels = self.generate_outcome_probabilities("cal", save=save)
+
+        # --- Stage B1: Threshold optimization + pointwise classification ---
+        self.run_threshold_optimization(val_probs, val_labels)
+
+        pointwise_labels = self.classify_pointwise(test_probs, save=save)
+        pointwise_metrics = compute_classification_metrics(pointwise_labels, test_labels)
+
+        # --- Stage B2: Conformal prediction ---
+        conformal_predictions = self.run_conformal_prediction(
+            cal_probs, cal_labels, test_probs, save=save
+        )
+
+        # --- Build results ---
+        results = {
+            "threshold": self.threshold_result.to_dict(),
+            "conformal": self.conformal_result.to_dict() if self.conformal_result else {},
+            "pointwise": {"metrics": pointwise_metrics},
+        }
+
+        # Add conformal variant results
+        for variant_name, variant_data in conformal_predictions.items():
+            pred_labels = variant_data["labels"]
+            variant_metrics = compute_classification_metrics(pred_labels, test_labels)
+            cov = compute_coverage(variant_data["prediction_sets"], test_labels)
+            results[f"conformal_{variant_name}"] = {
+                "metrics": variant_metrics,
+                "coverage": cov,
+            }
+
+        # --- Additional variants ---
+        additional = {}
+
+        # Pointwise conservative (uncertain/invalid -> FAILURE)
+        conservative_labels = make_conservative_labels(pointwise_labels)
+        additional["pointwise_conservative"] = {
+            "metrics": compute_classification_metrics(conservative_labels, test_labels),
+        }
+
+        # Conformal single-class conservative
+        if "single_class" in conformal_predictions:
+            conf_labels = conformal_predictions["single_class"]["labels"]
+            conf_conservative = make_conservative_labels(conf_labels)
+            additional["conformal_single_class_conservative"] = {
+                "metrics": compute_classification_metrics(
+                    conf_conservative, test_labels
+                ),
+                "coverage": compute_coverage(
+                    conformal_predictions["single_class"]["prediction_sets"],
+                    test_labels,
+                ),
+            }
+
+        # Fixed threshold baseline (lambda=0.5, delta=0.1, no optimization)
+        fixed_tr = ThresholdResult(lambda_star=0.5, delta_star=0.1)
+        fixed_labels = ThresholdOptimizer.classify_pointwise(
+            test_probs, fixed_tr, use_p_invalid_veto=True
+        )
+        additional["fixed_threshold"] = {
+            "metrics": compute_classification_metrics(fixed_labels, test_labels),
+        }
+
+        # Lambda-only (lambda* with delta=0)
+        lambda_only_tr = ThresholdResult(
+            lambda_star=self.threshold_result.lambda_star, delta_star=0.0
+        )
+        lambda_only_labels = ThresholdOptimizer.classify_pointwise(
+            test_probs, lambda_only_tr, use_p_invalid_veto=True
+        )
+        additional["lambda_only"] = {
+            "metrics": compute_classification_metrics(lambda_only_labels, test_labels),
+        }
+
+        results["additional_variants"] = additional
+        results["test_set_size"] = len(test_labels)
+
+        self.evaluation_results = results
+
+        if save:
+            self._save_evaluation_results(results)
+
+        if self.verbose:
+            self._print_evaluation_summary(results)
+
+        return results
+
+    def _save_evaluation_results(self, results: dict):
+        """Save evaluation_results.json to results path."""
+        self._setup_results_path()
+        results_fpath = path.join(self.results_path, "evaluation_results.json")
+
+        # Convert numpy types for JSON serialization
+        def convert(obj):
+            if isinstance(obj, (np.integer,)):
+                return int(obj)
+            if isinstance(obj, (np.floating,)):
+                return float(obj)
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+            if isinstance(obj, dict):
+                return {k: convert(v) for k, v in obj.items()}
+            if isinstance(obj, list):
+                return [convert(v) for v in obj]
+            return obj
+
+        with open(results_fpath, "w") as f:
+            json.dump(convert(results), f, indent=4)
+
+        if self.verbose:
+            print(f"[ utils/classifier ] Evaluation results saved to {results_fpath}")
+
+    def _print_evaluation_summary(self, results: dict):
+        """Print a concise summary of the evaluation pipeline results."""
+        print(f"\n{'='*60}")
+        print(f"Evaluation Pipeline Results")
+        print(f"{'='*60}")
+
+        # Threshold
+        tr = results.get("threshold", {})
+        print(f"\nThreshold: lambda*={tr.get('lambda_star', '?'):.4f}, "
+              f"delta*={tr.get('delta_star', '?'):.4f}")
+        if tr.get("optimize_mode"):
+            print(f"  Mode: {tr['optimize_mode']}, "
+                  f"Objective: {tr.get('optimize_objective', '?')}")
+
+        # Conformal
+        cr = results.get("conformal", {})
+        if cr.get("q_hat") is not None:
+            print(f"\nConformal: q_hat={cr['q_hat']:.4f}, alpha={cr.get('alpha', '?')}")
+            if cr.get("q_hat_success") is not None:
+                print(f"  q_hat_success={cr['q_hat_success']:.4f}, "
+                      f"q_hat_failure={cr['q_hat_failure']:.4f}")
+
+        # Result set summaries
+        def _print_result_set(name, data):
+            metrics = data.get("metrics", {})
+            acc = metrics.get("accuracy", float("nan"))
+            f1 = metrics.get("f1_score", float("nan"))
+            sep = metrics.get("separatrix_rate", float("nan"))
+            line = f"  {name:35s} acc={acc:.4f}  f1={f1:.4f}  sep={sep:.4f}"
+            cov = data.get("coverage")
+            if cov is not None:
+                line += f"  cov={cov:.4f}"
+            print(line)
+
+        print(f"\nResult sets:")
+        if "pointwise" in results:
+            _print_result_set("pointwise", results["pointwise"])
+        for key in ["conformal_single_class", "conformal_multi_class_min",
+                     "conformal_multi_class_max", "conformal_multi_class_skip"]:
+            if key in results:
+                _print_result_set(key, results[key])
+
+        additional = results.get("additional_variants", {})
+        if additional:
+            print(f"\nAdditional variants:")
+            for name, data in additional.items():
+                _print_result_set(name, data)
+
+        print(f"\nTest set size: {results.get('test_set_size', '?')}")
         print(f"{'='*60}\n")
 
 

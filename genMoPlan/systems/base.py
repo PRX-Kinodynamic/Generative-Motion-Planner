@@ -95,6 +95,7 @@ class BaseSystem:
         # By default, only the INVALID outcome is treated as belonging to the
         # invalid class; concrete systems can override this in their metadata.
         metadata.setdefault("invalid_outcomes", ["INVALID"])
+        metadata.setdefault("invalid_endpoint_label", -2)
 
         self.name = name
         self.state_dim = int(state_dim)

@@ -83,12 +83,13 @@ def get_non_angular_indices(angle_indices: List[int], dimensions: int) -> List[i
     return [i for i in range(dimensions) if i not in angle_indices]
 
 
-def load_test_set(
+def load_labeled_state_set(
     dataset: str,
     state_dim: int,
+    filename: str = "test_set.txt",
 ) -> tuple:
     """
-    Load test_set.txt containing start states, ground truth final states, and labels.
+    Load a labeled state set file (test_set.txt, cal_set.txt, etc.).
 
     The file format is CSV with columns:
     - start_state (state_dim columns)
@@ -98,6 +99,7 @@ def load_test_set(
     Args:
         dataset: Name of the dataset
         state_dim: Dimension of the state space
+        filename: Name of the file to load (default: "test_set.txt")
 
     Returns:
         Tuple of (start_states, ground_truth_final_states, labels)
@@ -106,23 +108,23 @@ def load_test_set(
         - labels: np.ndarray of shape (N,) with int32 dtype
 
     Raises:
-        FileNotFoundError: If test_set.txt is not found
+        FileNotFoundError: If the file is not found
         ValueError: If column count doesn't match expected (2 * state_dim + 1)
     """
-    test_set_fpath = path.join(get_data_trajectories_path(), dataset, "test_set.txt")
+    fpath = path.join(get_data_trajectories_path(), dataset, filename)
 
-    if not os.path.exists(test_set_fpath):
-        raise FileNotFoundError(f"File {test_set_fpath} not found")
+    if not os.path.exists(fpath):
+        raise FileNotFoundError(f"File {fpath} not found")
 
     # Use efficient np.loadtxt for loading
-    data = np.loadtxt(test_set_fpath, delimiter=",", dtype=np.float32)
+    data = np.loadtxt(fpath, delimiter=",", dtype=np.float32)
     if data.ndim == 1:
         data = data[None, :]
 
     expected_cols = 2 * state_dim + 1
     if data.shape[1] != expected_cols:
         raise ValueError(
-            f"test_set.txt has {data.shape[1]} columns, expected {expected_cols} "
+            f"{filename} has {data.shape[1]} columns, expected {expected_cols} "
             f"(2 * state_dim + 1 = 2 * {state_dim} + 1)"
         )
 
@@ -131,3 +133,8 @@ def load_test_set(
     labels = data[:, -1].astype(np.int32)
 
     return start_states, ground_truth_final_states, labels
+
+
+def load_test_set(dataset: str, state_dim: int) -> tuple:
+    """Load test_set.txt. Backward-compatible wrapper for load_labeled_state_set."""
+    return load_labeled_state_set(dataset, state_dim, "test_set.txt")
