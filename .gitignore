@@ -9,4 +9,4 @@ experiments/
 *.pyo
 *.pyd
 *.pyw
-*.pyz
+*.pyzslurm_logs/
