@@ -21,7 +21,6 @@ from genMoPlan.utils.data_processing import (
     compute_num_inference_steps,
     compute_max_path_length,
     compute_total_predictions,
-    warn_stride_horizon_length,
 )
 from genMoPlan.utils.generation_result import GenerationResult, TerminationResult
 from genMoPlan.utils.model import load_model
@@ -284,10 +283,6 @@ class TrajectoryGenerator:
         self.horizon_length = int(self.system.horizon_length)
         self.stride = int(self.system.stride)
         self.max_path_length = int(self.system.max_path_length)
-
-        warn_stride_horizon_length(
-            self.horizon_length, self.stride, context="TrajectoryGenerator (system)"
-        )
 
         if self.verbose:
             print(
@@ -1170,11 +1165,16 @@ class TrajectoryGenerator:
         params: ResolvedParams,
     ) -> Optional[torch.Tensor]:
         """Initialize mask for first step if history masking is used."""
+        is_history_conditioned = bool(
+            getattr(self.model_args, "is_history_conditioned", True)
+        )
         use_history_padding = bool(
             getattr(self.model_args, "use_history_padding", True)
         )
 
-        if use_history_padding:
+        # No mask needed when history isn't part of the predicted sequence
+        # (history_as_query passes history via cross-attention, not in-sequence)
+        if use_history_padding or not is_history_conditioned:
             return None
 
         batch_size = current_states.shape[0]

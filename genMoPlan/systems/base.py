@@ -8,7 +8,11 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 import numpy as np
 
 from genMoPlan.datasets.normalization import Normalizer
-from genMoPlan.utils.data_processing import compute_actual_length
+from genMoPlan.utils.data_processing import (
+    compute_actual_length,
+    compute_max_path_length,
+    compute_num_inference_steps,
+)
 
 
 class Outcome(IntEnum):
@@ -45,6 +49,7 @@ class BaseSystem:
     DEFAULT_MAX_PATH_LENGTH: int = 1000
     DEFAULT_ANGLE_INDICES: List[int] = []
     DEFAULT_STATE_NAMES: List[str] = []
+    DEFAULT_LOSS_DIM_NAMES: List[str] = []  # Names for manifold.dist() output dims; defaults to state_names
 
     def __init__(
         self,
@@ -61,6 +66,7 @@ class BaseSystem:
         mins: Optional[List[float]] = None,
         maxs: Optional[List[float]] = None,
         state_names: Optional[List[str]] = None,
+        loss_dim_names: Optional[List[str]] = None,
         angle_indices: Optional[List[int]] = None,
         # Manifold - REQUIRED: true manifold always exists
         manifold: Optional[Any] = None,
@@ -112,6 +118,17 @@ class BaseSystem:
         self.angle_indices = (
             angle_indices if angle_indices is not None else self.DEFAULT_ANGLE_INDICES
         )
+
+        # Names for manifold.dist() output dimensions.
+        # Defaults to state_names (correct when loss_dim == state_dim).
+        # Systems where manifold.dist() collapses dims (e.g., SO3, Sphere)
+        # must provide explicit names.
+        if loss_dim_names is not None:
+            self.loss_dim_names = loss_dim_names
+        elif self.DEFAULT_LOSS_DIM_NAMES:
+            self.loss_dim_names = self.DEFAULT_LOSS_DIM_NAMES.copy()
+        else:
+            self.loss_dim_names = list(self.state_names)
 
         # Load achieved bounds from dataset_description.json (REQUIRED)
         if not self.state_names:
@@ -365,22 +382,18 @@ class BaseSystem:
         strd = int(stride or self.stride)
         max_len = int(max_path_length or self.max_path_length)
 
-        actual_hist = compute_actual_length(hist, strd)
-        actual_horz = compute_actual_length(horz, strd)
-        actual_horz = max(actual_horz, 1)
-        remaining = max(0, max_len - actual_hist)
-        steps = int(np.ceil(remaining / actual_horz)) or 1
+        steps = compute_num_inference_steps(max_len, hist, horz, strd)
         self._cached_num_inference_steps = steps
         return steps
 
     def set_num_inference_steps_override(self, num_steps: int):
         """Force num_inference_steps and adjust max_path_length accordingly."""
         self._num_inference_steps_override = int(num_steps)
-        actual_hist = compute_actual_length(self.history_length, self.stride)
-        actual_horz = compute_actual_length(self.horizon_length, self.stride)
-        actual_horz = max(actual_horz, 1)
-        self.max_path_length = (
-            actual_hist + self._num_inference_steps_override * actual_horz
+        self.max_path_length = compute_max_path_length(
+            self._num_inference_steps_override,
+            self.history_length,
+            self.horizon_length,
+            self.stride,
         )
         self._cached_num_inference_steps = self._num_inference_steps_override
 
@@ -475,6 +488,7 @@ class BaseSystem:
             "mins": self.mins,
             "maxs": self.maxs,
             "state_names": self.state_names,
+            "loss_dim_names": self.loss_dim_names,
             "angle_indices": self.angle_indices,
             "valid_outcomes": [o.name for o in self.valid_outcomes],
             "metadata": self.metadata,
@@ -506,6 +520,7 @@ class BaseSystem:
             mins=data.get("mins"),
             maxs=data.get("maxs"),
             state_names=data.get("state_names"),
+            loss_dim_names=data.get("loss_dim_names"),
             angle_indices=data.get("angle_indices"),
             valid_outcomes=valid_outcomes,
             normalizer=normalizer,

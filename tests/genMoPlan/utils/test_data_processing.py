@@ -63,8 +63,8 @@ class TestComputeNumInferenceSteps:
     def test_with_stride_2(self):
         """Test with stride=2."""
         # history_length=4, stride=2 -> actual_history = 1 + 3*2 = 7
-        # horizon_length=8, stride=2 -> actual_horizon = 1 + 7*2 = 15
-        # max_path=50 -> remaining = 50 - 7 = 43, steps = ceil(43/15) = 3
+        # horizon_length=8, stride=2 -> advance = 8*2 = 16
+        # max_path=50 -> remaining = 50 - 7 = 43, steps = ceil(43/16) = 3
         assert compute_num_inference_steps(50, 4, 8, 2) == 3
 
     def test_minimum_one_step(self):
@@ -92,9 +92,9 @@ class TestComputeMaxPathLength:
     def test_with_stride_2(self):
         """Test with stride=2."""
         # history_length=4, stride=2 -> actual_history = 7
-        # horizon_length=8, stride=2 -> actual_horizon = 15
-        # max_path = 7 + 3*15 = 52
-        assert compute_max_path_length(3, 4, 8, 2) == 52
+        # horizon_length=8, stride=2 -> advance = 8*2 = 16
+        # max_path = 7 + 3*16 = 55
+        assert compute_max_path_length(3, 4, 8, 2) == 55
 
     def test_single_step(self):
         """Test with single inference step."""
@@ -141,3 +141,36 @@ class TestRoundTrip:
                 f"Failed for n_steps={n_steps}, history={history}, "
                 f"horizon={horizon}, stride={stride}: got {recovered_steps}"
             )
+
+
+class TestOneHorizonVariations:
+    """Verify that one_horizon config variations produce exactly 1 inference step.
+
+    These configs set horizon_length * stride >= max_path_length - actual_history,
+    so the model covers the entire trajectory in a single step.
+    """
+
+    @pytest.mark.parametrize("max_path_length,horizon_length,stride", [
+        # Cartpole (mpl=613, history=1, stride varies)
+        (613, 10, 62),
+        (613, 20, 31),
+        (613, 31, 20),
+        # Quad2D (mpl=709)
+        (709, 10, 71),
+        (709, 20, 36),
+        (709, 31, 23),
+        # Quad3D (mpl=636)
+        (636, 10, 64),
+        (636, 20, 32),
+        (636, 31, 21),
+    ])
+    def test_single_inference_step(self, max_path_length, horizon_length, stride):
+        """One-horizon configs should need exactly 1 inference step."""
+        history_length = 1
+        n_steps = compute_num_inference_steps(
+            max_path_length, history_length, horizon_length, stride
+        )
+        assert n_steps == 1, (
+            f"Expected 1 step for mpl={max_path_length}, H={horizon_length}, "
+            f"S={stride}, got {n_steps}"
+        )

@@ -34,6 +34,12 @@ class HumanoidGetUpSystem(BaseSystem):
     DEFAULT_MAX_PATH_LENGTH = 745
     DEFAULT_ANGLE_INDICES: List[int] = []  # Humanoid uses sphere manifold, not angles
     DEFAULT_STATE_NAMES: List[str] = []  # Too many to list
+    # manifold.dist() collapses sphere (3D) to single geodesic distance: 34 + 1 + 30 = 65
+    DEFAULT_LOSS_DIM_NAMES: List[str] = (
+        [f"dim_{i}" for i in range(34)]
+        + ["orientation"]
+        + [f"dim_{i}" for i in range(35, 65)]
+    )
 
     # State limits (from humanoid dataset)
     DEFAULT_MINS = [

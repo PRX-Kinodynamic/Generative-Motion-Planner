@@ -10,7 +10,7 @@ from genMoPlan.utils.constants import (
     validate_padding_strategy,
 )
 from genMoPlan.utils.trajectory import load_trajectories
-from genMoPlan.utils.data_processing import compute_actual_length, warn_stride_horizon_length
+from genMoPlan.utils.data_processing import compute_actual_length
 
 if TYPE_CHECKING:
     from genMoPlan.systems import BaseSystem
@@ -67,11 +67,6 @@ class TrajectoryDataset(torch.utils.data.Dataset):
         self.history_padding_anywhere = history_padding_anywhere
         self.history_padding_k = history_padding_k
         self.is_history_conditioned = is_history_conditioned
-
-        # Warn if stride has no effect on horizon
-        warn_stride_horizon_length(
-            self.system.horizon_length, self.system.stride, context="TrajectoryDataset"
-        )
 
         # Set padding strategy defaults based on mode
         if history_mask_padding_value is None:

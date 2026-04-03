@@ -48,15 +48,14 @@ def compute_num_inference_steps(
     Examples:
         >>> compute_num_inference_steps(100, 4, 8, 1)  # (100 - 4) / 8 = 12
         12
-        >>> compute_num_inference_steps(50, 4, 8, 2)   # actual_hist=7, actual_horz=15
+        >>> compute_num_inference_steps(50, 4, 8, 2)   # actual_hist=7, advance=16
         3
     """
     actual_history = compute_actual_length(history_length, stride)
-    actual_horizon = compute_actual_length(horizon_length, stride)
-    actual_horizon = max(actual_horizon, 1)  # Ensure at least 1 step per iteration
+    advance_per_step = max(horizon_length * stride, 1)
 
     remaining = max(0, max_path_length - actual_history)
-    num_steps = int(np.ceil(remaining / actual_horizon))
+    num_steps = int(np.ceil(remaining / advance_per_step))
 
     # Ensure at least 1 step
     return max(num_steps, 1)
@@ -85,13 +84,13 @@ def compute_max_path_length(
     Examples:
         >>> compute_max_path_length(12, 4, 8, 1)  # 4 + 12*8 = 100
         100
-        >>> compute_max_path_length(3, 4, 8, 2)   # actual_hist=7, actual_horz=15 -> 7 + 3*15 = 52
-        52
+        >>> compute_max_path_length(3, 4, 8, 2)   # actual_hist=7, advance=16 -> 7 + 3*16 = 55
+        55
     """
     actual_history = compute_actual_length(history_length, stride)
-    actual_horizon = compute_actual_length(horizon_length, stride)
+    advance_per_step = horizon_length * stride
 
-    return actual_history + num_inference_steps * actual_horizon
+    return actual_history + num_inference_steps * advance_per_step
 
 
 def compute_total_predictions(
@@ -119,27 +118,3 @@ def compute_total_predictions(
         78  # 3 (history) + 15 * 5 (predictions)
     """
     return history_length + num_inference_steps * horizon_length
-
-
-def warn_stride_horizon_length(horizon_length, stride, context=""):
-    """
-    Warn if horizon_length=1 with stride>1, since stride has no effect in this case.
-
-    When horizon_length=1, actual_horizon = 1 + (1-1)*stride = 1 regardless of stride.
-    This means each inference step only advances by 1 timestep, which may be unexpected.
-
-    Args:
-        horizon_length: Number of horizon points
-        stride: Temporal spacing between sampled points
-        context: Optional string describing where this warning originates (e.g., "TrajectoryDataset")
-    """
-    import warnings
-    if horizon_length == 1 and stride > 1:
-        ctx = f" in {context}" if context else ""
-        warnings.warn(
-            f"horizon_length=1 with stride={stride}{ctx}: stride has no effect on horizon "
-            f"when horizon_length=1. Each inference step will advance by only 1 timestep. "
-            f"Consider increasing horizon_length if you want stride to affect prediction steps.",
-            UserWarning,
-            stacklevel=3,
-        )

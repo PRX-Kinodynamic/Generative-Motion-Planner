@@ -72,6 +72,11 @@ class Quadrotor3DLQRSystem(BaseSystem):
         "x", "y", "z", "qw", "qx", "qy", "qz",
         "x_dot", "y_dot", "z_dot", "p", "q", "r",
     ]
+    # manifold.dist() collapses quaternion (4D) to single geodesic distance
+    DEFAULT_LOSS_DIM_NAMES = [
+        "x", "y", "z", "orientation",
+        "x_dot", "y_dot", "z_dot", "roll_dot", "pitch_dot", "yaw_dot",
+    ]
 
     # Quaternion indices in state vector
     QUATERNION_INDICES = [3, 4, 5, 6]
