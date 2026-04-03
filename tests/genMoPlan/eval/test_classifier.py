@@ -21,6 +21,7 @@ class MockSystem:
     def __init__(self, state_dim=2):
         self.state_dim = state_dim
         self.state_names = ["x", "y"]
+        self.dataset = "test_dataset"
         self.metadata = {
             "invalid_label": -1,
             "invalid_labels": [-1],
@@ -235,6 +236,230 @@ class TestClassifierIntegration:
         labels = classifier.compute_outcome_labels()
 
         assert labels.shape == (5, 2)
+
+
+class TestGenerateOutcomeProbabilitiesSplitIsolation:
+    """Tests that val/cal split generation does not overwrite test split data.
+
+    Regression test for a bug where generate_outcome_probabilities() for
+    val/cal splits would overwrite test split final_states files because
+    the TrajectoryGenerator's internal state (timestamp, gen_traj_path)
+    leaked between splits.
+    """
+
+    @patch('genMoPlan.eval.classifier.load_inference_params')
+    @patch('genMoPlan.eval.classifier.TrajectoryGenerator')
+    @patch('genMoPlan.eval.classifier.load_labeled_state_set')
+    def test_cal_split_does_not_modify_test_classifier_state(
+        self, mock_load_labeled, mock_traj_gen_cls, mock_load_params
+    ):
+        """Val/cal split generation must not mutate the original classifier."""
+        from genMoPlan.eval.classifier import Classifier
+
+        mock_load_params.return_value = {
+            "max_path_length": 50,
+            "batch_size": 10,
+            "n_runs": 3,
+            "final_state_directory": "final_states/eval",
+            "results_name": "test_results",
+        }
+
+        # Mock TrajectoryGenerator class (called during Classifier.__init__)
+        mock_tg_instance = MagicMock()
+        mock_tg_instance.model_args = Mock()
+        mock_tg_instance.method_name = "flow_matching"
+        mock_tg_instance.horizon_length = 3
+        mock_tg_instance.history_length = 2
+        mock_tg_instance.stride = 1
+        mock_tg_instance.conditional_sample_kwargs = {}
+        mock_tg_instance._timestamp = "2026-01-01_00-00-00"
+        mock_tg_instance.gen_traj_path = "/test/final_states/eval/2026-01-01_00-00-00"
+        mock_tg_instance.final_state_directory = "final_states/eval"
+        mock_tg_instance.model = Mock()
+        mock_traj_gen_cls.return_value = mock_tg_instance
+
+        system = MockSystem()
+
+        classifier = Classifier(
+            dataset="test_dataset",
+            model_path="/tmp/test_model",
+            model_state_name="best.pt",
+            system=system,
+            verbose=False,
+        )
+
+        # Simulate test split already computed
+        n_test = 100
+        n_runs = 3
+        classifier.start_states = np.random.randn(n_test, 2).astype(np.float32)
+        classifier.expected_labels = np.random.randint(0, 2, n_test).astype(np.int32)
+        classifier.final_states = np.random.randn(n_test, n_runs, 2).astype(np.float32)
+        classifier.outcome_probabilities = np.random.rand(n_test, 2).astype(np.float32)
+
+        # Save references to original state
+        orig_start_states = classifier.start_states
+        orig_final_states = classifier.final_states
+        orig_expected_labels = classifier.expected_labels
+        orig_tg = classifier._trajectory_generator
+        orig_timestamp = orig_tg._timestamp
+        orig_gen_traj_path = orig_tg.gen_traj_path
+        orig_final_dir = orig_tg.final_state_directory
+
+        # Mock cal_set.txt loading
+        n_cal = 10
+        cal_starts = np.random.randn(n_cal, 2).astype(np.float32)
+        cal_labels = np.random.randint(0, 2, n_cal).astype(np.int32)
+        mock_load_labeled.return_value = (cal_starts, np.zeros_like(cal_starts), cal_labels)
+
+        # Mock the split TG that will be created inside generate_outcome_probabilities
+        mock_split_tg = MagicMock()
+        mock_split_tg.model_args = mock_tg_instance.model_args
+        mock_split_tg.method_name = "flow_matching"
+        mock_split_tg.horizon_length = 3
+        mock_split_tg.history_length = 2
+        mock_split_tg.stride = 1
+        mock_split_tg.conditional_sample_kwargs = {}
+        mock_split_tg.model = mock_tg_instance.model
+
+        # Patch TrajectoryGenerator constructor for the split TG creation
+        mock_traj_gen_cls.reset_mock()
+        mock_traj_gen_cls.return_value = mock_split_tg
+
+        # Patch generate_trajectories to simulate trajectory generation
+        # on the split classifier created inside generate_outcome_probabilities
+        def fake_generate(self_inner, save=False):
+            """Sets final_states on whatever classifier calls this."""
+            pass
+
+        with patch(
+            'genMoPlan.eval.classifier.Classifier.generate_trajectories',
+            fake_generate,
+        ):
+            # Also need to set final_states on the split classifier.
+            # We can do this by patching compute_outcome_labels to set up state.
+            orig_compute_labels = Classifier.compute_outcome_labels
+            orig_compute_probs = Classifier.compute_outcome_probabilities
+
+            def fake_compute_labels(self_inner):
+                # Set final_states if not set (from fake_generate)
+                if self_inner.final_states is None:
+                    self_inner.final_states = np.random.randn(
+                        len(self_inner.start_states), n_runs, 2
+                    ).astype(np.float32)
+                return orig_compute_labels(self_inner)
+
+            def fake_compute_probs(self_inner):
+                if self_inner.outcome_labels is None:
+                    self_inner.compute_outcome_labels()
+                n_pts = self_inner.outcome_labels.shape[0]
+                self_inner.outcome_probabilities = np.random.rand(n_pts, 2).astype(np.float32)
+                return self_inner.outcome_probabilities
+
+            with patch.object(Classifier, 'compute_outcome_labels', fake_compute_labels):
+                with patch.object(Classifier, 'compute_outcome_probabilities', fake_compute_probs):
+                    classifier.generate_outcome_probabilities("cal", save=False)
+
+        # CRITICAL: Original classifier state must be unchanged
+        assert classifier.start_states is orig_start_states, \
+            "start_states was modified by cal split generation"
+        assert classifier.final_states is orig_final_states, \
+            "final_states was modified by cal split generation"
+        assert classifier.expected_labels is orig_expected_labels, \
+            "expected_labels was modified by cal split generation"
+        assert classifier._trajectory_generator is orig_tg, \
+            "trajectory_generator was replaced by cal split generation"
+        assert orig_tg._timestamp == orig_timestamp, \
+            "trajectory_generator._timestamp was modified by cal split generation"
+        assert orig_tg.gen_traj_path == orig_gen_traj_path, \
+            "trajectory_generator.gen_traj_path was modified by cal split generation"
+        assert orig_tg.final_state_directory == orig_final_dir, \
+            "trajectory_generator.final_state_directory was modified by cal split generation"
+
+    @patch('genMoPlan.eval.classifier.load_inference_params')
+    @patch('genMoPlan.eval.classifier.TrajectoryGenerator')
+    @patch('genMoPlan.eval.classifier.load_labeled_state_set')
+    def test_split_tg_gets_correct_directory(
+        self, mock_load_labeled, mock_traj_gen_cls, mock_load_params
+    ):
+        """Split TrajectoryGenerator must be created with final_state_directory
+        pointing to the split-specific directory (final_states/cal, final_states/val)."""
+        from genMoPlan.eval.classifier import Classifier
+
+        mock_load_params.return_value = {
+            "max_path_length": 50,
+            "batch_size": 10,
+            "n_runs": 3,
+            "final_state_directory": "final_states/eval",
+            "results_name": "test_results",
+        }
+
+        mock_tg_instance = MagicMock()
+        mock_tg_instance.model_args = Mock()
+        mock_tg_instance.method_name = "flow_matching"
+        mock_tg_instance.horizon_length = 3
+        mock_tg_instance.history_length = 2
+        mock_tg_instance.stride = 1
+        mock_tg_instance.conditional_sample_kwargs = {}
+        mock_tg_instance._timestamp = "2026-01-01_00-00-00"
+        mock_tg_instance.gen_traj_path = "/test/final_states/eval/ts"
+        mock_tg_instance.final_state_directory = "final_states/eval"
+        mock_tg_instance.model = Mock()
+        mock_traj_gen_cls.return_value = mock_tg_instance
+
+        system = MockSystem()
+        classifier = Classifier(
+            dataset="test_dataset",
+            model_path="/tmp/test_model",
+            system=system,
+            verbose=False,
+        )
+
+        # Set up test split state
+        classifier.start_states = np.random.randn(50, 2).astype(np.float32)
+        classifier.expected_labels = np.random.randint(0, 2, 50).astype(np.int32)
+        classifier.final_states = np.random.randn(50, 3, 2).astype(np.float32)
+        classifier.outcome_probabilities = np.random.rand(50, 2).astype(np.float32)
+
+        # Mock cal_set
+        mock_load_labeled.return_value = (
+            np.random.randn(10, 2).astype(np.float32),
+            np.zeros((10, 2)),
+            np.random.randint(0, 2, 10).astype(np.int32),
+        )
+
+        # Capture the inference_params passed to TrajectoryGenerator constructor
+        mock_traj_gen_cls.reset_mock()
+        mock_split_tg = MagicMock()
+        mock_split_tg.model_args = mock_tg_instance.model_args
+        mock_split_tg.method_name = "flow_matching"
+        mock_split_tg.model = mock_tg_instance.model
+        mock_traj_gen_cls.return_value = mock_split_tg
+
+        def fake_generate(self_inner, save=False):
+            pass
+
+        def fake_compute_labels(self_inner):
+            self_inner.final_states = np.random.randn(
+                len(self_inner.start_states), 3, 2
+            ).astype(np.float32)
+            self_inner.outcome_labels = np.random.randint(0, 2, (len(self_inner.start_states), 3))
+
+        def fake_compute_probs(self_inner):
+            n = self_inner.outcome_labels.shape[0]
+            self_inner.outcome_probabilities = np.random.rand(n, 2).astype(np.float32)
+
+        with patch.object(Classifier, 'generate_trajectories', fake_generate):
+            with patch.object(Classifier, 'compute_outcome_labels', fake_compute_labels):
+                with patch.object(Classifier, 'compute_outcome_probabilities', fake_compute_probs):
+                    classifier.generate_outcome_probabilities("cal", save=False)
+
+        # Verify TrajectoryGenerator was called with the cal directory
+        call_kwargs = mock_traj_gen_cls.call_args
+        split_params = call_kwargs.kwargs.get(
+            'inference_params', call_kwargs[1].get('inference_params', {})
+        )
+        assert split_params["final_state_directory"] == "final_states/cal", \
+            f"Split TG got wrong directory: {split_params['final_state_directory']}"
 
 
 class TestSystemEvaluateFinalStatesInterface:

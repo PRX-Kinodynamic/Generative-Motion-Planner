@@ -2,7 +2,6 @@ import argparse
 import importlib
 
 from genMoPlan.eval.classifier import Classifier
-from genMoPlan.eval.threshold import ThresholdConfig
 from genMoPlan.eval.conformal import ConformalConfig
 from genMoPlan.utils import expand_model_paths
 from genMoPlan.utils.model import load_model_args
@@ -21,7 +20,6 @@ def evaluate(
     verbose=True,
     outcome_prob_threshold=None,
     use_validation_data=False,
-    optimize_mode=None,
     conformal_alpha=None,
     skip_conformal=False,
     reanalyze=False,
@@ -121,8 +119,6 @@ def evaluate(
         classifier.setup_conformal_prediction()
 
         # Apply CLI overrides
-        if optimize_mode is not None:
-            classifier.threshold_config.optimize_mode = optimize_mode
         if conformal_alpha is not None:
             classifier.conformal_config.alpha = conformal_alpha
 
@@ -207,14 +203,6 @@ if __name__ == "__main__":
              "Outputs are saved to results_val/ and final_states_val/ directories.",
     )
 
-    # Threshold optimization arguments
-    parser.add_argument(
-        "--optimize_mode",
-        type=str,
-        choices=["joint", "lambda", "delta"],
-        help="Threshold optimization mode",
-    )
-
     parser.add_argument(
         "--conformal_alpha",
         type=float,
@@ -247,7 +235,6 @@ if __name__ == "__main__":
         outcome_prob_threshold=args.outcome_prob_threshold,
         verbose=not args.silent,
         use_validation_data=args.use_validation_data,
-        optimize_mode=args.optimize_mode,
         conformal_alpha=args.conformal_alpha,
         skip_conformal=args.skip_conformal,
         reanalyze=args.reanalyze,

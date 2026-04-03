@@ -76,7 +76,7 @@ base = {
             "n_timesteps": 10,
             "integration_method": "euler",
         },
-        "final_state_directory": "final_states",
+        "final_state_directory": "final_states/eval",
         "generated_trajectory_directory": "generated_trajectories",
         "load_ema": True,
     },

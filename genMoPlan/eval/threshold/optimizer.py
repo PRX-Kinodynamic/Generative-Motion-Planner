@@ -15,15 +15,30 @@ class ThresholdOptimizer:
     - FAILURE if p_failure >= (1 - lambda) + delta
     - INVALID if p_invalid >= lambda - delta (and use_p_invalid_veto is True)
     - UNCERTAIN otherwise (in the lambda +/- delta band)
+
+    All four threshold modes are always run during evaluation:
+    - fixed: Uses fixed_lambda_star and fixed_delta_star directly
+    - joint: Grid search over both lambda and delta
+    - lambda_only: Optimize lambda only, use fixed delta
+    - delta_only: Optimize delta only, use fixed lambda
     """
 
     def __init__(self, config: ThresholdConfig):
         self.config = config
 
-    def optimize(
+    def get_fixed_result(self) -> ThresholdResult:
+        """Return fixed thresholds (no optimization)."""
+        return ThresholdResult(
+            lambda_star=self.config.fixed_lambda_star,
+            delta_star=self.config.fixed_delta_star,
+            optimize_objective=None,
+            optimization_loss=None,
+        )
+
+    def optimize_joint(
         self, outcome_probs: np.ndarray, true_labels: np.ndarray
     ) -> ThresholdResult:
-        """Grid search for lambda*, delta* on validation data.
+        """Grid search over both lambda and delta.
 
         Args:
             outcome_probs: (N, 3) array of [p_success, p_failure, p_invalid].
@@ -32,24 +47,136 @@ class ThresholdOptimizer:
         Returns:
             ThresholdResult with optimized lambda* and delta*.
         """
-        mode = self.config.optimize_mode
-        if mode is None:
-            return ThresholdResult(
-                lambda_star=self.config.fixed_lambda_star,
-                delta_star=self.config.fixed_delta_star,
-                optimize_mode=None,
-                optimize_objective=None,
-                optimization_loss=None,
-            )
+        cfg = self.config
 
-        if mode == "joint":
-            return self._optimize_joint(outcome_probs, true_labels)
-        elif mode == "lambda":
-            return self._optimize_lambda(outcome_probs, true_labels)
-        elif mode == "delta":
-            return self._optimize_delta(outcome_probs, true_labels)
-        else:
-            raise ValueError(f"Unknown optimize_mode: {mode}")
+        lambda_grid = np.linspace(0.0, 1.0, cfg.lambda_grid_size + 2)[1:-1]
+        delta_grid = np.linspace(cfg.delta_min, cfg.delta_max, cfg.delta_grid_size)
+
+        best_obj = np.inf if cfg.optimize_objective == "loss" else -np.inf
+        best_lam = cfg.fixed_lambda_star
+        best_delta = cfg.fixed_delta_star
+
+        for lam in lambda_grid:
+            for delta in delta_grid:
+                # Skip invalid combinations
+                if lam + delta > 1.0 or lam - delta < 0.0:
+                    continue
+
+                tr = ThresholdResult(lambda_star=lam, delta_star=delta)
+                obj = self._compute_objective(outcome_probs, true_labels, tr)
+
+                if obj is None:
+                    continue
+
+                if cfg.optimize_objective == "loss":
+                    if obj < best_obj:
+                        best_obj = obj
+                        best_lam = lam
+                        best_delta = delta
+                else:
+                    if obj > best_obj:
+                        best_obj = obj
+                        best_lam = lam
+                        best_delta = delta
+
+        return ThresholdResult(
+            lambda_star=float(best_lam),
+            delta_star=float(best_delta),
+            optimize_objective=cfg.optimize_objective,
+            optimization_loss=float(best_obj) if np.isfinite(best_obj) else None,
+        )
+
+    def optimize_lambda(
+        self, outcome_probs: np.ndarray, true_labels: np.ndarray
+    ) -> ThresholdResult:
+        """Optimize lambda only, use fixed delta.
+
+        Args:
+            outcome_probs: (N, 3) array of [p_success, p_failure, p_invalid].
+            true_labels: (N,) array of ground truth labels {0, 1}.
+
+        Returns:
+            ThresholdResult with optimized lambda* and fixed delta.
+        """
+        cfg = self.config
+        delta = cfg.fixed_delta_star
+
+        lambda_grid = np.linspace(0.0, 1.0, cfg.lambda_grid_size + 2)[1:-1]
+
+        best_obj = np.inf if cfg.optimize_objective == "loss" else -np.inf
+        best_lam = cfg.fixed_lambda_star
+
+        for lam in lambda_grid:
+            if lam + delta > 1.0 or lam - delta < 0.0:
+                continue
+
+            tr = ThresholdResult(lambda_star=lam, delta_star=delta)
+            obj = self._compute_objective(outcome_probs, true_labels, tr)
+
+            if obj is None:
+                continue
+
+            if cfg.optimize_objective == "loss":
+                if obj < best_obj:
+                    best_obj = obj
+                    best_lam = lam
+            else:
+                if obj > best_obj:
+                    best_obj = obj
+                    best_lam = lam
+
+        return ThresholdResult(
+            lambda_star=float(best_lam),
+            delta_star=float(delta),
+            optimize_objective=cfg.optimize_objective,
+            optimization_loss=float(best_obj) if np.isfinite(best_obj) else None,
+        )
+
+    def optimize_delta(
+        self, outcome_probs: np.ndarray, true_labels: np.ndarray
+    ) -> ThresholdResult:
+        """Optimize delta only, use fixed lambda.
+
+        Args:
+            outcome_probs: (N, 3) array of [p_success, p_failure, p_invalid].
+            true_labels: (N,) array of ground truth labels {0, 1}.
+
+        Returns:
+            ThresholdResult with fixed lambda and optimized delta*.
+        """
+        cfg = self.config
+        lam = cfg.fixed_lambda_star
+
+        delta_grid = np.linspace(cfg.delta_min, cfg.delta_max, cfg.delta_grid_size)
+
+        best_obj = np.inf if cfg.optimize_objective == "loss" else -np.inf
+        best_delta = cfg.fixed_delta_star
+
+        for delta in delta_grid:
+            if lam + delta > 1.0 or lam - delta < 0.0:
+                continue
+
+            tr = ThresholdResult(lambda_star=lam, delta_star=delta)
+            obj = self._compute_objective(outcome_probs, true_labels, tr)
+
+            if obj is None:
+                continue
+
+            if cfg.optimize_objective == "loss":
+                if obj < best_obj:
+                    best_obj = obj
+                    best_delta = delta
+            else:
+                if obj > best_obj:
+                    best_obj = obj
+                    best_delta = delta
+
+        return ThresholdResult(
+            lambda_star=float(lam),
+            delta_star=float(best_delta),
+            optimize_objective=cfg.optimize_objective,
+            optimization_loss=float(best_obj) if np.isfinite(best_obj) else None,
+        )
 
     @staticmethod
     def classify_pointwise(
@@ -94,128 +221,6 @@ class ThresholdOptimizer:
         labels[failure_mask] = PredictionLabel.FAILURE
 
         return labels
-
-    def _optimize_joint(
-        self, outcome_probs: np.ndarray, true_labels: np.ndarray
-    ) -> ThresholdResult:
-        """Grid search over both lambda and delta."""
-        cfg = self.config
-
-        lambda_grid = np.linspace(0.0, 1.0, cfg.lambda_grid_size + 2)[1:-1]
-        delta_grid = np.linspace(cfg.delta_min, cfg.delta_max, cfg.delta_grid_size)
-
-        best_obj = np.inf if cfg.optimize_objective == "loss" else -np.inf
-        best_lam = cfg.fixed_lambda_star
-        best_delta = cfg.fixed_delta_star
-
-        for lam in lambda_grid:
-            for delta in delta_grid:
-                # Skip invalid combinations
-                if lam + delta > 1.0 or lam - delta < 0.0:
-                    continue
-
-                tr = ThresholdResult(lambda_star=lam, delta_star=delta)
-                obj = self._compute_objective(outcome_probs, true_labels, tr)
-
-                if obj is None:
-                    continue
-
-                if cfg.optimize_objective == "loss":
-                    if obj < best_obj:
-                        best_obj = obj
-                        best_lam = lam
-                        best_delta = delta
-                else:
-                    if obj > best_obj:
-                        best_obj = obj
-                        best_lam = lam
-                        best_delta = delta
-
-        return ThresholdResult(
-            lambda_star=float(best_lam),
-            delta_star=float(best_delta),
-            optimize_mode="joint",
-            optimize_objective=cfg.optimize_objective,
-            optimization_loss=float(best_obj) if np.isfinite(best_obj) else None,
-        )
-
-    def _optimize_lambda(
-        self, outcome_probs: np.ndarray, true_labels: np.ndarray
-    ) -> ThresholdResult:
-        """Optimize lambda only, use fixed delta."""
-        cfg = self.config
-        delta = cfg.fixed_delta_star
-
-        lambda_grid = np.linspace(0.0, 1.0, cfg.lambda_grid_size + 2)[1:-1]
-
-        best_obj = np.inf if cfg.optimize_objective == "loss" else -np.inf
-        best_lam = cfg.fixed_lambda_star
-
-        for lam in lambda_grid:
-            if lam + delta > 1.0 or lam - delta < 0.0:
-                continue
-
-            tr = ThresholdResult(lambda_star=lam, delta_star=delta)
-            obj = self._compute_objective(outcome_probs, true_labels, tr)
-
-            if obj is None:
-                continue
-
-            if cfg.optimize_objective == "loss":
-                if obj < best_obj:
-                    best_obj = obj
-                    best_lam = lam
-            else:
-                if obj > best_obj:
-                    best_obj = obj
-                    best_lam = lam
-
-        return ThresholdResult(
-            lambda_star=float(best_lam),
-            delta_star=float(delta),
-            optimize_mode="lambda",
-            optimize_objective=cfg.optimize_objective,
-            optimization_loss=float(best_obj) if np.isfinite(best_obj) else None,
-        )
-
-    def _optimize_delta(
-        self, outcome_probs: np.ndarray, true_labels: np.ndarray
-    ) -> ThresholdResult:
-        """Optimize delta only, use fixed lambda."""
-        cfg = self.config
-        lam = cfg.fixed_lambda_star
-
-        delta_grid = np.linspace(cfg.delta_min, cfg.delta_max, cfg.delta_grid_size)
-
-        best_obj = np.inf if cfg.optimize_objective == "loss" else -np.inf
-        best_delta = cfg.fixed_delta_star
-
-        for delta in delta_grid:
-            if lam + delta > 1.0 or lam - delta < 0.0:
-                continue
-
-            tr = ThresholdResult(lambda_star=lam, delta_star=delta)
-            obj = self._compute_objective(outcome_probs, true_labels, tr)
-
-            if obj is None:
-                continue
-
-            if cfg.optimize_objective == "loss":
-                if obj < best_obj:
-                    best_obj = obj
-                    best_delta = delta
-            else:
-                if obj > best_obj:
-                    best_obj = obj
-                    best_delta = delta
-
-        return ThresholdResult(
-            lambda_star=float(lam),
-            delta_star=float(best_delta),
-            optimize_mode="delta",
-            optimize_objective=cfg.optimize_objective,
-            optimization_loss=float(best_obj) if np.isfinite(best_obj) else None,
-        )
 
     def _compute_objective(
         self,

@@ -11,14 +11,12 @@ class ThresholdResult:
     Attributes:
         lambda_star: Optimized (or fixed) probability threshold.
         delta_star: Optimized (or fixed) uncertainty band half-width.
-        optimize_mode: The mode used for optimization (or None if fixed).
-        optimize_objective: The objective used for optimization.
+        optimize_objective: The objective used for optimization (None if fixed).
         optimization_loss: Best objective value from grid search (None if fixed).
     """
 
     lambda_star: float = 0.5
     delta_star: float = 0.1
-    optimize_mode: Optional[str] = None
     optimize_objective: Optional[str] = None
     optimization_loss: Optional[float] = None
 
@@ -26,7 +24,6 @@ class ThresholdResult:
         return {
             "lambda_star": self.lambda_star,
             "delta_star": self.delta_star,
-            "optimize_mode": self.optimize_mode,
             "optimize_objective": self.optimize_objective,
             "optimization_loss": self.optimization_loss,
         }

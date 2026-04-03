@@ -1,19 +1,17 @@
 """Configuration for threshold optimization."""
 
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
 
 
 @dataclass
 class ThresholdConfig:
     """Configuration for threshold optimization.
 
+    All four threshold modes (fixed, joint, lambda-only, delta-only) are always
+    run during evaluation. This config controls the optimization objective and
+    grid search parameters shared across modes.
+
     Attributes:
-        optimize_mode: How to optimize thresholds.
-            - "joint": Grid search over both lambda and delta
-            - "lambda": Optimize lambda only, use fixed delta
-            - "delta": Optimize delta only, use fixed lambda
-            - None: Use fixed_lambda_star and fixed_delta_star directly
         optimize_objective: Objective function for optimization.
             - "loss": Weighted misclassification + unknown rate
             - "jstat": Youden's J statistic (sensitivity + specificity - 1)
@@ -21,8 +19,8 @@ class ThresholdConfig:
         w: Weight for misclassification in loss objective.
             loss = w * misclass_rate + (1 - w) * unknown_rate
         target_f1: Minimum F1 target for "f1" objective.
-        fixed_lambda_star: Fixed threshold when optimize_mode is None or "delta".
-        fixed_delta_star: Fixed delta when optimize_mode is None or "lambda".
+        fixed_lambda_star: Fixed lambda used for fixed and delta-only modes.
+        fixed_delta_star: Fixed delta used for fixed and lambda-only modes.
         lambda_grid_size: Number of grid points for lambda search.
         delta_grid_size: Number of grid points for delta search.
         delta_min: Minimum delta value in grid search.
@@ -30,7 +28,6 @@ class ThresholdConfig:
         use_p_invalid_veto: Whether to veto predictions with high p_invalid.
     """
 
-    optimize_mode: Optional[str] = None
     optimize_objective: str = "loss"
     w: float = 0.9
     target_f1: float = 0.90
@@ -46,14 +43,6 @@ class ThresholdConfig:
     use_p_invalid_veto: bool = True
 
     def __post_init__(self):
-        if self.optimize_mode is not None:
-            valid_modes = {"joint", "lambda", "delta"}
-            if self.optimize_mode not in valid_modes:
-                raise ValueError(
-                    f"optimize_mode must be one of {valid_modes} or None, "
-                    f"got '{self.optimize_mode}'"
-                )
-
         valid_objectives = {"loss", "jstat", "f1"}
         if self.optimize_objective not in valid_objectives:
             raise ValueError(

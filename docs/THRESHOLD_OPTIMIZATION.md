@@ -115,19 +115,19 @@ When `refine_invalids=True`, endpoints classified as invalid (label=0) are refin
 
 ## Threshold Optimization (Stage 1)
 
-The `LambdaOptimizer` (`adaptive_roa/conformal/lambda_optimizer.py`) finds optimal λ* and/or δ* via grid search on a validation set.
+The `ThresholdOptimizer` (`genMoPlan/eval/threshold/optimizer.py`) finds optimal λ* and/or δ* via grid search on a validation set.
 
 ### Optimization Modes
 
-Controlled by `config.optimize_mode`:
+All four modes are always run during evaluation. There is no `optimize_mode` config parameter — the pipeline exhaustively evaluates all modes and reports results for each.
 
-#### Mode: `"lambda"` — Optimize λ* with fixed δ
+#### Mode: `"lambda_only"` — Optimize λ* with fixed δ
 
 - Searches λ ∈ [δ, 1−δ] over `lambda_grid_size` points.
 - δ is fixed at `config.delta`.
 - Returns: (λ*, config.delta).
 
-#### Mode: `"delta"` — Optimize δ* with fixed λ=0.5
+#### Mode: `"delta_only"` — Optimize δ* with fixed λ
 
 - Searches δ ∈ [delta_min, delta_max] over `delta_grid_size` points.
 - λ is fixed at 0.5.
@@ -369,28 +369,21 @@ Each prediction variant produces:
 
 ## Configuration Reference
 
-All threshold-related parameters are in `ConformalConfig` (`adaptive_roa/conformal/config.py`), loaded from `configs/conformal/default.yaml`:
+Threshold parameters are in `ThresholdConfig` (`genMoPlan/eval/threshold/config.py`), set via the inference config's `"threshold"` dict:
 
-```yaml
-# Decision boundary parameters
-delta: 0.05          # Initial δ (also used as fixed δ when optimize_mode="lambda")
-w: 0.9               # Loss weight: w × error + (1-w) × unknown_rate
+```python
+# In config/<dataset>.py inference config:
+"threshold": {
+    "optimize_objective": "loss",  # "loss", "jstat", or "f1"
+    "w": 0.9,                      # Loss weight: w × error + (1-w) × unknown_rate
+    "fixed_lambda_star": 0.5,      # Fixed λ for fixed and delta_only modes
+    "fixed_delta_star": 0.1,       # Fixed δ for fixed and lambda_only modes
+}
 
-# Coverage parameters
-alpha: 0.1            # Significance level (α=0.1 → 90% coverage guarantee)
-
-# Monte Carlo sampling
-num_mc_samples: 100   # K forward passes per state
-mc_batch_size: 1024   # GPU batch size for MC sampling
-
-# Classification
-attractor_radius: 0.2 # Endpoint classification radius
-
-# Optimization mode: "lambda", "delta", or "joint"
-optimize_mode: lambda
-
-# Decision rule: "one_sided" or "two_sided"
-decision_rule: one_sided
+# Conformal parameters:
+"conformal": {
+    "alpha": 0.1,  # Significance level (α=0.1 → 90% coverage guarantee)
+}
 
 # Grid search parameters
 lambda_grid_size: 100

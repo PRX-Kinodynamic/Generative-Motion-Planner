@@ -12,15 +12,10 @@ from genMoPlan.eval.threshold.optimizer import ThresholdOptimizer
 class TestThresholdConfig:
     def test_default_values(self):
         cfg = ThresholdConfig()
-        assert cfg.optimize_mode is None
         assert cfg.optimize_objective == "loss"
         assert cfg.w == 0.9
         assert cfg.fixed_lambda_star == 0.5
         assert cfg.fixed_delta_star == 0.1
-
-    def test_invalid_mode(self):
-        with pytest.raises(ValueError, match="optimize_mode"):
-            ThresholdConfig(optimize_mode="invalid")
 
     def test_invalid_objective(self):
         with pytest.raises(ValueError, match="optimize_objective"):
@@ -28,16 +23,24 @@ class TestThresholdConfig:
 
     def test_from_dict(self):
         cfg = ThresholdConfig.from_dict({
-            "optimize_mode": "joint",
+            "optimize_objective": "f1",
             "w": 0.8,
             "unknown_key": True,  # Should be ignored
         })
-        assert cfg.optimize_mode == "joint"
+        assert cfg.optimize_objective == "f1"
         assert cfg.w == 0.8
+
+    def test_from_dict_ignores_optimize_mode(self):
+        """Old configs with optimize_mode should be silently ignored."""
+        cfg = ThresholdConfig.from_dict({
+            "optimize_mode": "joint",  # Legacy key, should be ignored
+            "optimize_objective": "loss",
+        })
+        assert cfg.optimize_objective == "loss"
 
     def test_from_empty_dict(self):
         cfg = ThresholdConfig.from_dict({})
-        assert cfg.optimize_mode is None
+        assert cfg.optimize_objective == "loss"
 
 
 class TestThresholdResult:
@@ -46,6 +49,7 @@ class TestThresholdResult:
         d = tr.to_dict()
         assert d["lambda_star"] == 0.6
         assert d["delta_star"] == 0.15
+        assert "optimize_mode" not in d
 
     def test_from_dict(self):
         tr = ThresholdResult.from_dict({"lambda_star": 0.7, "delta_star": 0.05})
@@ -127,82 +131,76 @@ class TestThresholdOptimizer:
 
         return probs, labels
 
-    def test_fixed_mode(self):
-        cfg = ThresholdConfig(optimize_mode=None, fixed_lambda_star=0.6, fixed_delta_star=0.05)
+    def test_get_fixed_result(self):
+        cfg = ThresholdConfig(fixed_lambda_star=0.6, fixed_delta_star=0.05)
         opt = ThresholdOptimizer(cfg)
-        probs, labels = self._make_synthetic_data()
-        result = opt.optimize(probs, labels)
+        result = opt.get_fixed_result()
         assert result.lambda_star == 0.6
         assert result.delta_star == 0.05
-        assert result.optimize_mode is None
+        assert result.optimize_objective is None
         assert result.optimization_loss is None
 
-    def test_joint_optimization(self):
+    def test_optimize_joint(self):
         cfg = ThresholdConfig(
-            optimize_mode="joint",
             optimize_objective="loss",
             lambda_grid_size=20,
             delta_grid_size=20,
         )
         opt = ThresholdOptimizer(cfg)
         probs, labels = self._make_synthetic_data()
-        result = opt.optimize(probs, labels)
+        result = opt.optimize_joint(probs, labels)
 
-        assert result.optimize_mode == "joint"
+        assert result.optimize_objective == "loss"
         assert 0.0 < result.lambda_star < 1.0
         assert result.delta_star > 0.0
         assert result.optimization_loss is not None
 
-    def test_lambda_only_optimization(self):
+    def test_optimize_lambda(self):
         cfg = ThresholdConfig(
-            optimize_mode="lambda",
             optimize_objective="loss",
             fixed_delta_star=0.05,
             lambda_grid_size=20,
         )
         opt = ThresholdOptimizer(cfg)
         probs, labels = self._make_synthetic_data()
-        result = opt.optimize(probs, labels)
+        result = opt.optimize_lambda(probs, labels)
 
-        assert result.optimize_mode == "lambda"
+        assert result.optimize_objective == "loss"
         assert result.delta_star == 0.05  # Fixed
 
-    def test_delta_only_optimization(self):
+    def test_optimize_delta(self):
         cfg = ThresholdConfig(
-            optimize_mode="delta",
             optimize_objective="loss",
             fixed_lambda_star=0.5,
             delta_grid_size=20,
         )
         opt = ThresholdOptimizer(cfg)
         probs, labels = self._make_synthetic_data()
-        result = opt.optimize(probs, labels)
+        result = opt.optimize_delta(probs, labels)
 
-        assert result.optimize_mode == "delta"
+        assert result.optimize_objective == "loss"
         assert result.lambda_star == 0.5  # Fixed
 
     def test_jstat_objective(self):
         cfg = ThresholdConfig(
-            optimize_mode="joint",
             optimize_objective="jstat",
             lambda_grid_size=20,
             delta_grid_size=20,
         )
         opt = ThresholdOptimizer(cfg)
         probs, labels = self._make_synthetic_data()
-        result = opt.optimize(probs, labels)
+        result = opt.optimize_joint(probs, labels)
         assert result.optimize_objective == "jstat"
 
     def test_f1_objective(self):
         cfg = ThresholdConfig(
-            optimize_mode="joint",
             optimize_objective="f1",
             lambda_grid_size=20,
             delta_grid_size=20,
         )
         opt = ThresholdOptimizer(cfg)
         probs, labels = self._make_synthetic_data()
-        result = opt.optimize(probs, labels)
+        result = opt.optimize_joint(probs, labels)
         assert result.optimize_objective == "f1"
 
     def test_optimized_beats_default(self):
@@ -210,7 +208,10 @@ class TestThresholdOptimizer:
         probs, labels = self._make_synthetic_data()
 
         # Default
-        default_tr = ThresholdResult(lambda_star=0.5, delta_star=0.1)
+        cfg = ThresholdConfig(lambda_grid_size=30, delta_grid_size=30)
+        opt = ThresholdOptimizer(cfg)
+
+        default_tr = opt.get_fixed_result()
         default_labels = ThresholdOptimizer.classify_pointwise(probs, default_tr)
         default_correct = np.sum(
             (default_labels == PredictionLabel.SUCCESS) & (labels == 1)
@@ -218,14 +219,8 @@ class TestThresholdOptimizer:
             (default_labels == PredictionLabel.FAILURE) & (labels == 0)
         )
 
-        # Optimized
-        cfg = ThresholdConfig(
-            optimize_mode="joint",
-            lambda_grid_size=30,
-            delta_grid_size=30,
-        )
-        opt = ThresholdOptimizer(cfg)
-        result = opt.optimize(probs, labels)
+        # Optimized (joint)
+        result = opt.optimize_joint(probs, labels)
         opt_labels = ThresholdOptimizer.classify_pointwise(probs, result)
         opt_correct = np.sum(
             (opt_labels == PredictionLabel.SUCCESS) & (labels == 1)

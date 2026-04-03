@@ -79,7 +79,7 @@ class Classifier:
     # Validation mode
     _use_validation_mode: bool = False
     _results_dir_name: str = "results"
-    _final_states_dir_name: str = "final_states"
+    _final_states_dir_name: str = "final_states/eval"
 
     # Threshold optimization and conformal prediction
     threshold_config: ThresholdConfig = None
@@ -173,6 +173,7 @@ class Classifier:
         )
         self.max_path_length = self.inference_params["max_path_length"]
         self.final_state_directory = self.inference_params["final_state_directory"]
+        self._final_states_dir_name = self.final_state_directory
 
         if self._trajectory_generator is not None:
             self.conditional_sample_kwargs = dict(
@@ -224,13 +225,13 @@ class Classifier:
         Enable validation mode, which uses separate directories for outputs.
 
         When enabled:
-        - Results are saved to "results_val/" instead of "results/"
-        - Final states are saved to "final_states_val/" instead of "final_states/"
+        - Results are saved to "results/val/" instead of "results/"
+        - Final states are saved to "final_states/val/" instead of "final_states/eval/"
         - Use load_validation_ground_truth() to load validation data as ground truth
         """
         self._use_validation_mode = True
-        self._results_dir_name = "results_val"
-        self._final_states_dir_name = "final_states_val"
+        self._results_dir_name = "results/val"
+        self._final_states_dir_name = "final_states/val"
 
         # Update the final_state_directory in inference_params and trajectory generator
         self.final_state_directory = self._final_states_dir_name
@@ -1188,18 +1189,19 @@ class Classifier:
         # === Level 1: Per-initial-state statistics (over n_runs) ===
         per_state_mean = scalar_error.mean(dim=1).numpy()  # (N,)
         per_state_var = scalar_error.var(dim=1).numpy()  # (N,)
-        per_state_p50 = torch.quantile(scalar_error, 0.5, dim=1).numpy()  # (N,)
-        per_state_p90 = torch.quantile(scalar_error, 0.9, dim=1).numpy()  # (N,)
-        per_state_p99 = torch.quantile(scalar_error, 0.99, dim=1).numpy()  # (N,)
+        scalar_error_np = scalar_error.numpy()
+        per_state_p50 = np.percentile(scalar_error_np, 50, axis=1)  # (N,)
+        per_state_p90 = np.percentile(scalar_error_np, 90, axis=1)  # (N,)
+        per_state_p99 = np.percentile(scalar_error_np, 99, axis=1)  # (N,)
 
         # === Level 2a: Global statistics (flat pool of all N*n_runs errors) ===
-        flat_errors = scalar_error.flatten()  # (N*n_runs,)
+        flat_errors = scalar_error_np.flatten()  # (N*n_runs,)
         global_stats = {
-            "mean": float(flat_errors.mean().item()),
-            "variance": float(flat_errors.var().item()),
-            "p50": float(torch.quantile(flat_errors, 0.5).item()),
-            "p90": float(torch.quantile(flat_errors, 0.9).item()),
-            "p99": float(torch.quantile(flat_errors, 0.99).item()),
+            "mean": float(np.mean(flat_errors)),
+            "variance": float(np.var(flat_errors)),
+            "p50": float(np.percentile(flat_errors, 50)),
+            "p90": float(np.percentile(flat_errors, 90)),
+            "p99": float(np.percentile(flat_errors, 99)),
         }
 
         # === Level 2b: Aggregate per-state statistics ===
@@ -1221,12 +1223,12 @@ class Classifier:
         }
 
         # === Per-dimension MAE ===
-        per_dim_mae = per_dim_error.mean(dim=(0, 1)).numpy()  # (D,)
-        state_names = getattr(self.system, "state_names", None) or [
-            f"dim_{i}" for i in range(state_dim)
-        ]
+        # manifold.dist() may collapse multi-dim components (e.g., SO3 4D → 1D),
+        # so use loss_dim_names which match the dist() output dimensions.
+        per_dim_mae = per_dim_error.mean(dim=(0, 1)).numpy()  # (loss_dim,)
         per_dimension_mae = {
-            name: float(per_dim_mae[i]) for i, name in enumerate(state_names)
+            name: float(per_dim_mae[i])
+            for i, name in enumerate(self.system.loss_dim_names)
         }
 
         # Build results dictionary
@@ -1695,7 +1697,6 @@ class Classifier:
 
         if self.verbose:
             print(f"[ utils/classifier ] Threshold optimization setup:")
-            print(f"  optimize_mode: {self.threshold_config.optimize_mode}")
             print(f"  optimize_objective: {self.threshold_config.optimize_objective}")
 
     def setup_conformal_prediction(self, config: ConformalConfig = None):
@@ -1747,8 +1748,65 @@ class Classifier:
                 )
             probs = self.outcome_probabilities
             labels = self.expected_labels
+        elif split == "val":
+            # Val split: load from training validation split (last N trajectories)
+            val_dataset_size = getattr(self.model_args, "val_dataset_size", None)
+            if val_dataset_size is None:
+                raise ValueError(
+                    "val_dataset_size not found in model_args. "
+                    "This experiment may not have been configured with validation data."
+                )
+            shuffled_indices_fname = getattr(
+                self.model_args, "shuffled_indices_fname", "shuffled_indices.txt"
+            )
+
+            trajectories = load_trajectories(
+                dataset=self.system.dataset,
+                read_trajectory_fn=self.system.read_trajectory,
+                dataset_size=val_dataset_size,
+                load_reverse=True,
+                shuffled_indices_fname=shuffled_indices_fname,
+            )
+
+            # Load per-trajectory labels first
+            labels_fname = shuffled_indices_fname.replace(
+                "shuffled_indices", "shuffled_labels"
+            )
+            dataset_path = path.join(
+                get_data_trajectories_path(), self.system.dataset
+            )
+            labels_fpath = path.join(
+                dataset_path, "train_test_splits", labels_fname
+            )
+            if not path.exists(labels_fpath):
+                raise FileNotFoundError(
+                    f"Labels file not found: {labels_fpath}. "
+                    f"Expected file matching shuffled indices pattern."
+                )
+            with open(labels_fpath, "r") as f:
+                all_labels = [int(line.strip()) for line in f.readlines()]
+            traj_labels = np.array(all_labels[-val_dataset_size:], dtype=np.int32)
+
+            # Use all states along each trajectory (except final) as start
+            # states. For deterministic controller trajectories, every
+            # intermediate state shares the trajectory's label: a suffix of
+            # a SUCCESS trajectory still reaches the goal.
+            all_states = []
+            all_labels_expanded = []
+            for traj, label in zip(trajectories, traj_labels):
+                for state in traj[:-1]:
+                    all_states.append(state)
+                    all_labels_expanded.append(label)
+            start_states = np.array(all_states, dtype=np.float32)
+            labels = np.array(all_labels_expanded, dtype=np.int32)
+
+            if self.verbose:
+                print(
+                    f"[ utils/classifier ] Loaded {len(start_states)} {split} "
+                    f"states from training validation split"
+                )
         else:
-            # val or cal split: load from labeled state set file
+            # cal or other splits: load from labeled state set file
             filename = f"{split}_set.txt"
             start_states, _, labels = load_labeled_state_set(
                 self.system.dataset, self.system.state_dim, filename
@@ -1760,41 +1818,46 @@ class Classifier:
                     f"states from {filename}"
                 )
 
-            # Save original state, generate for this split, then restore
-            orig_start = self.start_states
-            orig_final = self.final_states
-            orig_expected = self.expected_labels
-            orig_n_runs = self.n_runs
-            orig_final_dir = self._final_states_dir_name
+        if split != "test":
+            # Create a fresh TrajectoryGenerator for this split to avoid
+            # any state leakage between splits. Reuses the already-loaded
+            # model to avoid reloading from disk.
+            split_inference_params = dict(self.inference_params)
+            split_inference_params["final_state_directory"] = f"final_states/{split}"
 
-            try:
-                self.start_states = start_states
-                self.expected_labels = labels
-                self.final_states = None
-                self.n_runs = self._num_expected_runs
-                self._final_states_dir_name = f"final_states/{split}"
+            split_tg = TrajectoryGenerator(
+                dataset=self.dataset,
+                model_path=self.model_path,
+                inference_params=split_inference_params,
+                device=self.device,
+                verbose=self.verbose,
+                default_batch_size=self.batch_size,
+                system=self.system,
+                model=self.trajectory_generator.model,
+                model_args=self.trajectory_generator.model_args,
+            )
 
-                if self._trajectory_generator is not None:
-                    self._trajectory_generator.final_state_directory = (
-                        self._final_states_dir_name
-                    )
+            # Use a separate Classifier for this split (no model_path to
+            # skip redundant model loading; we inject the TG directly).
+            split_classifier = Classifier(
+                dataset=self.dataset,
+                batch_size=self.batch_size,
+                verbose=self.verbose,
+                system=self.system,
+            )
+            split_classifier._trajectory_generator = split_tg
+            split_classifier.model_args = self.model_args
+            split_classifier.method_name = self.method_name
 
-                self.generate_trajectories(save=save)
-                self.compute_outcome_labels()
-                self.compute_outcome_probabilities()
+            split_classifier.start_states = start_states
+            split_classifier.expected_labels = labels
+            split_classifier.n_runs = self._num_expected_runs
 
-                probs = self.outcome_probabilities.copy()
-            finally:
-                # Restore original state
-                self.start_states = orig_start
-                self.final_states = orig_final
-                self.expected_labels = orig_expected
-                self.n_runs = orig_n_runs
-                self._final_states_dir_name = orig_final_dir
-                if self._trajectory_generator is not None:
-                    self._trajectory_generator.final_state_directory = orig_final_dir
-                self.outcome_labels = None
-                self.outcome_probabilities = None
+            split_classifier.generate_trajectories(save=save)
+            split_classifier.compute_outcome_labels()
+            split_classifier.compute_outcome_probabilities()
+
+            probs = split_classifier.outcome_probabilities.copy()
 
         # Cache probabilities and labels to disk
         if save and self.model_path is not None:
@@ -1818,7 +1881,7 @@ class Classifier:
             raise ValueError("model_path required to load cached data")
 
         # Find latest timestamp directory
-        split_dir = path.join(self.model_path, "final_states", split)
+        split_dir = path.join(self.model_path, f"final_states/{split}")
         if not os.path.exists(split_dir):
             raise FileNotFoundError(f"No cached data for split '{split}' at {split_dir}")
 
@@ -1866,11 +1929,11 @@ class Classifier:
         # For test split, use existing timestamp dir structure
         if split == "test" and self.timestamp is not None:
             ts_dir = path.join(
-                self.model_path, "final_states", self.timestamp
+                self.model_path, self._final_states_dir_name, self.timestamp
             )
         else:
             # For val/cal, find latest timestamp dir
-            split_dir = path.join(self.model_path, "final_states", split)
+            split_dir = path.join(self.model_path, f"final_states/{split}")
             if os.path.exists(split_dir):
                 timestamps = sorted(
                     [
@@ -1922,10 +1985,12 @@ class Classifier:
         if val_probs is None or val_labels is None:
             val_probs, val_labels = self.load_cached_outcome_probabilities("val")
 
-        self.threshold_result = self.threshold_optimizer.optimize(val_probs, val_labels)
+        self.threshold_result = self.threshold_optimizer.optimize_joint(
+            val_probs, val_labels
+        )
 
         if self.verbose:
-            print(f"[ utils/classifier ] Threshold optimization result:")
+            print(f"[ utils/classifier ] Threshold optimization result (joint):")
             print(f"  lambda*: {self.threshold_result.lambda_star:.4f}")
             print(f"  delta*:  {self.threshold_result.delta_star:.4f}")
             if self.threshold_result.optimization_loss is not None:
@@ -2027,23 +2092,20 @@ class Classifier:
         return conformal_predictions
 
     def run_full_evaluation_pipeline(self, save: bool = True) -> dict:
-        """Orchestrate full evaluation: threshold optimization + conformal prediction.
+        """Orchestrate full evaluation: all threshold modes + conformal prediction.
 
         Stage A (if not cached): generate MC samples for val, cal, test.
-        Stage B1: threshold optimization -> lambda*, delta* -> pointwise classification.
-        Stage B2: conformal calibration -> q-hat -> prediction sets.
-
-        Result sets:
-        - "pointwise": lambda +/- delta band point predictions
-        - "conformal_single_class": prediction sets with single q-hat
-        - "conformal_multi_class_min/max/skip": per-class q-hat variants
-        - Additional variants: conservative, fixed_threshold, lambda_only
+        Stage B: For each of 4 threshold modes (fixed, joint, lambda_only, delta_only):
+            - Optimize thresholds (or use fixed)
+            - Pointwise classification + conservative variant
+            - Conformal calibration + all conformal prediction variants
+            - Conformal conservative variant
 
         Args:
             save: Whether to save results to disk.
 
         Returns:
-            dict with all evaluation results.
+            dict with nested results keyed by threshold mode.
         """
         if self.threshold_optimizer is None:
             self.setup_threshold_optimization()
@@ -2074,79 +2136,112 @@ class Classifier:
                 print("[ utils/classifier ] Generating cal split MC samples...")
             cal_probs, cal_labels = self.generate_outcome_probabilities("cal", save=save)
 
-        # --- Stage B1: Threshold optimization + pointwise classification ---
-        self.run_threshold_optimization(val_probs, val_labels)
+        # --- Stage B: Run all threshold modes ---
+        optimizer = self.threshold_optimizer
+        use_veto = self.threshold_config.use_p_invalid_veto
 
-        pointwise_labels = self.classify_pointwise(test_probs, save=save)
-        pointwise_metrics = compute_classification_metrics(pointwise_labels, test_labels)
-
-        # --- Stage B2: Conformal prediction ---
-        conformal_predictions = self.run_conformal_prediction(
-            cal_probs, cal_labels, test_probs, save=save
-        )
-
-        # --- Build results ---
-        results = {
-            "threshold": self.threshold_result.to_dict(),
-            "conformal": self.conformal_result.to_dict() if self.conformal_result else {},
-            "pointwise": {"metrics": pointwise_metrics},
+        threshold_modes = {
+            "fixed": optimizer.get_fixed_result(),
+            "joint": optimizer.optimize_joint(val_probs, val_labels),
+            "lambda_only": optimizer.optimize_lambda(val_probs, val_labels),
+            "delta_only": optimizer.optimize_delta(val_probs, val_labels),
         }
 
-        # Add conformal variant results
-        for variant_name, variant_data in conformal_predictions.items():
-            pred_labels = variant_data["labels"]
-            variant_metrics = compute_classification_metrics(pred_labels, test_labels)
-            cov = compute_coverage(variant_data["prediction_sets"], test_labels)
-            results[f"conformal_{variant_name}"] = {
-                "metrics": variant_metrics,
-                "coverage": cov,
-            }
+        # Set self.threshold_result to joint for backward compat with
+        # callers that use classify_pointwise() or run_conformal_prediction()
+        # after the pipeline.
+        self.threshold_result = threshold_modes["joint"]
 
-        # --- Additional variants ---
-        additional = {}
+        results = {}
 
-        # Pointwise conservative (uncertain/invalid -> FAILURE)
-        conservative_labels = make_conservative_labels(pointwise_labels)
-        additional["pointwise_conservative"] = {
-            "metrics": compute_classification_metrics(conservative_labels, test_labels),
-        }
+        for mode_name, threshold_result in threshold_modes.items():
+            if self.verbose:
+                print(
+                    f"[ utils/classifier ] Evaluating mode '{mode_name}': "
+                    f"lambda*={threshold_result.lambda_star:.4f}, "
+                    f"delta*={threshold_result.delta_star:.4f}"
+                )
 
-        # Conformal single-class conservative
-        if "single_class" in conformal_predictions:
-            conf_labels = conformal_predictions["single_class"]["labels"]
-            conf_conservative = make_conservative_labels(conf_labels)
-            additional["conformal_single_class_conservative"] = {
+            mode_results = {}
+            mode_results["threshold"] = threshold_result.to_dict()
+
+            # Pointwise classification
+            pointwise_labels = ThresholdOptimizer.classify_pointwise(
+                test_probs, threshold_result, use_p_invalid_veto=use_veto
+            )
+            mode_results["pointwise"] = {
                 "metrics": compute_classification_metrics(
-                    conf_conservative, test_labels
-                ),
-                "coverage": compute_coverage(
-                    conformal_predictions["single_class"]["prediction_sets"],
-                    test_labels,
+                    pointwise_labels, test_labels
                 ),
             }
 
-        # Fixed threshold baseline (lambda=0.5, delta=0.1, no optimization)
-        fixed_tr = ThresholdResult(lambda_star=0.5, delta_star=0.1)
-        fixed_labels = ThresholdOptimizer.classify_pointwise(
-            test_probs, fixed_tr, use_p_invalid_veto=True
-        )
-        additional["fixed_threshold"] = {
-            "metrics": compute_classification_metrics(fixed_labels, test_labels),
-        }
+            # Conservative (uncertain/invalid -> FAILURE)
+            conservative_labels = make_conservative_labels(pointwise_labels)
+            mode_results["conservative"] = {
+                "metrics": compute_classification_metrics(
+                    conservative_labels, test_labels
+                ),
+            }
 
-        # Lambda-only (lambda* with delta=0)
-        lambda_only_tr = ThresholdResult(
-            lambda_star=self.threshold_result.lambda_star, delta_star=0.0
-        )
-        lambda_only_labels = ThresholdOptimizer.classify_pointwise(
-            test_probs, lambda_only_tr, use_p_invalid_veto=True
-        )
-        additional["lambda_only"] = {
-            "metrics": compute_classification_metrics(lambda_only_labels, test_labels),
-        }
+            # Conformal calibration + prediction
+            conformal_result = self.conformal_predictor.calibrate(
+                cal_probs, cal_labels, threshold_result
+            )
+            mode_results["conformal"] = conformal_result.to_dict()
 
-        results["additional_variants"] = additional
+            conformal_predictions = self.conformal_predictor.predict(
+                test_probs, threshold_result, conformal_result
+            )
+
+            for variant_name, variant_data in conformal_predictions.items():
+                pred_labels = variant_data["labels"]
+                variant_metrics = compute_classification_metrics(
+                    pred_labels, test_labels
+                )
+                cov = compute_coverage(
+                    variant_data["prediction_sets"], test_labels
+                )
+                mode_results[f"conformal_{variant_name}"] = {
+                    "metrics": variant_metrics,
+                    "coverage": cov,
+                }
+
+            # Conformal single-class conservative
+            if "single_class" in conformal_predictions:
+                conf_labels = conformal_predictions["single_class"]["labels"]
+                conf_conservative = make_conservative_labels(conf_labels)
+                mode_results["conformal_single_class_conservative"] = {
+                    "metrics": compute_classification_metrics(
+                        conf_conservative, test_labels
+                    ),
+                    "coverage": compute_coverage(
+                        conformal_predictions["single_class"]["prediction_sets"],
+                        test_labels,
+                    ),
+                }
+
+            results[mode_name] = mode_results
+
+        # Also set conformal_result to the joint mode's for backward compat
+        self.conformal_result = self.conformal_predictor.calibrate(
+            cal_probs, cal_labels, self.threshold_result
+        )
+
+        # Top-level metadata
         results["test_set_size"] = len(test_labels)
+        results["config"] = {
+            "optimize_objective": self.threshold_config.optimize_objective,
+            "w": self.threshold_config.w,
+            "alpha": self.conformal_config.alpha,
+            "calibration_set_size": len(cal_labels),
+            "fixed_lambda_star": self.threshold_config.fixed_lambda_star,
+            "fixed_delta_star": self.threshold_config.fixed_delta_star,
+            "lambda_grid_size": self.threshold_config.lambda_grid_size,
+            "delta_grid_size": self.threshold_config.delta_grid_size,
+            "delta_min": self.threshold_config.delta_min,
+            "delta_max": self.threshold_config.delta_max,
+            "use_p_invalid_veto": self.threshold_config.use_p_invalid_veto,
+        }
 
         self.evaluation_results = results
 
@@ -2185,54 +2280,52 @@ class Classifier:
 
     def _print_evaluation_summary(self, results: dict):
         """Print a concise summary of the evaluation pipeline results."""
-        print(f"\n{'='*60}")
+        print(f"\n{'='*70}")
         print(f"Evaluation Pipeline Results")
-        print(f"{'='*60}")
+        print(f"{'='*70}")
 
-        # Threshold
-        tr = results.get("threshold", {})
-        print(f"\nThreshold: lambda*={tr.get('lambda_star', '?'):.4f}, "
-              f"delta*={tr.get('delta_star', '?'):.4f}")
-        if tr.get("optimize_mode"):
-            print(f"  Mode: {tr['optimize_mode']}, "
-                  f"Objective: {tr.get('optimize_objective', '?')}")
+        mode_names = ["fixed", "joint", "lambda_only", "delta_only"]
 
-        # Conformal
-        cr = results.get("conformal", {})
-        if cr.get("q_hat") is not None:
-            print(f"\nConformal: q_hat={cr['q_hat']:.4f}, alpha={cr.get('alpha', '?')}")
-            if cr.get("q_hat_success") is not None:
-                print(f"  q_hat_success={cr['q_hat_success']:.4f}, "
-                      f"q_hat_failure={cr['q_hat_failure']:.4f}")
-
-        # Result set summaries
         def _print_result_set(name, data):
             metrics = data.get("metrics", {})
             acc = metrics.get("accuracy", float("nan"))
             f1 = metrics.get("f1_score", float("nan"))
             sep = metrics.get("separatrix_rate", float("nan"))
-            line = f"  {name:35s} acc={acc:.4f}  f1={f1:.4f}  sep={sep:.4f}"
+            line = f"    {name:40s} acc={acc:.4f}  f1={f1:.4f}  sep={sep:.4f}"
             cov = data.get("coverage")
             if cov is not None:
                 line += f"  cov={cov:.4f}"
             print(line)
 
-        print(f"\nResult sets:")
-        if "pointwise" in results:
-            _print_result_set("pointwise", results["pointwise"])
-        for key in ["conformal_single_class", "conformal_multi_class_min",
-                     "conformal_multi_class_max", "conformal_multi_class_skip"]:
-            if key in results:
-                _print_result_set(key, results[key])
+        for mode_name in mode_names:
+            mode_data = results.get(mode_name)
+            if mode_data is None:
+                continue
 
-        additional = results.get("additional_variants", {})
-        if additional:
-            print(f"\nAdditional variants:")
-            for name, data in additional.items():
-                _print_result_set(name, data)
+            tr = mode_data.get("threshold", {})
+            cr = mode_data.get("conformal", {})
+            print(f"\n--- {mode_name} ---")
+            print(f"  lambda*={tr.get('lambda_star', '?'):.4f}, "
+                  f"delta*={tr.get('delta_star', '?'):.4f}")
+            if cr.get("q_hat") is not None:
+                print(f"  q_hat={cr['q_hat']:.4f}", end="")
+                if cr.get("q_hat_success") is not None:
+                    print(f"  q_hat_s={cr['q_hat_success']:.4f}  "
+                          f"q_hat_f={cr['q_hat_failure']:.4f}", end="")
+                print()
+
+            result_keys = [
+                "pointwise", "conservative",
+                "conformal_single_class", "conformal_multi_class_min",
+                "conformal_multi_class_max", "conformal_multi_class_skip",
+                "conformal_single_class_conservative",
+            ]
+            for key in result_keys:
+                if key in mode_data:
+                    _print_result_set(key, mode_data[key])
 
         print(f"\nTest set size: {results.get('test_set_size', '?')}")
-        print(f"{'='*60}\n")
+        print(f"{'='*70}\n")
 
 
 # Backwards-compatible alias for legacy code paths.
