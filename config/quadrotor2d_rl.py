@@ -90,7 +90,7 @@ base = {
             "n_timesteps": 10,
             "integration_method": "euler",
         },
-        "final_state_directory": "final_states",
+        "final_state_directory": "final_states/eval",
         "generated_trajectory_directory": "generated_trajectories",
         "load_ema": True,
         "inference_mask_strategy": "first_step_only",
@@ -100,7 +100,7 @@ base = {
         "loss_type": "l2",
         "clip_denoised": False,
         "has_local_query": False,
-        "has_global_query": False,
+        "has_global_query": True,
         # -------------------------------- dataset --------------------------------#
         "loader": "datasets.TrajectoryDataset",
         "shuffled_indices_fname": "shuffled_indices.txt",
@@ -108,8 +108,8 @@ base = {
         "use_horizon_padding": True,
         "use_history_mask": False,
         "use_plan": False,
-        "train_dataset_size": None,
-        "is_history_conditioned": True,
+        "train_dataset_size": 12000,
+        "is_history_conditioned": False,
         # ---------------------------- serialization ----------------------------#
         "logbase": logbase,
         "exp_name": watch(exp_args_to_watch),
@@ -117,32 +117,34 @@ base = {
             "cost_mul_threshold": 1.0,
         },
         # ---------------------------- training ----------------------------#
-        # Large dataset (~490k trajectories) - fewer epochs needed
-        "num_epochs": 50,
+        "num_epochs": 2000,
         "min_num_steps_per_epoch": 0,
         "save_freq": 20,  # epochs
         "log_freq": 1e2,  # steps
         "batch_size": 1024,
         "num_workers": 4,
-        "learning_rate": 1e-4,
-        "useAdamW": False,
-        "optimizer_kwargs": {},
+        "learning_rate": 2e-4,
+        "useAdamW": True,
+        "optimizer_kwargs": {
+            "betas": (0.9, 0.95),
+            "weight_decay": 0.02,
+        },
         "use_lr_scheduler": True,
-        "lr_scheduler_warmup_steps": 1500,
+        "lr_scheduler_warmup_steps": 1000,
         "lr_scheduler_min_lr": 2e-5,
         "gradient_accumulate_every": 1,
-        "ema_decay": 0.995,
+        "ema_decay": 0.999,
         "save_parallel": False,
         "device": "cuda",
         "seed": 42,
-        "clip_grad_norm": None,
+        "clip_grad_norm": 1.0,
         # ---------------------------- early stopping-------------------------#
         "patience": 10,
         "warmup_epochs": 5,
         "early_stopping": False,
         # ---------------------------- validation ----------------------------#
         "val_dataset_size": 100,
-        "val_batch_size": max_batch_size,
+        "val_batch_size": int(1e4) if is_westeros else int(6e4),
         "val_seed": 42,
         # -------------------------------evaluation--------------------------#
         "perform_final_state_evaluation": True,
@@ -178,18 +180,22 @@ base = {
         "horizon_length": 31,
         "history_length": 1,
         "stride": 1,
-        "model": "models.temporal.TemporalUnet",
+        "model": "models.temporal.TemporalDiffusionTransformer",
         "model_kwargs": {
-            # Scaled up from 32 for 6D state space and large dataset (~490k trajectories)
-            "base_hidden_dim": 64,
-            "hidden_dim_mult": (1, 2, 4, 8),
-            "conv_kernel_size": 5,
-            "attention": False,
+            # DiT sized for 6D state space
+            "hidden_dim": 192,
+            "num_layers": 6,
+            "num_heads": 6,
+            "feedforward_dim": None,
+            "dropout": 0.01,
+            "time_embed_dim": None,
+            "local_query_embed_dim": None,
+            "query_encoder_layers": 1,
         },
         "method_kwargs": {
-            "path": "GeodesicProbPath",
+            "path": "AffineProbPath",
             "scheduler": "CondOTScheduler",
-            "solver": "RiemannianODESolver",
+            "solver": "ODESolver",
             "n_fourier_features": 1,
         },
         "prefix": "flow_matching/",
@@ -198,7 +204,7 @@ base = {
             "n_timesteps": 5,
             "integration_method": "euler",
         },
-        "use_manifold": True,
+        "use_manifold": False,
     },
 }
 
@@ -384,6 +390,36 @@ no_manifold = {
     },
 }
 
+manifold = {
+    "use_manifold": True,
+    "method_kwargs": {
+        "path": "GeodesicProbPath",
+        "solver": "RiemannianODESolver",
+    },
+}
+
+unet = {
+    "model": "models.temporal.TemporalUnet",
+    "model_kwargs": {
+        "base_hidden_dim": 64,
+        "hidden_dim_mult": (1, 2, 4, 8),
+        "conv_kernel_size": 5,
+        "attention": False,
+    },
+    "useAdamW": False,
+    "learning_rate": 1e-4,
+    "lr_scheduler_warmup_steps": 1500,
+    "ema_decay": 0.995,
+    "optimizer_kwargs": {},
+    "clip_grad_norm": None,
+    "val_batch_size": max_batch_size,
+}
+
+history_as_condition = {
+    "is_history_conditioned": True,
+    "has_global_query": False,
+}
+
 data_lim_12000 = {
     "train_dataset_size": 12000,
     "num_epochs": 2000,
@@ -409,3 +445,38 @@ single_horizon_two_state_pred = {
     "stride": 354,
     "horizon_length": 2,
 }
+
+one_horizon_1_state_pred = {
+    "stride": 708,
+    "horizon_length": 1,
+}
+
+one_horizon_2_state_pred = {
+    "stride": 354,
+    "horizon_length": 2,
+}
+
+one_horizon_10_state_pred = {
+    "stride": 71,
+    "horizon_length": 10,
+}
+
+one_horizon_20_state_pred = {
+    "stride": 36,
+    "horizon_length": 20,
+}
+
+one_horizon_31_state_pred = {
+    "stride": 23,
+    "horizon_length": 31,
+}
+
+history_as_query = {
+    "is_history_conditioned": False,
+    "has_global_query": True,
+    "use_history_mask": False,
+    "model_kwargs": {
+        "query_encoder_layers": 1,
+    },
+}
+
